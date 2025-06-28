@@ -1,0 +1,448 @@
+{
+    "eval_breakdown": [
+        {
+            "verification_tree": {
+                "id": "root",
+                "desc": "\nFind two upcoming sports or music events in New York City that are scheduled within the next two months. For each event, include the following information:\n\n- Location: The venue where the event will take place and its address.\n- Date and Time: When the event is scheduled to occur.\n- Ticketing Information: A link to where tickets can be purchased.\n- Travel Time: An estimate of the travel time to the venue from 485 Marin Blvd, Jersey City, NJ, via public transportation.\n",
+                "critical": false,
+                "score": 1.0,
+                "status": "passed",
+                "strategy": "parallel",
+                "children": [
+                    {
+                        "id": "event_0",
+                        "desc": "Event #1: All required information is correct and substantiated",
+                        "critical": false,
+                        "score": 1.0,
+                        "status": "passed",
+                        "strategy": "parallel",
+                        "children": [
+                            {
+                                "id": "event_0_essential",
+                                "desc": "Event #1 meets all essential requirements",
+                                "critical": true,
+                                "score": 1.0,
+                                "status": "passed",
+                                "strategy": "parallel",
+                                "children": [
+                                    {
+                                        "id": "event_0_has_info",
+                                        "desc": "Event has necessary information (name and source URLs)",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    },
+                                    {
+                                        "id": "event_0_is_sports_music",
+                                        "desc": "Event is a sports or music event",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    },
+                                    {
+                                        "id": "event_0_has_date",
+                                        "desc": "Event has a date specified",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    },
+                                    {
+                                        "id": "event_0_within_two_months",
+                                        "desc": "Event is within the next two months",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    },
+                                    {
+                                        "id": "event_0_in_nyc",
+                                        "desc": "Event is in New York City",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    }
+                                ],
+                                "func": "__init__",
+                                "line": 253
+                            },
+                            {
+                                "id": "event_0_location",
+                                "desc": "Location information is provided and accurate",
+                                "critical": false,
+                                "score": 1.0,
+                                "status": "passed",
+                                "strategy": "parallel",
+                                "children": [
+                                    {
+                                        "id": "event_0_location_exists",
+                                        "desc": "Venue information is provided",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    },
+                                    {
+                                        "id": "event_0_location_accurate",
+                                        "desc": "Venue name and address are accurate",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    }
+                                ],
+                                "func": "__init__",
+                                "line": 253
+                            },
+                            {
+                                "id": "event_0_time",
+                                "desc": "Time information is provided and accurate",
+                                "critical": false,
+                                "score": 1.0,
+                                "status": "passed",
+                                "strategy": "parallel",
+                                "children": [
+                                    {
+                                        "id": "event_0_time_exists",
+                                        "desc": "Time information is provided",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    },
+                                    {
+                                        "id": "event_0_time_accurate",
+                                        "desc": "Time is accurate",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    }
+                                ],
+                                "func": "__init__",
+                                "line": 253
+                            },
+                            {
+                                "id": "event_0_ticket",
+                                "desc": "Ticket information is provided and accurate",
+                                "critical": false,
+                                "score": 1.0,
+                                "status": "passed",
+                                "strategy": "parallel",
+                                "children": [
+                                    {
+                                        "id": "event_0_ticket_exists",
+                                        "desc": "Ticket link is provided",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    },
+                                    {
+                                        "id": "event_0_ticket_valid",
+                                        "desc": "Ticket link is valid",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    }
+                                ],
+                                "func": "__init__",
+                                "line": 253
+                            },
+                            {
+                                "id": "event_0_travel",
+                                "desc": "Travel time information is provided and accurate",
+                                "critical": false,
+                                "score": 1.0,
+                                "status": "passed",
+                                "strategy": "parallel",
+                                "children": [
+                                    {
+                                        "id": "event_0_travel_exists",
+                                        "desc": "Travel time estimate is provided",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    },
+                                    {
+                                        "id": "event_0_travel_accurate",
+                                        "desc": "Travel time approximately align Google Maps API travel time.",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    }
+                                ],
+                                "func": "__init__",
+                                "line": 253
+                            }
+                        ],
+                        "func": "__init__",
+                        "line": 253
+                    },
+                    {
+                        "id": "event_1",
+                        "desc": "Event #2: All required information is correct and substantiated",
+                        "critical": false,
+                        "score": 1.0,
+                        "status": "passed",
+                        "strategy": "parallel",
+                        "children": [
+                            {
+                                "id": "event_1_essential",
+                                "desc": "Event #2 meets all essential requirements",
+                                "critical": true,
+                                "score": 1.0,
+                                "status": "passed",
+                                "strategy": "parallel",
+                                "children": [
+                                    {
+                                        "id": "event_1_has_info",
+                                        "desc": "Event has necessary information (name and source URLs)",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    },
+                                    {
+                                        "id": "event_1_is_sports_music",
+                                        "desc": "Event is a sports or music event",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    },
+                                    {
+                                        "id": "event_1_has_date",
+                                        "desc": "Event has a date specified",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    },
+                                    {
+                                        "id": "event_1_within_two_months",
+                                        "desc": "Event is within the next two months",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    },
+                                    {
+                                        "id": "event_1_in_nyc",
+                                        "desc": "Event is in New York City",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    }
+                                ],
+                                "func": "__init__",
+                                "line": 253
+                            },
+                            {
+                                "id": "event_1_location",
+                                "desc": "Location information is provided and accurate",
+                                "critical": false,
+                                "score": 1.0,
+                                "status": "passed",
+                                "strategy": "parallel",
+                                "children": [
+                                    {
+                                        "id": "event_1_location_exists",
+                                        "desc": "Venue information is provided",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    },
+                                    {
+                                        "id": "event_1_location_accurate",
+                                        "desc": "Venue name and address are accurate",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    }
+                                ],
+                                "func": "__init__",
+                                "line": 253
+                            },
+                            {
+                                "id": "event_1_time",
+                                "desc": "Time information is provided and accurate",
+                                "critical": false,
+                                "score": 1.0,
+                                "status": "passed",
+                                "strategy": "parallel",
+                                "children": [
+                                    {
+                                        "id": "event_1_time_exists",
+                                        "desc": "Time information is provided",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    },
+                                    {
+                                        "id": "event_1_time_accurate",
+                                        "desc": "Time is accurate",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    }
+                                ],
+                                "func": "__init__",
+                                "line": 253
+                            },
+                            {
+                                "id": "event_1_ticket",
+                                "desc": "Ticket information is provided and accurate",
+                                "critical": false,
+                                "score": 1.0,
+                                "status": "passed",
+                                "strategy": "parallel",
+                                "children": [
+                                    {
+                                        "id": "event_1_ticket_exists",
+                                        "desc": "Ticket link is provided",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    },
+                                    {
+                                        "id": "event_1_ticket_valid",
+                                        "desc": "Ticket link is valid",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    }
+                                ],
+                                "func": "__init__",
+                                "line": 253
+                            },
+                            {
+                                "id": "event_1_travel",
+                                "desc": "Travel time information is provided and accurate",
+                                "critical": false,
+                                "score": 1.0,
+                                "status": "passed",
+                                "strategy": "parallel",
+                                "children": [
+                                    {
+                                        "id": "event_1_travel_exists",
+                                        "desc": "Travel time estimate is provided",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    },
+                                    {
+                                        "id": "event_1_travel_accurate",
+                                        "desc": "Travel time approximately align Google Maps API travel time.",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    }
+                                ],
+                                "func": "__init__",
+                                "line": 253
+                            }
+                        ],
+                        "func": "__init__",
+                        "line": 253
+                    }
+                ],
+                "func": "__init__",
+                "line": 253
+            }
+        }
+    ]
+}

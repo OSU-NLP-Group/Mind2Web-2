@@ -1,0 +1,42 @@
+{
+  "nyc_sport_event": {
+    "task_description": "Find two upcoming sports or music events in New York City that are scheduled within the next two months. For each event, include the following information:\n\n- Location: The venue where the event will take place and its address.\n- Date and Time: When the event is scheduled to occur.\n- Ticketing Information: A link to where tickets can be purchased.\n- Travel Time: An estimate of the travel time to the venue from 485 Marin Blvd, Jersey City, NJ, via public transportation.",
+    "rubric_path": "./static/data/nyc_sport_event_rubric.json"
+  },
+  "buy_monitor": {
+    "task_description": "I’m interested in buying a 34'' curved monitor. Find at least 5 models and a minimum of 3 websites to purchase online for each model. For each website, please provide the link to the specific purchasing page along with its price.",
+    "rubric_path": null
+  },
+  "spotify_artists": {
+    "task_description": "Identify five music artists who currently have between 10 million and 20 million monthly listeners on Spotify. For each artist, provide a direct link to their official Spotify profile, the current number of monthly listeners on Spotify (formatted in millions, e.g., 12 million), and a link to one playlist that includes at least one song where the artist is the main performer (not just featured on someone else's song). Also provide the title of the song by the artist that appears in the playlist. The playlist must not be created by the artist themselves or by Spotify Official.",
+    "rubric_path": null
+  },
+  "animation_movies": {
+    "task_description": "Find three animation movies with an average rating above 8.0 on IMDB or above 70% on Rotten Tomatoes Tomatometer. For each movie, list their directors, release dates, and main plot points. Additionally, for each movie, list their IMDB rating and Rotten Tomatoes Tomatometer, and include links to one positive and one negative review on IMDB.",
+    "rubric_path": null
+  },
+  "ad_patent": {
+    "task_description": "Find three U.S. patents or patent applications in the field of autonomous driving that were published in 2024, regardless of whether they have been granted. For each, include the title, the inventors' names, the organization or assignee, the filing date, the publication date, and a link to the corresponding Google Patents page.",
+    "rubric_path": null
+  },
+  "yu_lineage": {
+    "task_description": "Identify the academic lineage of Prof. Yu Su at The Ohio State University by tracing his doctoral advisor and continuing upward through advisor-advisee relationships for five generations (excluding Yu Su himself).",
+    "rubric_path": null
+  },
+  "overleaf_template": {
+    "task_description": "I want to find three Overleaf templates from Overleaf's official template list for my CV. I hope three templates can already display my photo without further customized modification, with the photo placed in the top left corner of my CV. Please return the links to these templates.",
+    "rubric_path": null
+  },
+  "find_parks": {
+    "task_description": "I am planning a trip from Dayton, Ohio to Notre Dame, Indiana, and I wish to visit a state park during the trip. Identify three official state parks (designated and managed by state authorities) for which the total driving distance from Dayton to Notre Dame via the state park is less than 260 miles. For each park, provide the name of the official state park, the park's physical address, a direct link to the park's page on the respective state's official website, and the total driving distance of the trip (Dayton → park → Notre Dame).",
+    "rubric_path": "./static/data/find_parks_rubric.json"
+  },
+  "lol_sylas":{
+    "task_description": "I recall watching one of the League of Legends World Championship finals, during an S-series tournament, where a professional esports player used Sylas near the mid-lane to steal Rakan's ultimate. This crucial play locked down the opposing team's double carries and secured the victory. Could you help me find out what that player's win rate with Sylas was throughout that entire S-series tournament?\n\n(Note: League of Legends is a competitive multiplayer online game. Sylas and Rakan are playable characters, known as \"champions,\" each with unique abilities.)",
+    "rubric_path": "./static/data/lol_sylas_rubric.json"
+  },
+  "llava_commit": {
+    "task_description": "Identify the first commit on the main branch of the official Hugging Face transformers repository that added support for the LLaVA model.\nPlease provide the following details about this commit: the short commit ID (first 7 characters), the date of the commit, a list of all contributors/authors involved in this commit. For each author, include a link to their GitHub profile page and the full real name displayed on their GitHub profile page.",
+    "rubric_path": "./static/data/llava_commit_rubric.json"
+  }
+}

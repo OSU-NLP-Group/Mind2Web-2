@@ -1,0 +1,1043 @@
+body {
+  font-family: 'Noto Sans', sans-serif;
+}
+
+.footer .icon-link {
+  font-size: 25px;
+  color: #000;
+}
+
+.link-block a {
+  margin-top: 5px;
+  margin-bottom: 5px;
+}
+
+.m2w2-logo {
+  width: 1em;
+  vertical-align: middle;
+}
+
+.m2w2 {
+  /* text-transform: capitalize; */
+  /* font-variant: uppercase; */
+  font-weight: bold;
+}
+
+.human_expert {
+  background-color: rgba(255, 208, 80, 0.15);
+}
+
+.open_source {
+  background-color: rgba(249, 242, 248, 1);
+}
+
+.proprietary {
+  background-color: rgba(117, 209, 215, 0.1);
+}
+
+.random_frequent {
+  background-color: #f4f9fe;
+  color: #808080;
+}
+
+.teaser-content {
+  max-width: 900px; /* Control overall width */
+  margin: 0 auto;
+}
+
+.teaser-image {
+  width: 100%;
+  height: auto;
+  display: block;
+  margin: 0 auto 1.5rem auto;
+}
+
+.teaser-caption {
+  width: 100%;
+  text-align: center;
+}
+
+.teaser-caption p {
+  margin: 1rem 0;
+  line-height: 1.5;
+}
+
+/* Responsive behavior */
+@media screen and (max-width: 768px) {
+  .teaser-content {
+    max-width: 95%;
+  }
+  
+  .teaser-caption p {
+    font-size: 0.9rem;
+  }
+}
+
+.teaser .hero-body {
+  padding-top: 0;
+  padding-bottom: 3rem;
+}
+
+.teaser {
+  font-family: 'Google Sans', sans-serif;
+}
+
+.publication-links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+@media screen and (max-width: 768px) {
+  .publication-links {
+    flex-direction: column; /* Stack buttons vertically on mobile */
+    align-items: center;
+    gap: 10px;
+  }
+  
+  .publication-links .link-block {
+    width: 100%; /* Make buttons full width on mobile */
+    max-width: 280px; /* But limit the maximum width */
+  }
+  
+  .publication-links .button {
+    width: 100%; /* Button takes full width of its container */
+    justify-content: center;
+  }
+}
+
+.publication-banner {
+  max-height: 100%;
+}
+
+.publication-banner video {
+  position: relative;
+  left: auto;
+  top: auto;
+  transform: none;
+  object-fit: contain;
+}
+
+.publication-header .hero-body {
+}
+
+.publication-title,
+.publication-authors {
+  font-family: 'Google Sans', sans-serif;
+}
+
+.publication-venue {
+  color: #555;
+  width: fit-content;
+  font-weight: bold;
+}
+
+.publication-awards {
+  color: #ff3860;
+  width: fit-content;
+  font-weight: bolder;
+}
+
+.publication-authors a {
+  color: hsl(204, 86%, 53%) !important;
+}
+
+.publication-authors a:hover {
+  text-decoration: underline;
+}
+
+.author-block {
+  display: inline-block;
+}
+
+.publication-banner img {
+}
+
+.publication-video {
+  position: relative;
+  width: 100%;
+  height: 0;
+  padding-bottom: 56.25%;
+  overflow: hidden;
+  border-radius: 10px !important;
+}
+
+.publication-video iframe {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.publication-body img {
+}
+
+.results-carousel {
+  overflow: hidden;
+}
+
+.stats-image {
+  max-height: 250px;
+}
+
+#org-banners {
+  display: flex;
+  flex-direction: row;
+  justify-content: center;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.org-banner {
+  max-width: 100%;
+  height: 6em;
+  margin: 10px;
+  padding: 10px;
+}
+
+.chart-grid {
+  display: grid;
+  grid-gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+}
+
+.chart-item {
+  text-align: center;
+}
+
+.chart-label {
+  margin-top: 5px;
+}
+
+@media (min-width: 600px) {
+  .chart-grid {
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  }
+}
+
+@media (min-width: 900px) {
+  .chart-grid {
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  }
+}
+
+.bottom-text {
+  margin-top: 30px;
+}
+
+.model-labels-container {
+  text-align: center;
+  margin-top: 8px;
+  margin-bottom: 8px;
+}
+
+.model-label {
+  display: inline-block;
+  padding: 4px 10px;
+  margin: 5px;
+  border-radius: 3px;
+  color: rgb(255, 255, 255);
+}
+
+.box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  margin: 5px;
+}
+
+.center {
+  display: block;
+  margin-left: auto;
+  margin-right: auto;
+  width: 80%;
+}
+
+.table-row {
+  display: flex;
+  width: 100%;
+}
+
+.sortable:hover {
+  cursor: pointer;
+}
+
+.asc::after {
+  content: ' ↑';
+}
+
+.desc::after {
+  content: ' ↓';
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin-top: 5px;
+  border: 1px solid #ddd;
+  font-size: 14px;
+}
+
+th, td {
+  text-align: left;
+  padding: 8px;
+  white-space: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+th {
+  background-color: #f2f2f2;
+  border-bottom: 2px solid #ddd;
+}
+
+/* td:hover {
+  background-color: #ffffff;
+} */
+
+tr:hover {
+  background-color: #0000000a !important;
+}
+
+.main-header {
+  background-color: #e6e6e6;
+  font-weight: bold;
+  text-align: center;
+}
+
+.sub-header {
+  background-color: #f2f2f2;
+}
+
+.clickable {
+  cursor: pointer;
+}
+
+.clickable:hover {
+  background-color: #d9d9d9;
+}
+
+.hidden {
+  display: none;
+}
+
+.leaderboard-label {
+  padding: 5px 10px;
+  margin-right: 10px;
+  border-radius: 5px;
+}
+
+.table-wrapper {
+  overflow-x: auto;
+  width: 100%;
+}
+
+@media screen and (max-width: 768px) {
+  th, td {
+    min-width: 100px;
+  }
+}
+
+
+#toggleButton {
+  background-color: #ffffff;
+  border: 1px solid #dddddd;
+  color: #555555;
+  padding: 10px 20px;
+  text-align: center;
+  text-decoration: none;
+  display: inline-block;
+  font-size: 14px;
+  margin: 4px 2px;
+  cursor: pointer;
+  border-radius: 25px;
+  box-shadow: 0 4px 8px 0 rgba(0,0,0,0.2);
+  transition-duration: 0.4s;
+}
+
+#toggleButton:hover {
+  box-shadow: 0 12px 16px 0 rgba(0,0,0,0.24), 0 17px 50px 0 rgba(0,0,0,0.19);
+}
+
+
+/* Row background colors */
+.row-mind2web2 {
+  background-color: #07e6ff00 !important; /* Light green for Mind2Web 2 */
+  border-top: 1px solid #00000024 !important;
+  border-bottom: 1px solid #00000024 !important;
+}
+
+.row-time-sensitive {
+  background-color: #f0f8ff !important; /* Light blue for time-sensitive */
+}
+
+.row-non-time-sensitive {
+  background-color: #fff5f5 !important; /* Light red for non-time-sensitive */
+}
+
+.row-long-horizon {
+  background-color: #fff8dc !important; /* Light gold for long horizon */
+}
+
+.row-medium-horizon {
+  background-color: #f5f5dc !important; /* Beige for medium horizon */
+}
+
+.row-short-horizon {
+  background-color: #f8f8ff !important; /* Ghost white for short horizon */
+}
+
+.dataset-name a {
+  color: #007bff;
+  text-decoration: none;
+}
+
+.dataset-name a:hover {
+  color: #4a4a4a;
+  text-decoration: none;
+}
+
+
+
+/* Chart styling */
+/* .plotly-chart {
+  width: 100% !important;
+  height: 600px !important;
+  min-height: 400px;
+} */
+
+.chart-container {
+    width: 100%;
+    height: 400px; /* Set a fixed height or use min-height */
+}
+
+#sunburstChart {
+    width: 100%;
+    height: 100%;
+}
+
+/* Responsive chart sizing */
+@media screen and (max-width: 768px) {
+  .plotly-chart {
+    height: 400px !important;
+  }
+  
+  .chart-container {
+    padding: 15px;
+    margin: 15px 0;
+  }
+}
+
+@media screen and (max-width: 480px) {
+  .plotly-chart {
+    height: 350px !important;
+  }
+  
+  .chart-container {
+    padding: 10px;
+    margin: 10px 0;
+  }
+}
+
+/* Task collection layout */
+.task-collection-layout {
+  align-items: stretch !important; /* Make columns equal height */
+  min-height: 500px;
+}
+
+
+
+.interpolation-panel {
+  /* Simple background styling like interpolation-panel */
+  background: #f5f5f5;
+  border-radius: 20px;
+  padding: 20px; /* Add some padding so chart doesn't touch edges */
+}
+
+.task-chart-column .chart-container {
+  flex-grow: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;  /* Center vertically */
+  align-items: center;      /* Center horizontally */
+  min-height: 400px;
+}
+
+
+/* Task explorer styling */
+.task-explorer-column {
+  display: flex;
+  flex-direction: column;
+}
+
+
+.task-description-container {
+  min-height: 400px;
+  max-height: 400px;
+  overflow-y: auto;
+  text-align: left;
+  padding: 20px;
+  margin-top: 20px;
+  background: #f5f5f5;
+  border-radius: 8px;
+  border: none;
+
+  display: flex;
+  flex-direction: column;
+  align-items: center;      /* Center horizontally by default */
+  justify-content: center;  /* Center vertically by default */
+  text-align: center;       /* Center text by default */
+
+}
+
+.task-description-container p {
+  margin-bottom: 1rem;
+  line-height: 1.6;
+}
+
+/* .task-description-container.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+} */
+
+/* When content is loaded, align to top-left */
+.task-description-container.loaded {
+  align-items: stretch;
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.task-chart-column,
+.task-explorer-column {
+  display: flex;
+  flex-direction: column;
+}
+
+.task-chart-column .interpolation-panel,
+.task-explorer-column .interpolation-panel {
+  flex-grow: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 400px;
+}
+
+/* Responsive design */
+@media screen and (max-width: 768px) {
+  .task-collection-layout {
+    flex-direction: column;
+  }
+  
+  .task-description-container {
+    min-height: 150px;
+    max-height: 250px;
+  }
+}
+
+
+.section-divider {
+  margin: 3rem auto;
+  width: 80%; /* Match the four-fifths column (80%) */
+  border: none;
+  height: 1px;
+  background: #36363677;
+  /* background: linear-gradient(to right, transparent, #ddd, transparent); */
+}
+
+
+
+/* Rubric tree styling */
+#rubricTree {
+  width: 100%;
+  height: 600px;
+  background: transparent;
+  border: 1px solid #dddddd32;
+  border-radius: 5px;
+  overflow: hidden; /* Hide overflow to prevent scrollbars */
+  position: relative; /* For absolute positioning of controls */
+}
+
+#rubricTree svg {
+  width: 100%;
+  height: 100%;
+  background: transparent;
+}
+
+.rubric-tree-column .chart-container {
+  flex-grow: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  min-height: 600px;
+  height: auto; /* Add this */
+}
+
+/* Zoom controls styling */
+.zoom-controls {
+  background: transparent;
+  border-radius: 5px;
+  padding: 5px;
+}
+
+.zoom-btn {
+  font-size: 12px !important;
+  font-weight: bold;
+  transition: all 0.2s ease;
+}
+
+/* Update cursor styles for better UX */
+#rubricTree svg {
+  cursor: grab;
+}
+
+#rubricTree svg:active {
+  cursor: grabbing;
+}
+
+/* Node styling */
+.node circle {
+  fill: #fff;
+  stroke: #007bff;
+  stroke-width: 2px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.node circle:hover {
+  fill: #e3f2fd;
+  stroke: #0056b3;
+  stroke-width: 3px;
+  transform: scale(1.1);
+}
+
+.node text {
+  font: 14px sans-serif;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  pointer-events: none; /* Prevent text from blocking clicks */
+}
+
+/* Custom tooltip styling */
+.custom-tooltip {
+    max-width: 250px;
+    word-wrap: break-word;
+    line-height: 1.3;
+    text-align: left;
+}
+
+.custom-tooltip strong {
+    display: block;
+    margin-bottom: 4px;
+    font-weight: 600;
+}
+
+/* Link styling */
+.link {
+  fill: none;
+  stroke: #ccc;
+  stroke-width: 2px;
+  transition: all 0.3s ease;
+}
+
+
+.rubric-task-row {
+  margin-bottom: 0.0rem;
+}
+
+
+.rubric-tree-row {
+  margin-top: 0rem;
+  margin-bottom: 0; /* Remove any bottom margin */
+  position: relative;
+}
+
+.rubric-tree-row::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 95%;                    /* Adjust this to control line width */
+  height: 2px;
+  background-color: #cccccc;
+}
+
+.rubric-task-row .interpolation-panel {
+  padding-bottom: 0px;       /* Reduce bottom padding */
+}
+
+.rubric-tree-row .interpolation-panel {
+  padding-top: 0px;          /* Reduce top padding */
+}
+
+.task-selector-column .interpolation-panel {
+  min-height: 80px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+}
+
+.task-description-column .interpolation-panel {
+  min-height: 80px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+}
+
+.rubric-tree-column .interpolation-panel {
+  min-height: auto; /* Changed from 600px to auto */
+  height: auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  overflow: visible;
+}
+
+
+@media screen and (max-width: 768px) {
+  .rubric-task-row {
+    flex-direction: column;
+  }
+  
+  .task-selector-column,
+  .task-description-column {
+    width: 100% !important;
+    margin-bottom: 1rem;
+  }
+  
+  .task-description-container-rubric {
+    min-height: 100px;
+  }
+  
+  #rubricTree {
+    height: 600px;
+  }
+}
+
+
+.task-description-container-rubric {
+  text-align: left;
+  padding: 0.0rem;
+  background-color: #f8f9fa00;
+  border-radius: 5px;
+  border: 1px solid #ffffff00;
+  min-height: 80px;
+  max-height: 80px;       
+  overflow-y: auto;
+  font-size: 14px;
+  line-height: 1.3;
+}
+
+.task-description-container-rubric.loaded {
+  background-color: #ffffff00;
+  border-color: #ffffff00;
+  font-size: 14px
+}
+
+.task-description-container-rubric.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-style: italic;
+}
+
+/* Rubric-specific task description text formatting */
+.task-description-container-rubric .task-description-text {
+  line-height: 1.4;
+  font-size: 14px;
+}
+
+.task-description-container-rubric .task-description-text p {
+  margin-bottom: 0.5rem;
+}
+
+
+
+/* Leaderboard styling */
+
+.leaderboard-container {
+  display: flex;
+  flex-direction: column;
+  overflow-x: auto;
+  margin-top: 0rem;
+}
+
+/* Tab styling for leaderboard */
+.leaderboard-tabs {
+    margin-bottom: 0;
+    width: 100%;
+}
+
+
+.leaderboard-tabs .tabs {
+    margin-bottom: 0;
+    width: 100%;
+}
+
+.leaderboard-tabs .tabs ul {
+    border-bottom-width: 1px;
+    border-bottom-style: solid;
+    border-bottom-color: #dbdbdb;
+    width: 100%;
+    margin: 0;
+}
+
+.leaderboard-tabs .tabs ul::after {
+    content: '';
+    display: block;
+    width: 100%;
+    height: 1px;
+    background: #dbdbdb;
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    z-index: 1;
+}
+
+.leaderboard-tabs .tabs a {
+  border-bottom: 2px solid transparent;
+  padding: 0.75rem 1rem;
+  transition: all 0.3s ease;
+}
+
+.leaderboard-tabs .tabs .is-active a {
+  border-bottom-color: #3273dc;
+  color: #3273dc;
+  font-weight: 600;
+}
+
+.tabs.is-centered {
+    width: 100% !important;
+    margin: 10 !important;
+    box-sizing: border-box !important;
+    margin-bottom: 0 !important; /* Specifically remove bottom margin */
+}
+
+.tabs.is-centered ul {
+    width: 100% !important;
+    margin: 0 !important;
+}
+
+
+.leaderboard-table-wrapper {
+  max-height: 600px; /* Set your desired maximum height here */
+  overflow-y: auto;   /* Enable vertical scrolling for entire container */
+  overflow-x: auto; /* Hide horizontal overflow */
+  border: 2px solid #ddd;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  background: white;
+}
+
+
+/* Single table structure */
+#m2w2-table {
+  width: 100%;
+  min-width: 800px; /* Prevent table from getting too narrow */
+  table-layout: fixed;
+  border-collapse: collapse;
+  margin: 0;
+}
+
+/* Sticky header that stays at top while scrolling */
+#m2w2-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: white;
+}
+
+#m2w2-table th {
+  background-color: #f2f2f2;
+  border-bottom: none;
+  padding: 12px 8px;
+  font-weight: 600;
+  text-align: center;
+  white-space: nowrap;
+  border-right: none;
+  position: sticky;
+  top: 0;
+  z-index: 11;
+}
+
+
+
+/* Table body styling */
+#m2w2-table td {
+  padding: 12px 8px;
+  border-bottom: 1px solid #ddd;
+  text-align: center;
+  vertical-align: middle;
+  border-right: none;
+  border-left: none;
+}
+
+#m2w2-table td:last-child {
+  border-right: none;
+}
+
+#m2w2-table td:first-child {
+  text-align: left !important;
+}
+
+#m2w2-table tbody tr:hover {
+  background-color: #f8f9fa;
+}
+
+/* Column widths */
+#m2w2-table th:nth-child(1),
+#m2w2-table td:nth-child(1) { 
+  width: 25%; /* Model name */
+}
+
+#m2w2-table th:nth-child(2),
+#m2w2-table td:nth-child(2) { 
+  width: 10%; /* Date */
+}
+
+#m2w2-table th:nth-child(3),
+#m2w2-table td:nth-child(3) { 
+  width: 15%; /* Partial Completion */
+}
+
+#m2w2-table th:nth-child(4),
+#m2w2-table td:nth-child(4) { 
+  width: 13%; /* Success Rate */
+}
+
+#m2w2-table th:nth-child(5),
+#m2w2-table td:nth-child(5) { 
+  width: 10%; /* Pass@3 */
+}
+
+#m2w2-table th:nth-child(6),
+#m2w2-table td:nth-child(6) { 
+  width: 10%; /* Time */
+}
+
+#m2w2-table th:nth-child(7),
+#m2w2-table td:nth-child(7) { 
+  width: 15%; /* Answer Length */
+}
+
+
+.sortable-header {
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.2s ease;
+  position: relative;
+}
+
+.sortable-header:hover {
+    background-color: #dbdbdb !important;
+}
+
+.sortable-header i {
+    margin-left: 5px;
+    font-size: 12px;
+    opacity: 0.6;
+}
+
+/* Custom scrollbar styling - now on the table wrapper */
+.leaderboard-table-wrapper::-webkit-scrollbar {
+  width: 8px;
+}
+
+.leaderboard-able-wrapper::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 4px;
+}
+
+.leaderboard-table-wrapper::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 4px;
+}
+
+.leaderboard-table-wrapper::-webkit-scrollbar-thumb:hover {
+  background: #a8a8a8;
+}
+
+
+@media screen and (max-width: 768px) {
+  .leaderboard-table-wrapper {
+    max-height: 500px;
+  }
+  
+  #m2w2-table th,
+  #m2w2-table td {
+    padding: 8px 4px;
+    font-size: 12px;
+  }
+}
+
+/* Info box between tabs and table */
+.leaderboard-info-box {
+    background-color: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 0 0 0px 0px;
+    padding: 15px 20px;
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.4;
+    color: #495057;
+    border-top: none;
+}
+
+.leaderboard-info-box .content {
+    margin: 0;
+}
+
+.leaderboard-info-box p {
+    margin-bottom: 8px;
+}
+
+.leaderboard-info-box p:last-child {
+    margin-bottom: 0;
+}
+
+.leaderboard-info-box .info-link {
+    color: #007bff;
+    text-decoration: none;
+    font-weight: 500;
+}
+
+.leaderboard-info-box .info-link:hover {
+    color: #0056b3;
+    text-decoration: underline;
+}
+
+/* Make sure the table connects seamlessly */
+.leaderboard-table-wrapper .leaderboard-info-box + table {
+    border-top: none;
+}
+
+/* Responsive adjustments */
+@media screen and (max-width: 768px) {
+    .leaderboard-info-box {
+        padding: 12px 15px;
+        font-size: 13px;
+    }
+}
+
+/* Agent link styling */
+.agent-link {
+    color: #3273dc;
+    text-decoration: none;
+    transition: color 0.2s ease;
+}
+
+.agent-link:hover {
+    color: #2366d1;
+    text-decoration: underline;
+}
+
+.agent-link:visited {
+    color: #3273dc; /* Keep same color for visited links */
+}
+
+.agent-link strong {
+    font-weight: 600;
+}
