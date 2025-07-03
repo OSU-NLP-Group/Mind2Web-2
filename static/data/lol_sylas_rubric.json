@@ -1,0 +1,166 @@
+{
+    "eval_breakdown": [
+        {
+            "verification_tree": {
+                "id": "root",
+                "desc": "\nI recall watching one of the League of Legends World Championship finals, during an S-series tournament, where a professional esports player used Sylas near the mid-lane to steal Rakan's ultimate. This crucial play locked down the opposing team's double carries and secured the victory. Could you help me find out what that player's win rate with Sylas was throughout that entire S-series tournament?\n\n(Note: League of Legends is a competitive multiplayer online game. Sylas and Rakan are playable characters, known as \"champions,\" each with unique abilities.)\n",
+                "critical": false,
+                "score": 1.0,
+                "status": "passed",
+                "strategy": "sequential",
+                "children": [
+                    {
+                        "id": "identify_faker_step",
+                        "desc": "Verify the identification of Faker and his Sylas play in an S-series final",
+                        "critical": false,
+                        "score": 1.0,
+                        "status": "passed",
+                        "strategy": "parallel",
+                        "children": [
+                            {
+                                "id": "player_verification",
+                                "desc": "Player Verification: Verifying Faker was identified",
+                                "critical": true,
+                                "score": 1.0,
+                                "status": "passed",
+                                "strategy": "parallel",
+                                "children": [
+                                    {
+                                        "id": "player_info_exists",
+                                        "desc": "Check if player name was provided in the answer",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    },
+                                    {
+                                        "id": "player_name_verification",
+                                        "desc": "Verification that the identified player is Faker",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    }
+                                ],
+                                "func": "__init__",
+                                "line": 253
+                            },
+                            {
+                                "id": "game_evidence_verification",
+                                "desc": "Game Evidence: Verifying sources support Faker's Sylas play",
+                                "critical": true,
+                                "score": 1.0,
+                                "status": "passed",
+                                "strategy": "parallel",
+                                "children": [
+                                    {
+                                        "id": "game_evidence_exists",
+                                        "desc": "Check if player name and game evidence URLs were provided",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    },
+                                    {
+                                        "id": "game_evidence_substantiation",
+                                        "desc": "Verification that sources substantiate Faker using Sylas in S-series final",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    }
+                                ],
+                                "func": "__init__",
+                                "line": 253
+                            }
+                        ],
+                        "func": "__init__",
+                        "line": 253
+                    },
+                    {
+                        "id": "win_rate_step",
+                        "desc": "Verify the win rate information provided for Faker with Sylas",
+                        "critical": false,
+                        "score": 1.0,
+                        "status": "passed",
+                        "strategy": "parallel",
+                        "children": [
+                            {
+                                "id": "win_rate_verification",
+                                "desc": "Win Rate Verification: Correctness and substantiation",
+                                "critical": true,
+                                "score": 1.0,
+                                "status": "passed",
+                                "strategy": "parallel",
+                                "children": [
+                                    {
+                                        "id": "win_rate_info_exists",
+                                        "desc": "Check if win rate was provided in the answer",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    },
+                                    {
+                                        "id": "win_rate_correctness",
+                                        "desc": "Verification that the provided win rate matches ground truth (4 wins, 2 losses)",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    },
+                                    {
+                                        "id": "win_rate_substantiation_exists",
+                                        "desc": "Check if all required information for win rate substantiation is present",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    },
+                                    {
+                                        "id": "win_rate_substantiation",
+                                        "desc": "Verification that the provided win rate is substantiated by sources",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    }
+                                ],
+                                "func": "__init__",
+                                "line": 253
+                            }
+                        ],
+                        "func": "__init__",
+                        "line": 253
+                    }
+                ],
+                "func": "__init__",
+                "line": 253
+            }
+        }
+    ]
+}

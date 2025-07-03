@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <!-- Basic HTML document metadata -->
+  <meta charset="utf-8">
+  <meta name="description" content="Evaluating Agentic Search with Agent-as-a-Judge">
+  <meta name="keywords" content="Agentic Search, Web Agents, Information Retrieval, LMM, LMM Evaluation, Vision Language Model, Large Language Model, Large Multimodal Model, artificial intelligence, AI, AGI, artificial general intelligence">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mind2Web 2</title>
+
+  <!-- Favicon -->
+  <!-- <link rel="icon" href="./static/images/place_holder.png"> -->
+
+  <!-- Web fonts from Google Fonts -->
+  <link href="https://fonts.googleapis.com/css?family=Google+Sans|Noto+Sans|Castoro" rel="stylesheet">
+
+  <!-- Data visualization libraries -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>                <!-- Chart.js for creating interactive charts -->
+
+  <!-- Icon libraries -->
+  <script src="https://kit.fontawesome.com/f8ddf9854a.js" crossorigin="anonymous"></script>  <!-- Font Awesome icons (kit 1) -->
+  <script src="https://kit.fontawesome.com/fff5b27ec1.js" crossorigin="anonymous"></script>  <!-- Font Awesome icons (kit 2) -->
+  <!-- <script src="https://kit.fontawesome.com/eaf1856e6f.js" crossorigin="anonymous"></script> --> <!-- Font Awesome backup kit -->
+
+  <!-- CSS frameworks and styling -->
+  <link rel="stylesheet" href="./static/css/bulma.min.css">                    <!-- Bulma CSS framework -->
+  <link rel="stylesheet" href="./static/css/bulma-carousel.min.css">           <!-- Bulma carousel component -->
+  <link rel="stylesheet" href="./static/css/bulma-slider.min.css">             <!-- Bulma slider component -->
+  <link rel="stylesheet" href="./static/css/fontawesome.all.min.css">          <!-- Font Awesome icons (local CSS) -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/jpswalsh/academicons@1/css/academicons.min.css"> <!-- Academic icons -->
+  <link rel="stylesheet" href="./static/css/index.css">                        <!-- Custom project styles -->
+
+  <!-- JavaScript libraries and utilities -->
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>  <!-- jQuery for DOM manipulation -->
+  <script defer src="./static/js/fontawesome.all.min.js"></script>                          <!-- Font Awesome JS (deferred) -->
+  <script src="./static/js/bulma-carousel.min.js"></script>                                  <!-- Bulma carousel functionality -->
+  <script src="./static/js/bulma-slider.min.js"></script>                                    <!-- Bulma slider functionality -->
+
+  <!-- Markdown rendering library - allows <md-block> tags for markdown content -->
+  <script type="module" src="https://md-block.verou.me/md-block.js"></script>
+
+  <!-- Plotly.js for interactive plots -->
+  <script src="https://cdn.plot.ly/plotly-3.0.1.min.js"></script>
+
+  <!-- D3.js for data visualization -->
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+
+</head>
+  <body>
+
+    <nav class="navbar" role="navigation" aria-label="main navigation">
+      <div class="navbar-brand">
+        <a role="button" class="navbar-burger" aria-label="menu" aria-expanded="false">
+          <span aria-hidden="true"></span>
+          <span aria-hidden="true"></span>
+          <span aria-hidden="true"></span>
+        </a>
+      </div>
+      <div class="navbar-menu">
+        <div class="navbar-start" style="flex-grow: 1; justify-content: center;">
+          <div class="navbar-item has-dropdown is-hoverable">
+            <a class="navbar-link">
+              More Research
+            </a>
+            <div class="navbar-dropdown">
+              <a class="navbar-item" href="https://github.com/OSU-NLP-Group/WebDreamer">
+                WebDreamer
+              </a>
+              <a class="navbar-item" href="https://huggingface.co/spaces/osunlp/Online_Mind2Web_Leaderboard/">
+                Online-Mind2Web
+              </a>
+              <a class="navbar-item" href="https://osu-nlp-group.github.io/SkillWeaver/">
+                SkillWeaver
+              </a>
+              <a class="navbar-item" href="https://osu-nlp-group.github.io/UGround/">
+                UGround
+              </a>
+              <a class="navbar-item" href="https://osu-nlp-group.github.io/Mind2Web/">
+                Mind2Web
+              </a>
+              <a class="navbar-item" href="https://osu-nlp-group.github.io/SeeAct/">
+                SeeAct
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </nav>
+
+    <section class="hero">
+      <div class="hero-body">
+        <div class="container is-max-desktop">
+          <div class="columns is-centered">
+            <div class="column has-text-centered">
+              <h1 class="title is-1 publication-title is-bold">
+                <!-- <img src="./static/images/mmmu_icon2.png" style="width:1em;vertical-align: middle" alt="Logo"/> -->
+                <span class="m2w2" style="vertical-align: middle">Mind2Web 2</span>
+              </h1>
+              <h2 class="subtitle is-3 publication-subtitle">
+                Evaluating Agentic Search with Agent-as-a-Judge
+              </h2>
+              <div class="is-size-5 publication-authors">
+              <span class="author-block">
+                <a href="https://boyugou.github.io/">Boyu Gou</a><sup>1*</sup>,</span> &nbsp;
+              <span class="author-block">
+                <a href="https://tzmhuang.github.io/">Zanming Huang</a><sup>1*</sup>,</span>
+              <span class="author-block">
+                <a href="https://nnnyt.github.io/">Yuting Ning</a><sup>1*</sup>,</span>
+              <span class="author-block">
+                <a href="http://entslscheia.github.io/">Yu Gu</a><sup>1</sup>,</span>
+              <span class="author-block">
+                <a href="https://www.linkedin.com/in/mlin12321/">Michael Lin</a><sup>1</sup>,</span>
+              <span class="author-block">
+                <a href="https://scholar.google.com/citations?user=XeI20iUAAAAJ&hl=en">Weijian Qi</a><sup>1</sup>,</span>
+              <span class="author-block">
+                <a href="https://www.linkedin.com/in/andrey-kopanev/">Andrei Kopanev</a><sup>1</sup>,</span>
+              <span class="author-block">
+                <a href="https://btyu.github.io/">Botao Yu</a><sup>1</sup>,</span>
+              <span class="author-block">
+                <a href="https://bernaljg.github.io/">Bernal Jiménez Gutiérrez</a><sup>1</sup>,</span>
+              <span class="author-block">
+                <a href="https://yihengshu.github.io/">Yiheng Shu</a><sup>1</sup>,</span>
+              <span class="author-block">
+                <a href="https://chanh.ee/">Chan Hee Song</a><sup>1</sup>,</span>
+              <span class="author-block">
+                <a href="https://work4cs.github.io/">Jiaman Wu</a><sup>1</sup>,</span>
+              <span class="author-block">
+                <a href="https://chensj98.github.io/">Shijie Chen</a><sup>1</sup>,</span>
+              <span class="author-block">
+                <a href="https://scholar.google.com/citations?user=5JIijiIAAAAJ&hl=en">Hanane Nour Moussa</a><sup>1</sup>,</span>
+              <span class="author-block">
+                <a href="https://zhangtianshu.github.io/">Tianshu Zhang</a><sup>1</sup>,</span>
+              <span class="author-block">
+                <a href="https://hsaest.github.io/">Jian Xie</a><sup>1</sup>,</span>
+              <span class="author-block">
+                <a href="https://flyhero99.github.io/">Yifei Li</a><sup>1</sup>,</span>
+              <span class="author-block">
+                <a href="https://lzy37ld.github.io/">Zeyi Liao</a><sup>1</sup>,</span>
+              <span class="author-block">
+                <a href="https://xuetianci.github.io/">Tianci Xue</a><sup>1</sup>,</span>
+              <span class="author-block">
+                <a href="https://drogozhang.github.io/">Kai Zhang</a><sup>1</sup>,</span> 
+              <span class="author-block">
+                <a href="https://boyuanzheng010.github.io/">Boyuan Zheng</a><sup>1</sup>,</span> 
+              <span class="author-block">
+                <a href="https://zhaoweicai.github.io/">Zhaowei Cai</a><sup>2</sup>,</span> 
+              <span class="author-block">
+                <a href="https://scholar.google.com/citations?user=WpzZQ0kAAAAJ&hl=en">Viktor Rozgic</a><sup>2</sup>,</span>
+              <span class="author-block">
+                <a href="https://www.linkedin.com/in/morteza-ziyadi-a3818ba9/">Morteza Ziyadi</a><sup>2</sup>,</span>
+              <span class="author-block">
+                <a href="https://u.osu.edu/ihudas/people/">Huan Sun</a><sup>1</sup>,</span> 
+              <span class="author-block">
+                <a href="http://ysu1989.github.io/">Yu Su</a><sup>1</sup></span>
+            </div>
+
+            <div class="is-size-5 publication-authors">
+              <span class="author-block"><sup>1</sup>The Ohio State University</span>&nbsp; &nbsp; &nbsp;
+              <span class="author-block"><sup>2</sup>Amazon AGI</span>
+            </div>
+
+            <i style="font-size: 15px !important;">*Equal Contribution.</i>
+
+            <div class="column has-text-centered">
+              <div class="publication-links">
+                <!--<span class="link-block">
+                  <a href="https://arxiv.org/pdf/" class="external-link button is-normal is-rounded is-dark">
+                    <span class="icon">
+                      <i class="fas fa-file-pdf"></i>
+                    </span>
+                    <span>Paper</span>
+                  </a>
+                </span>-->
+                <span class="link-block">
+                  <a href="https://arxiv.org/abs/2506.21506" class="external-link button is-normal is-rounded is-dark">
+                    <span class="icon">
+                      <i class="ai ai-arxiv"></i>
+                    </span>
+                    <span>arXiv</span>
+                  </a>
+                </span>
+                <!--<span class="link-block">
+                  <a href="https://www.youtube.com/" class="external-link button is-normal is-rounded is-dark">
+                    <span class="icon">
+                      <i class="fab fa-youtube"></i>
+                    </span>
+                    <span>Video</span>
+                  </a>
+                </span>-->
+                <span class="link-block">
+                  <a href="https://github.com/osu-nlp-group/mind2web2"
+                    class="external-link button is-normal is-rounded is-dark">
+                    <span class="icon">
+                      <i class="fab fa-github"></i>
+                    </span>
+                    <span>Code</span>
+                  </a>
+                </span>
+                <span class="link-block">
+                  <a href="https://huggingface.co/datasets/osunlp/Mind2Web-2"
+                    class="external-link button is-normal is-rounded is-dark">
+                    <span class="icon">
+                      <img src="./static/images/huggingface.svg" width="20" height="20">
+                    </span>
+                    <span>Dataset</span>
+                  </a>
+                </span>
+                <span class="link-block">
+                  <a href="#leaderboard"
+                    class="external-link button is-normal is-rounded is-dark">
+                    <span class="icon">
+                      <i class="fas fa-trophy"></i>
+                    </span>
+                    <span>Leaderboard</span>
+                  </a>
+                </span>
+                <span class="link-block">
+                  <a href="https://x.com/ysu_nlp/status/1938652377403236574"
+                    class="external-link button is-normal is-rounded is-dark">
+                    <span>𝕏 Post</span>
+                  </a>
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    </section>
+
+    <section class="hero teaser">
+      <div class="container is-max-desktop has-text-centered">
+        <div class="teaser-content">
+          <img src="./static/images/overview_m2w2.jpg" alt="Mind2Web 2 Overview" class="teaser-image">
+          <div class="teaser-caption">
+            <p>
+              Mind2Web 2 features realistic and diverse long-horizon web search tasks and a novel Agent-as-a-Judge framework to evaluate complex, time-varying, and citation-backed answers.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="container" style="margin-bottom: 2vh;">
+        <!-- Abstract. -->
+        <div class="columns is-centered has-text-centered">
+          <div class="column is-four-fifths">
+            <!-- <h2 class="title is-3">News</h2>
+            <div class="content has-text-justified">
+              <md-block>
+              </md-block>
+            </div> -->
+
+            <h2 class="title is-3">Overview</h2>
+            <div class="content has-text-justified">
+              <md-block>
+                We introduce **Mind2Web 2**, a benchmark of **130 realistic, high-quality, long-horizon tasks** that require real-time web browsing and extensive information synthesis, constructed with **over 1,000 hours of human labor**.
+                
+                There are two main challenges in constructing such a benchmark:
+                
+                - How to collect sufficiently complex yet realistic tasks?
+                - How to automatically and reliably evaluate the complex answers generated by different agentic search systems?
+                
+                To collect complex and realistic tasks, we adopt a [three-stage process](https://osu-nlp-group.github.io/Mind2Web-2/#task_collection) to propose, refine, and validate tasks. Each task has undergone hours of expert labor for polishing and validation to ensure the validity, diversity, clarity, and verifiability of our benchmark.
+                
+                To tackle the significant evaluation challenge, we propose a novel [Agent-as-a-Judge framework](https://osu-nlp-group.github.io/Mind2Web-2/#evaluation) that evaluates an answer’s:
+                
+                - *correctness* (i.e., whether the answer satisfies all the requirements of the task)
+                - *attribution* (i.e., whether each claim in the answer can be attributed to the cited source)
+                
+                We conduct a comprehensive evaluation of ten frontier agentic search systems and human performance, along with a detailed error analysis to draw insights for future development.
+                The best-performing system, OpenAI Deep Research, can already achieve 50-70\% of human performance while spending half the time, showing a great potential. Mind2Web 2 provides a rigorous foundation for developing and benchmarking the next generation of agentic search systems.
+              </md-block>
+            </div>
+          </div>
+        </div>
+        <!--/ Abstract. -->
+    </div>
+    </section>
+
+    <!-- DATASET SECTION -->
+    <!-- <section class="hero is-light is-small">
+      <div class="hero-body has-text-centered">
+        <h1 class="title is-1 m2w2">
+          <span class="m2w2">Mind2Web 2 Benchmark</span>
+        </h1>
+      </div>
+    </section> -->
+
+    <hr class="section-divider">
+
+    <section class="section">
+      <div class="container">
+        <!-------------------------------------------------------------------- LEADERBOARD SECTION -------------------------------------------------------------------->
+        <div class="columns is-centered">
+          <div class="column is-four-fifths has-text-centered content">
+            <h2 class="title is-3" id="leaderboard">Leaderboard</h2>
+            <div class="content has-text-justified">
+              <md-block>
+                The leaderboard shows the performance of agentic systems on Mind2Web 2 tasks. 
+                The evaluation is based on our Agent-as-a-Judge framework, which automatically evaluates the correctness and attribution of answers.
+                The leaderboard is updated periodically as new results are submitted.
+
+                The metrics are defined as follows:
+                - `Partial Completion`: The average root node score across all tasks, representing the percentage of passed fine-grained evaluation nodes.
+                - `Success Rate`: The percentage of tasks completed with all criteria met.
+                - `Pass@3`: The percentage of tasks successfully completed within three attempts.
+
+                We also include the the following statistics to further contextualize the system performance:
+                - `Time (min)`: The average time taken by the system to complete the tasks, measured in minutes.
+                - `Answer Length`: The average length of the answers generated by the system, measured in word count.
+
+                The results of the leaderboard are evaluated using a *Private Test Set* of 120 tasks.
+
+                We provide a separate *Public Development Set*, consisting of 10 tasks with evaluation rubrics made publicly available. [[Code Coming Soon](https://github.com/osu-nlp-group/mind2web2)]
+              </md-block>
+
+              <br>
+              <md-block>
+                Please follow the codebase provided in our [repo](https://github.com/osu-nlp-group/mind2web2) to test your agent on Mind2Web 2.
+
+                For leaderboard submission, [contact us](mailto:m2w2-leaderboard@googlegroups.com) with your organization name and agent's name. 
+                Submit both the agent responses on the *Private Test Set* and the corresponding cached web content to ensure evaluation consistency. We encourage the submission to also include the time taken to complete each task.
+
+                **Note**: The cached web content can be large, so we recommend using a cloud storage service to store the content and provide a link in your submission.
+              </md-block>
+            </div>
+
+            <div class="leaderboard-container">
+              <div class="leaderboard-table-wrapper">
+                <table id="m2w2-table"></table>
+              </div>
+            </div>
+
+
+
+          </div>
+        </div>
+
+
+        <br>
+        <br>
+
+        <!-- Dataset Comparison Section-->
+        <div class="columns is-centered has-text-centered">
+          <div class="column is-four-fifths">
+            <h2 class="title is-3">Comparisons with Existing Benchmarks</h2>
+            <div class="content has-text-justified">
+              <md-block>
+                  To better distinguish the difference between Mind2Web 2 and existing benchmarks, we compare it with other related benchmarks in the table below. 
+                  Our benchmark is the only agentic search benchmark to date focusing on long-horizon, time-varying tasks, and is made possible due to our advanced Agent-as-a-Judge evaluation methodology.
+                  It is worth noting that even though there are only 130 tasks, each task contains dozens to hundreds of fine-grained evaluation nodes, thus still providing sufficient differentiation power.
+              </md-block>
+            </div>
+            
+            <div class="leaderboard-container">
+              <div class="table-wrapper">
+                <table>
+                  <thead>
+                    <tr>
+                      <th class="">Name</th>
+                      <th class="">Horizon</th>
+                      <th class=""># of Tasks</th>
+                      <th class="">Time-Varying</th>
+                      <th class="">Evaluation</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr class="row-mind2web2">
+                      <td class="dataset-name"><b>Mind2Web 2</b></td>
+                      <td class="dataset-horizon">Long</td>
+                      <td class="dataset-tasks">130</td>
+                      <td class="dataset-time-sensitive"><i class="fas fa-check-circle" style="color: green;"></td>
+                      <td class="dataset-evaluation">Agent-as-a-Judge</td>
+                    </tr>
+                    <tr>
+                      <td class="dataset-name">
+                        <a href="https://huggingface.co/spaces/osunlp/Online_Mind2Web_Leaderboard/" target="_blank">Online-Mind2Web</a>
+                      </td>
+                      <td class="dataset-horizon">Short</td>
+                      <td class="dataset-tasks">300</td>
+                      <td class="dataset-time-sensitive"><i class="fas fa-check-circle" style="color: green;"></i></td>
+                      <td class="dataset-evaluation">LLM-as-a-Judge</td>
+                    </tr>
+                    <tr>
+                      <td class="dataset-name">
+                        <a href="https://github.com/MinorJerry/WebVoyager?tab=readme-ov-file" target="_blank">WebVoyager</a>
+                      </td>
+                      <td class="dataset-horizon">Short</td>
+                      <td class="dataset-tasks">643</td>
+                      <td class="dataset-time-sensitive"><i class="fas fa-check-circle" style="color: green;"></td>
+                      <td class="dataset-evaluation">LLM-as-a-Judge</td>
+                    </tr>
+                    <tr>
+                      <td class="dataset-name">
+                        <a href="https://github.com/iMeanAI/WebCanvas?tab=readme-ov-file" target="_blank">Mind2Web-Live</a>
+                      </td>
+                      <td class="dataset-horizon">Short</td>
+                      <td class="dataset-tasks">542</td>
+                      <td class="dataset-time-sensitive"><i class="fas fa-check-circle" style="color: green;"></td>
+                      <td class="dataset-evaluation">Rule</td>
+                    </tr>
+                    <tr>
+                      <td class="dataset-name">
+                        <a href="https://bear-cubs.github.io" target="_blank">BEARCUBS</a>
+                      </td>
+                      <td class="dataset-horizon">Short</td>
+                      <td class="dataset-tasks">111</td>
+                      <td class="dataset-time-sensitive"><i class="fas fa-times-circle" style="color: red;"></i></td>
+                      <td class="dataset-evaluation">Manual Evaluation</td>
+                    </tr>
+                    <tr>
+                      <td class="dataset-name">
+                        <a href="https://github.com/Alibaba-NLP/WebAgent/tree/main/WebWalker" target="_blank">WebWalkerQA</a>
+                      </td>
+                      <td class="dataset-horizon">Short</td>
+                      <td class="dataset-tasks">680</td>
+                      <td class="dataset-time-sensitive"><i class="fas fa-times-circle" style="color: red;"></i></td>
+                      <td class="dataset-evaluation">Answer Match</td>
+                    </tr>
+                    <tr>
+                      <td class="dataset-name">
+                        <a href="https://huggingface.co/spaces/gaia-benchmark/leaderboard" target="_blank">GAIA</a>
+                      </td>
+                      <td class="dataset-horizon">Medium</td>
+                      <td class="dataset-tasks">466</td>
+                      <td class="dataset-time-sensitive"><i class="fas fa-times-circle" style="color: red;"></i></td>
+                      <td class="dataset-evaluation">Answer Match</td>
+                    </tr>
+                    <tr>
+                      <td class="dataset-name">
+                        <a href="https://assistantbench.github.io" target="_blank">AssistantBench</a>
+                      </td>
+                      <td class="dataset-horizon">Medium</td>
+                      <td class="dataset-tasks">214</td>
+                      <td class="dataset-time-sensitive"><i class="fas fa-times-circle" style="color: red;"></i></td>
+                      <td class="dataset-evaluation">Answer Match</td>
+                    </tr>
+                    <tr>
+                      <td class="dataset-name">
+                        <a href="https://openai.com/index/browsecomp/" target="_blank">BrowseComp</a>
+                      </td>
+                      <td class="dataset-horizon">Long</td>
+                      <td class="dataset-tasks">1,266</td>
+                      <td class="dataset-time-sensitive"><i class="fas fa-times-circle" style="color: red;"></i></td>
+                      <td class="dataset-evaluation">Answer Match</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <md-block>
+                Comparison with existing benchmarks for web browsing or search on live websites. 
+                **Horizon**: average number of required actions per task. Short (&lt 10), Medium (10-50), Long (&gt 50). 
+                **Time-Varying**: whether the answer can change over time.
+              </md-block>
+            </div>
+
+          </div>
+        </div>
+
+
+        <br>
+        <br>
+
+        <!-- Task Collection Section -->
+        <div class="columns is-centered has-text-centered">
+          <div class="column is-four-fifths">
+            <h2 class="title is-3" id="task_collection">Task Collection</h2>
+
+                <div class="content has-text-justified">
+                  <md-block>
+                  
+                  Our task collection consists of three stages:
+
+                    - **Stage 1, Task Proposal**: Task proposers independently generate task ideas based on their authentic search needs or inspirations from our provided domain guidelines, ensuring initial alignment with the realism and laboriousness desiderata. 
+                    - **Stage 2, Task Refinement**: Trained refinement experts iteratively revise or filter tasks to enforce strict verifiability while collaborating closely with the original task proposers to maintain task relevance. 
+                    - **Stage 3, Task Validation**: Experienced validation experts manually attempt and verify each refined task, ensuring feasibility, determinism, and clarity of all the evaluation criteria. Only tasks independently validated by at least two validation experts are included in Mind2Web 2.
+
+                  The resulting benchmark contains 130 diverse tasks covering 6 broad domains and 24 sub-domains. Below we show an overview of the tasks.
+                  - Left: Figure shows the domain distribution of the tasks, you can click to expand the domains.
+                  - Right: We provide tasks as examples, you can select a task from the dropdown menu to view its description.
+                  </md-block>
+                </div>
+
+
+
+            <!-- Two column layout for chart and task explorer -->
+            <div class="columns is-vcentered task-collection-layout">
+              <!-- Left column: Sunburst chart -->
+              <div class="column is-half task-chart-column">
+                <div class="content has-text-centered interpolation-panel">
+                  <h4 class="title is-5">Domain Distribution</h4>
+                  <div class="chart-container">
+                    <div id="sunburstChart"></div>
+                  </div>
+                  
+                </div>
+              </div>
+
+              <!-- Right column: Task explorer -->
+              <div class="column is-half task-explorer-column">
+                <div class="content has-text-centered interpolation-panel">
+                  <h4 class="title is-5">Example Tasks</h4>
+                  
+                  <!-- Dropdown menu -->
+                  <div class="field">
+                    <div class="control">
+                      <div class="select is-fullwidth">
+                        <select id="taskSelector">
+                          <option value="">Select a task...</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                  <!-- Task description display -->
+                  <div id="taskDescription" class="task-description-container">
+                    <p class="has-text-grey">Select a task from the dropdown to view its description.</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+
+        <br>
+        <br>
+
+        <!-- Evaluation Section -->
+        <div class="columns is-centered has-text-centered">
+          <div class="column is-four-fifths">
+            <h2 class="title is-3" id="evaluation">Agent-as-a-Judge Evaluation</h2>
+            <div class="content has-text-justified">
+              <md-block>
+                Agentic search systems typically produce long, time-varying answers ranging from hundreds to thousands of words on these tasks. 
+                The complexity is far beyond what conventional LLM-as-a-Judge methods are used for.
+                
+                Our proposed Agent-as-a-Judge framework can automatically yet reliably evaluate such complex answers.
+                The key insight behind our evaluation methodology lies in the 
+                **generation-verification asymmetry**: *while the generated answers can vary substantially across agents, search strategies, or query times, we know **a priori** what each task is looking for and can design a **task-specific rubric** to specify the evaluation logic.*
+                
+                We propose a **tree-structured rubric** for evaluation.
+                At a high level, a rubric evaluates two main aspects of an answer: *correctness* (i.e., whether the answer satisfies all the requirements of the task) and *attribution* (i.e., whether each fact in the answer can be attributed to the cited source).
+                At the operational level, a rubric tree breaks down the evaluation into hierarchical evaluation nodes, where each leaf node conforms to a binary judgment and the internal nodes aggregate and propagate the results toward the root node.
+              </md-block>
+            </div>
+
+
+            <!-- <div class="content has-text-centered interpolation-panel">
+              <h4 class="title is-5">Rubric Tree Structure</h4>
+              <div class="chart-container">
+                <div id="rubricTree"></div>
+              </div>
+              <md-block>
+                Interactive tree showing our hierarchical evaluation rubric.
+                *Click on nodes to expand/collapse branches*
+              </md-block>
+            </div> -->
+
+            <!-- Replace the existing rubric tree section with this two-column layout -->
+
+
+            <div class="content has-text-centered interpolation-panel">
+              <h4 class="title is-5">Rubric Examples</h4>
+
+              <md-block>
+              Drag, zoom in/out, or hover over nodes for details.
+              </md-block>
+              
+              <!-- Top row: Task selector and description side by side -->
+              <div class="columns is-vcentered rubric-task-row">
+                <!-- Top left: Task selector -->
+                <div class="column is-one-fifth task-selector-column">
+                  <div class="content has-text-centered interpolation-panel">
+                    
+                    <!-- Dropdown menu -->
+                    <div class="field">
+                      <div class="control">
+                        <div class="select is-fullwidth">
+                          <select id="rubricTaskSelector">
+                            <option value="">Select a task...</option>
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Top right: Task description -->
+                <div class="column is-four-fifth task-description-column">
+                  <div class="content has-text-centered interpolation-panel">          
+                    <!-- Task description display -->
+                    <div id="rubricTaskDescription" class="task-description-container-rubric">
+                      <p class="has-text-grey">Select a task from the dropdown to view its description and evaluation rubric.</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Bottom row: Rubric tree (full width) -->
+              <div class="columns is-centered rubric-tree-row">
+                <div class="column is-full rubric-tree-column">
+                  <div class="content has-text-centered interpolation-panel">
+                    <div class="chart-container">
+                      <div id="rubricTree">
+                        <p class="has-text-grey">Select a task to view its evaluation rubric.</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              
+            </div>
+            
+          </div>
+        </div>
+
+
+      </div>
+    </section>
+
+    <!-- RESULTS SECTION -->
+    <!-- <section class="hero is-light is-small">
+      <div class="hero-body has-text-centered">
+        <h1 class="title is-1 mmmu">Experiment Results</h1>
+      </div>
+    </section> -->
+
+    <!-- <hr class="section-divider"> -->
+
+
+    <!-- acknowledgement -->
+    <section class="acknowledgements" id="acknowledgements">
+      <div class="container">
+        <div class="columns is-centered has-text-centered">
+          <div class="column is-four-fifths">
+            <h2 class="title is-3 has-text-centered">Acknowledgements</h2>
+            <div class="content has-text-justified">
+              <md-block>
+                The authors would like to thank colleagues from the OSU NLP group and Amazon AGI for constructive discussions and generous help, 
+                Zishuo Zheng for his exploration of developing long-horizon agentic search agents, Akshay Anand and Scott Salisbury for their help on benchmark construction, 
+                the Hugging Face team (Amir Mahla, Aymeric Roucher, Aksel Joonas Reedi, and Thomas Wolf) for their assistance with the evaluation of Hugging Face Open Deep Research as well as covering the inference costs, 
+                the Grok team (Piaoyang Cui, Hexiang Hu) for their assistance with the evaluation of Grok DeepResearch and DeeperResearch, 
+                and the Amazon AGI team for their valuable feedback and contribution to task collection. 
+                This research is sponsored in part by a gift from Amazon, ARL W911NF2220144, NSF CAREER 1942980, and NSF OAC 2112606.
+              </md-block>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- bibtex -->
+    <section class="section" id="BibTeX">
+      <div class="container is-max-desktop content">
+        <h2 class="title is-3 has-text-centered">BibTeX</h2>
+        <pre><code>
+        @misc{gou2025mind2web2,
+            title = {Mind2Web 2: Evaluating Agentic Search with Agent-as-a-Judge}, 
+            author = {Boyu Gou and Zanming Huang and Yuting Ning and Yu Gu and Michael Lin and Weijian Qi and Andrei Kopanev and Botao Yu and Bernal Jiménez Gutiérrez and Yiheng Shu and Chan Hee Song and Jiaman Wu and Shijie Chen and Hanane Nour Moussa and Tianshu Zhang and Jian Xie and Yifei Li and Tianci Xue and Zeyi Liao and Kai Zhang and Boyuan Zheng and Zhaowei Cai and Viktor Rozgic and Morteza Ziyadi and Huan Sun and Yu Su},
+            year = {2025},
+            eprint = {2506.21506},
+            archivePrefix = {arXiv},
+            primaryClass = {cs.AI}
+        }
+    </code></pre>
+      </div>
+    </section>
+
+    <footer class="footer">
+      <div class="columns is-centered">
+        <div class="column is-8">
+          <div class="content">
+            <p>
+              This website is website adapted from <a href="https://nerfies.github.io/">Nerfies</a> and <a href="https://mathvista.github.io/">MathVista</a>, licensed under a <a rel="license"
+                                                  href="http://creativecommons.org/licenses/by-sa/4.0/">Creative
+              Commons Attribution-ShareAlike 4.0 International License</a>.
+            </p>
+          </div>
+        </div>
+      </div>
+    </footer>
+
+
+  <!-- Scripts -->
+  <script src="./static/js/domain-sunburst.js"></script>
+  <script src="./static/js/task-explorer.js"></script>
+  <script src="./static/js/rubric-tree-explorer.js"></script>
+  <script src="./static/js/leaderboard.js"></script>
+  <script src="./static/js/index.js"></script>
+
+
+  </body>
+</html>

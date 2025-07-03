@@ -1,0 +1,355 @@
+
+{
+    "eval_breakdown": [
+        {
+            "verification_tree": {
+                "id": "root",
+                "desc": "\nI am planning a trip from Dayton, Ohio to Notre Dame, Indiana, and I wish to visit a state park during the trip. Identify three official state parks (designated and managed by state authorities) for which the total driving distance from Dayton to Notre Dame via the state park is less than 260 miles. For each park, provide the name of the official state park, the park's physical address, a direct link to the park's page on the respective state's official website, and the total driving distance of the trip (Dayton → park → Notre Dame).\n",
+                "critical": false,
+                "score": 1.0,
+                "status": "passed",
+                "strategy": "parallel",
+                "children": [
+                    {
+                        "id": "park_0",
+                        "desc": "Park 1 evaluation node",
+                        "critical": false,
+                        "score": 1.0,
+                        "status": "passed",
+                        "strategy": "parallel",
+                        "children": [
+                            {
+                                "id": "park_0_existence",
+                                "desc": "All required information exists for park 1",
+                                "critical": true,
+                                "score": 1.0,
+                                "status": "passed",
+                                "strategy": "parallel",
+                                "children": [
+                                    {
+                                        "id": "park_0_name_exists",
+                                        "desc": "Park name exists",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    },
+                                    {
+                                        "id": "park_0_address_exists",
+                                        "desc": "Park address exists",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    },
+                                    {
+                                        "id": "park_0_url_exists",
+                                        "desc": "Official state website URL exists",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    },
+                                    {
+                                        "id": "park_0_distance_exists",
+                                        "desc": "Total distance information exists",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    }
+                                ],
+                                "func": "__init__",
+                                "line": 253
+                            },
+                            {
+                                "id": "park_0_is_state_park",
+                                "desc": "Park 1 is confirmed as official state park",
+                                "critical": true,
+                                "score": 1.0,
+                                "status": "passed",
+                                "strategy": "parallel",
+                                "children": [],
+                                "func": "__init__",
+                                "line": 253
+                            },
+                            {
+                                "id": "park_0_address_verified",
+                                "desc": "Park 1 is at claimed address",
+                                "critical": true,
+                                "score": 1.0,
+                                "status": "passed",
+                                "strategy": "parallel",
+                                "children": [],
+                                "func": "__init__",
+                                "line": 253
+                            },
+                            {
+                                "id": "park_0_distance_valid",
+                                "desc": "Total distance is under 260 miles limit",
+                                "critical": true,
+                                "score": 1.0,
+                                "status": "passed",
+                                "strategy": "parallel",
+                                "children": [],
+                                "func": "__init__",
+                                "line": 253
+                            },
+                            {
+                                "id": "park_0_distance_match",
+                                "desc": "Claimed total distance is matched with the actual total distance",
+                                "critical": true,
+                                "score": 1.0,
+                                "status": "passed",
+                                "strategy": "parallel",
+                                "children": [],
+                                "func": "__init__",
+                                "line": 253
+                            }
+                        ],
+                        "func": "__init__",
+                        "line": 253
+                    },
+                    {
+                        "id": "park_1",
+                        "desc": "Park 2 evaluation node",
+                        "critical": false,
+                        "score": 1.0,
+                        "status": "passed",
+                        "strategy": "parallel",
+                        "children": [
+                            {
+                                "id": "park_1_existence",
+                                "desc": "All required information exists for park 2",
+                                "critical": true,
+                                "score": 1.0,
+                                "status": "passed",
+                                "strategy": "parallel",
+                                "children": [
+                                    {
+                                        "id": "park_1_name_exists",
+                                        "desc": "Park name exists",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    },
+                                    {
+                                        "id": "park_1_address_exists",
+                                        "desc": "Park address exists",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    },
+                                    {
+                                        "id": "park_1_url_exists",
+                                        "desc": "Official state website URL exists",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    },
+                                    {
+                                        "id": "park_1_distance_exists",
+                                        "desc": "Total distance information exists",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    }
+                                ],
+                                "func": "__init__",
+                                "line": 253
+                            },
+                            {
+                                "id": "park_1_is_state_park",
+                                "desc": "Park 2 is confirmed as official state park",
+                                "critical": true,
+                                "score": 1.0,
+                                "status": "passed",
+                                "strategy": "parallel",
+                                "children": [],
+                                "func": "__init__",
+                                "line": 253
+                            },
+                            {
+                                "id": "park_1_address_verified",
+                                "desc": "Park 2 is at claimed address",
+                                "critical": true,
+                                "score": 1.0,
+                                "status": "passed",
+                                "strategy": "parallel",
+                                "children": [],
+                                "func": "__init__",
+                                "line": 253
+                            },
+                            {
+                                "id": "park_1_distance_valid",
+                                "desc": "Total distance is under 260 miles limit",
+                                "critical": true,
+                                "score": 1.0,
+                                "status": "passed",
+                                "strategy": "parallel",
+                                "children": [],
+                                "func": "__init__",
+                                "line": 253
+                            },
+                            {
+                                "id": "park_1_distance_match",
+                                "desc": "Claimed total distance is matched with the actual total distance",
+                                "critical": true,
+                                "score": 1.0,
+                                "status": "passed",
+                                "strategy": "parallel",
+                                "children": [],
+                                "func": "__init__",
+                                "line": 253
+                            }
+                        ],
+                        "func": "__init__",
+                        "line": 253
+                    },
+                    {
+                        "id": "park_2",
+                        "desc": "Park 3 evaluation node",
+                        "critical": false,
+                        "score": 1.0,
+                        "status": "passed",
+                        "strategy": "parallel",
+                        "children": [
+                            {
+                                "id": "park_2_existence",
+                                "desc": "All required information exists for park 3",
+                                "critical": true,
+                                "score": 1.0,
+                                "status": "passed",
+                                "strategy": "parallel",
+                                "children": [
+                                    {
+                                        "id": "park_2_name_exists",
+                                        "desc": "Park name exists",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    },
+                                    {
+                                        "id": "park_2_address_exists",
+                                        "desc": "Park address exists",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    },
+                                    {
+                                        "id": "park_2_url_exists",
+                                        "desc": "Official state website URL exists",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    },
+                                    {
+                                        "id": "park_2_distance_exists",
+                                        "desc": "Total distance information exists",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "__init__",
+                                        "line": 253
+                                    }
+                                ],
+                                "func": "__init__",
+                                "line": 253
+                            },
+                            {
+                                "id": "park_2_is_state_park",
+                                "desc": "Park 3 is confirmed as official state park",
+                                "critical": true,
+                                "score": 1.0,
+                                "status": "passed",
+                                "strategy": "parallel",
+                                "children": [],
+                                "func": "__init__",
+                                "line": 253
+                            },
+                            {
+                                "id": "park_2_address_verified",
+                                "desc": "Park 3 is at claimed address",
+                                "critical": true,
+                                "score": 1.0,
+                                "status": "passed",
+                                "strategy": "parallel",
+                                "children": [],
+                                "func": "__init__",
+                                "line": 253
+                            },
+                            {
+                                "id": "park_2_distance_valid",
+                                "desc": "Total distance is under 260 miles limit",
+                                "critical": true,
+                                "score": 1.0,
+                                "status": "passed",
+                                "strategy": "parallel",
+                                "children": [],
+                                "func": "__init__",
+                                "line": 253
+                            },
+                            {
+                                "id": "park_2_distance_match",
+                                "desc": "Claimed total distance is matched with the actual total distance",
+                                "critical": true,
+                                "score": 1.0,
+                                "status": "passed",
+                                "strategy": "parallel",
+                                "children": [],
+                                "func": "__init__",
+                                "line": 253
+                            }
+                        ],
+                        "func": "__init__",
+                        "line": 253
+                    }
+                ],
+                "func": "__init__",
+                "line": 253
+            }
+        }
+    ]
+}

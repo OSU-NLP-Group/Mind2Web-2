@@ -1,0 +1,180 @@
+{
+  "leaderboardData": [
+    {
+      "info": {
+        "name": "OpenAI Deep Research",
+        "date": "2025-06-26",
+        "type": "deep_research",
+        "tags": ["proprietary", "openai"],
+        "url": "https://openai.com/index/introducing-deep-research/"
+      },
+      "eval_set": {
+        "partial_completion": "0.54",
+        "success_rate": "0.28",
+        "pass3": "0.40",
+        "time": "8.40",
+        "answer_length": "559"
+      }
+    },
+    {
+      "info": {
+        "name": "Gemini Deep Research",
+        "date": "2025-06-26",
+        "type": "deep_research",
+        "tags": ["proprietary", "google"],
+        "url": "https://gemini.google/overview/deep-research/"
+      },
+      "eval_set": {
+        "partial_completion": "0.45",
+        "success_rate": "0.18",
+        "pass3": "0.30",
+        "time": "7.38",
+        "answer_length": "3357"
+      }
+    },
+    {
+      "info": {
+        "name": "Grok DeeperSearch",
+        "date": "2025-06-26",
+        "type": "deep_research",
+        "tags": ["proprietary", "grok"],
+        "url": "https://x.ai/news/grok-3"
+      },
+      "eval_set": {
+        "partial_completion": "0.52",
+        "success_rate": "0.27",
+        "pass3": "0.40",
+        "time": "5.72",
+        "answer_length": "1362"
+      }
+    },
+    {
+      "info": {
+        "name": "Perplexity Deep Research",
+        "date": "2025-06-26",
+        "type": "deep_research",
+        "tags": ["proprietary", "perplexity"],
+        "url": "https://www.perplexity.ai/hub/blog/introducing-perplexity-deep-research"
+      },
+      "eval_set": {
+        "partial_completion": "0.42",
+        "success_rate": "0.15",
+        "pass3": "0.26",
+        "time": "5.67",
+        "answer_length": "585"
+      }
+    },
+    {
+      "info": {
+        "name": "Grok DeepSearch",
+        "date": "2025-06-26",
+        "type": "deep_research",
+        "tags": ["proprietary", "grok"],
+        "url": "https://x.ai/news/grok-3"
+      },
+      "eval_set": {
+        "partial_completion": "0.40",
+        "success_rate": "0.18",
+        "pass3": "0.36",
+        "time": "2.58",
+        "answer_length": "1428"
+      }
+    },
+    {
+      "info": {
+        "name": "HF Open Deep Research",
+        "date": "2025-06-26",
+        "type": "deep_research",
+        "tags": ["open_source", "huggingface"],
+        "url": "https://huggingface.co/blog/open-deep-research"
+      },
+      "eval_set": {
+        "partial_completion": "0.26",
+        "success_rate": "0.11",
+        "pass3": "0.18",
+        "time": "13.65",
+        "answer_length": "209"
+      }
+    },
+    {
+      "info": {
+        "name": "Perplexity Pro Search",
+        "date": "2025-06-26",
+        "type": "search_llm",
+        "tags": ["proprietary", "perplexity"],
+        "url": "https://www.perplexity.ai/hub/blog/pro-search-upgraded-for-more-advanced-problem-solving"
+      },
+      "eval_set": {
+        "partial_completion": "0.28",
+        "success_rate": "0.08",
+        "pass3": "0.12",
+        "time": "<1",
+        "answer_length": "408"
+      }
+    },
+    {
+      "info": {
+        "name": "ChatGPT Search",
+        "date": "2025-06-26",
+        "type": "search_llm",
+        "tags": ["proprietary", "openai"],
+        "url": "https://openai.com/index/introducing-chatgpt-search/"
+      },
+      "eval_set": {
+        "partial_completion": "0.26",
+        "success_rate": "0.06",
+        "pass3": "0.11",
+        "time": "<1",
+        "answer_length": "314"
+      }
+    },
+    {
+      "info": {
+        "name": "OpenAI Operator",
+        "date": "2025-06-26",
+        "type": "interactive_agent",
+        "tags": ["proprietary", "openai"],
+        "url": "https://openai.com/index/introducing-operator/"
+      },
+      "eval_set": {
+        "partial_completion": "0.26",
+        "success_rate": "0.10",
+        "pass3": "0.17",
+        "time": "9.74",
+        "answer_length": "160"
+      }
+    },
+    {
+      "info": {
+        "name": "Human",
+        "date": "2025-06-26",
+        "type": "human",
+        "tags": [],
+        "url": ""
+      },
+      "eval_set": {
+        "partial_completion": "0.79",
+        "success_rate": "0.54",
+        "pass3": "0.83",
+        "time": "18.40",
+        "answer_length": "186"
+      }
+    },
+    {
+      "info": {
+        "name": "Claude Research",
+        "date": "2025-07-03",
+        "type": "deep_research",
+        "tags": ["proprietary", "anthropic"],
+        "url": "https://www.anthropic.com/news/research"
+      },
+      "eval_set": {
+        "partial_completion": "0.32",
+        "success_rate": "0.10",
+        "pass3": "0.19",
+        "time": "7.39",
+        "answer_length": "742"
+      }
+    }
+  ]
+}

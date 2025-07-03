@@ -1,0 +1,241 @@
+{
+    "eval_breakdown": [
+        {
+            "verification_tree": {
+                "id": "root",
+                "claim": "Overall evaluation for buy_stroller",
+                "critical": false,
+                "score": 1.0,
+                "status": "passed",
+                "strategy": "parallel",
+                "children": [
+                    {
+                        "id": "amazon_verification",
+                        "claim": "Verification of Amazon strollers",
+                        "critical": false,
+                        "score": 1.0,
+                        "status": "passed",
+                        "strategy": "parallel",
+                        "children": [
+                            {
+                                "id": "amazon_stroller_0_verification",
+                                "claim": "Verification of Amazon stroller 1",
+                                "critical": false,
+                                "score": 1.0,
+                                "status": "passed",
+                                "strategy": "sequential",
+                                "children": [
+                                    {
+                                        "id": "amazon_stroller_0_info_verification",
+                                        "claim": "Verify if all required information is provided for Amazon stroller 1",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "verify_stroller_info_exists",
+                                        "line": 119,
+                                        "doc": "Verify all required stroller information exists."
+                                    },
+                                    {
+                                        "id": "amazon_stroller_0_criteria_verification",
+                                        "claim": "Verify if Amazon stroller 1 meets price and rating criteria",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "verify_stroller_criteria",
+                                        "line": 150,
+                                        "doc": "Verify stroller meets price and rating criteria using a single simple_verify."
+                                    },
+                                    {
+                                        "id": "amazon_stroller_0_url_verification",
+                                        "claim": "Verify if all information for Amazon stroller 1 matches the webpage",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "verify_stroller_url_match",
+                                        "line": 198,
+                                        "doc": "Verify all stroller information matches the webpage."
+                                    }
+                                ],
+                                "func": "sequential_node",
+                                "line": 89,
+                                "doc": "Create a sequential verification node."
+                            },
+                            {
+                                "id": "amazon_stroller_1_verification",
+                                "claim": "Verification of Amazon stroller 2",
+                                "critical": false,
+                                "score": 1.0,
+                                "status": "passed",
+                                "strategy": "sequential",
+                                "children": [
+                                    {
+                                        "id": "amazon_stroller_1_info_verification",
+                                        "claim": "Verify if all required information is provided for Amazon stroller 2",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "verify_stroller_info_exists",
+                                        "line": 119,
+                                        "doc": "Verify all required stroller information exists."
+                                    },
+                                    {
+                                        "id": "amazon_stroller_1_criteria_verification",
+                                        "claim": "Verify if Amazon stroller 2 meets price and rating criteria",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "verify_stroller_criteria",
+                                        "line": 150,
+                                        "doc": "Verify stroller meets price and rating criteria using a single simple_verify."
+                                    },
+                                    {
+                                        "id": "amazon_stroller_1_url_verification",
+                                        "claim": "Verify if all information for Amazon stroller 2 matches the webpage",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "verify_stroller_url_match",
+                                        "line": 198,
+                                        "doc": "Verify all stroller information matches the webpage."
+                                    }
+                                ],
+                                "func": "sequential_node",
+                                "line": 89,
+                                "doc": "Create a sequential verification node."
+                            }
+                        ],
+                        "func": "parallel_node",
+                        "line": 99,
+                        "doc": "Create a parallel verification node."
+                    },
+                    {
+                        "id": "target_verification",
+                        "claim": "Verification of Target strollers",
+                        "critical": false,
+                        "score": 1.0,
+                        "status": "passed",
+                        "strategy": "parallel",
+                        "children": [
+                            {
+                                "id": "target_stroller_0_verification",
+                                "claim": "Verification of Target stroller 1",
+                                "critical": false,
+                                "score": 1.0,
+                                "status": "passed",
+                                "strategy": "sequential",
+                                "children": [
+                                    {
+                                        "id": "target_stroller_0_info_verification",
+                                        "claim": "Verify if all required information is provided for Target stroller 1",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "verify_stroller_info_exists",
+                                        "line": 119,
+                                        "doc": "Verify all required stroller information exists."
+                                    },
+                                    {
+                                        "id": "target_stroller_0_criteria_verification",
+                                        "claim": "Verify if Target stroller 1 meets price and rating criteria",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "verify_stroller_criteria",
+                                        "line": 150,
+                                        "doc": "Verify stroller meets price and rating criteria using a single simple_verify."
+                                    },
+                                    {
+                                        "id": "target_stroller_0_url_verification",
+                                        "claim": "Verify if all information for Target stroller 1 matches the webpage",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "verify_stroller_url_match",
+                                        "line": 198,
+                                        "doc": "Verify all stroller information matches the webpage."
+                                    }
+                                ],
+                                "func": "sequential_node",
+                                "line": 89,
+                                "doc": "Create a sequential verification node."
+                            },
+                            {
+                                "id": "target_stroller_1_verification",
+                                "claim": "Verification of Target stroller 2",
+                                "critical": false,
+                                "score": 1.0,
+                                "status": "passed",
+                                "strategy": "sequential",
+                                "children": [
+                                    {
+                                        "id": "target_stroller_1_info_verification",
+                                        "claim": "Verify if all required information is provided for Target stroller 2",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "verify_stroller_info_exists",
+                                        "line": 119,
+                                        "doc": "Verify all required stroller information exists."
+                                    },
+                                    {
+                                        "id": "target_stroller_1_criteria_verification",
+                                        "claim": "Verify if Target stroller 2 meets price and rating criteria",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "verify_stroller_criteria",
+                                        "line": 150,
+                                        "doc": "Verify stroller meets price and rating criteria using a single simple_verify."
+                                    },
+                                    {
+                                        "id": "target_stroller_1_url_verification",
+                                        "claim": "Verify if all information for Target stroller 2 matches the webpage",
+                                        "critical": true,
+                                        "score": 1.0,
+                                        "status": "passed",
+                                        "strategy": "parallel",
+                                        "children": [],
+                                        "func": "verify_stroller_url_match",
+                                        "line": 198,
+                                        "doc": "Verify all stroller information matches the webpage."
+                                    }
+                                ],
+                                "func": "sequential_node",
+                                "line": 89,
+                                "doc": "Create a sequential verification node."
+                            }
+                        ],
+                        "func": "parallel_node",
+                        "line": 99,
+                        "doc": "Create a parallel verification node."
+                    }
+                ],
+                "func": "parallel_node",
+                "line": 99,
+                "doc": "Create a parallel verification node."
+            }
+        }
+    ]
+}
