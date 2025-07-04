@@ -2,7 +2,7 @@ class LeaderboardTable {
     constructor() {
         this.data = null;
         this.currentSet = 'eval_set';
-        this.sortColumn = 'success_rate';
+        this.sortColumn = 'partial_completion';  // 改为默认按 partial_completion 排序
         this.sortDirection = 'desc';
         this.init();
     }
@@ -116,6 +116,7 @@ class LeaderboardTable {
             sortedData.forEach((model, index) => {
                 const info = model.info;
                 const results = model[this.currentSet];
+                const isHuman = info.name === 'Human';  // 检查是否是 Human 行
 
                 let agentNameHtml;
                 if (info.url && info.url.trim() !== "") {
@@ -128,17 +129,22 @@ class LeaderboardTable {
                     agentNameHtml = `${info.name}`;
                 }
 
+                // 为 Human 行添加特殊的 class 和样式
+                const rowClass = isHuman ? 'model-row human-row' : 'model-row';
+                const rankDisplay = isHuman ? '<span class="human-reference-badge">Reference</span>' : `${index + 1}`;
+
                 tableHtml += `
-                    <tr class="model-row" data-rank="${index + 1}">
+                    <tr class="${rowClass}" data-rank="${index + 1}">
                         <td class="model-name-cell">
                             <div class="model-info">
                                 ${agentNameHtml}
+                                ${isHuman ? ' <span class="human-indicator"><i class="fas fa-user"></i></span>' : ''}
                             </div>
                         </td>
                         <td class="has-text-centered">${info.date}</td>
-                        <td class="has-text-centered metric-cell">${this.formatMetric(results.partial_completion, maxValues.partial_completion)}</td>
-                        <td class="has-text-centered metric-cell">${this.formatMetric(results.success_rate, maxValues.success_rate)}</td>
-                        <td class="has-text-centered metric-cell">${this.formatMetric(results.pass3, maxValues.pass3)}</td>
+                        <td class="has-text-centered metric-cell">${this.formatMetric(results.partial_completion, isHuman ? null : maxValues.partial_completion)}</td>
+                        <td class="has-text-centered metric-cell">${this.formatMetric(results.success_rate, isHuman ? null : maxValues.success_rate)}</td>
+                        <td class="has-text-centered metric-cell">${this.formatMetric(results.pass3, isHuman ? null : maxValues.pass3)}</td>
                         <td class="has-text-centered metric-cell">${this.formatMetric(results.time)}</td>
                         <td class="has-text-centered metric-cell">${this.formatMetric(results.answer_length)}</td>
                     </tr>
@@ -190,6 +196,11 @@ class LeaderboardTable {
         };
 
         data.forEach(model => {
+            // 跳过 Human 数据
+            if (model.info?.name === 'Human') {
+                return;
+            }
+            
             const results = model[this.currentSet];
             
             // Check each metric
@@ -249,9 +260,12 @@ class LeaderboardTable {
             return [];
         }
 
-        let sortedData = [...this.data];
+        // 先分离出 Human 和其他条目
+        const humanData = this.data.filter(item => item.info?.name === 'Human');
+        const otherData = this.data.filter(item => item.info?.name !== 'Human');
         
-        return sortedData.sort((a, b) => {
+        // 对非 Human 条目进行排序
+        const sortedOtherData = otherData.sort((a, b) => {
             let aValue, bValue;
             
             if (this.sortColumn === 'date') {
@@ -278,6 +292,9 @@ class LeaderboardTable {
                 return aValue > bValue ? -1 : aValue < bValue ? 1 : 0;
             }
         });
+        
+        // Human 总是在最前面
+        return [...humanData, ...sortedOtherData];
     }
 
     setupSorting() {

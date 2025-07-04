@@ -825,11 +825,16 @@ tr:hover {
 .leaderboard-table-wrapper {
   max-height: 600px; /* Set your desired maximum height here */
   overflow-y: auto;   /* Enable vertical scrolling for entire container */
-  overflow-x: auto; /* Hide horizontal overflow */
+  overflow-x: auto; /* Enable horizontal scrolling */
   border: 2px solid #ddd;
   border-radius: 8px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
   background: white;
+  /* 创建新的堆叠上下文来解决重合问题 */
+  position: relative;
+  z-index: 1;
+  /* 确保滚动时背景不透明 */
+  background-clip: padding-box;
 }
 
 
@@ -860,7 +865,8 @@ tr:hover {
   border-right: none;
   position: sticky;
   top: 0;
-  z-index: 11;
+  z-index: 15;  /* 确保表头在Human行之上 */
+  background-clip: padding-box;
 }
 
 
@@ -1041,3 +1047,57 @@ tr:hover {
 .agent-link strong {
     font-weight: 600;
 }
+
+/* Human row special styling */
+.human-row {
+    background-color: #f8f9fa !important;  /* 更柔和的灰色背景 */
+    border-top: 1px solid #dee2e6 !important;  /* 更细的灰色边框 */
+    border-bottom: 1px solid #dee2e6 !important;
+    font-style: italic;
+    opacity: 0.85;  /* 稍微提高不透明度 */
+    position: sticky;
+    top: 41px; /* Position below the header */
+    z-index: 9; /* Below header but above other content */
+    box-shadow: 0 1px 2px rgba(0,0,0,0.05);  /* 更轻微的阴影 */
+    /* 确保在水平滚动时也能正确显示 */
+    background-clip: padding-box;
+    isolation: isolate;
+}
+
+.human-row td {
+    font-weight: 450;  /* 稍微加重字体 */
+    color: #495057;  /* 更深的灰色文字 */
+    background-color: #f8f9fa !important;  /* 确保每个td都有背景色 */
+    /* 防止背景透明导致重合 */
+    background-clip: padding-box;
+    position: relative;
+    z-index: 1;
+}
+
+.human-row:hover {
+    background-color: #e9ecef !important;  /* hover时更柔和的灰色 */
+}
+
+.human-row:hover td {
+    background-color: #e9ecef !important;  /* hover时td也要变色 */
+}
+
+.human-indicator {
+    color: #495057;  /* 更深的灰色图标 */
+    margin-left: 8px;
+    font-size: 0.8em;  /* 更小的图标 */
+}
+
+.human-reference-badge {
+    background-color: #495057;  /* 更深的灰色背景 */
+    color: white;
+    padding: 2px 6px;  /* 更小的padding */
+    border-radius: 3px;  /* 更小的圆角 */
+    font-size: 0.7em;  /* 更小的字体 */
+    font-weight: normal;  /* 普通字体重量 */
+    font-style: normal;
+}
+
+
+
+
