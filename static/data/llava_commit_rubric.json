@@ -3,7 +3,7 @@
         {
             "verification_tree": {
                 "id": "root",
-                "desc": "\nI would like to identify the first commit on the main branch of the official Hugging Face 'transformers' repository that added support for the LLaVA model.Please clearly provide the following details about this commit: the short commit ID (7 characters), the date of the commit。并且，给出所有这个commit的参与作者，以及他们github的profile pages以及profile page上他们的真实名字\n",
+                "desc": "\nI would like to identify the first commit on the main branch of the official Hugging Face 'transformers' repository that added support for the LLaVA model. Please clearly provide the following details about this commit: the short commit ID (7 characters), the date of the commit, a list of all contributors/authors involved in this commit. For each author, include a link to their GitHub profile page and the full real name displayed on their GitHub profile page.\n",
                 "critical": false,
                 "score": 1.0,
                 "status": "passed",
