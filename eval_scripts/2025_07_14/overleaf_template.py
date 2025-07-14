@@ -21,7 +21,6 @@ EVALUATION_INSTRUCTION = """
 The photo doesn't need to be strictly located in the top left corner. Just roughly in the top left corner is acceptable.
 """
 
-JUDGE_MODEL = "o4-mini"
 
 
 # --------------------------------------------------------------------------- #
@@ -124,7 +123,7 @@ async def evaluate_answer(
         cache: CacheClass,
         semaphore: asyncio.Semaphore,
         logger: logging.Logger,
-        model: str = None
+        model: str = "o4-mini"
 ) -> Dict:
     """
     Evaluate a single answer and return a structured result dictionary.
@@ -141,7 +140,7 @@ async def evaluate_answer(
         global_cache=cache,
         global_semaphore=semaphore,
         logger=logger,
-        default_model=model if model else JUDGE_MODEL,
+        default_model=model,
         strategy=AggregationStrategy.PARALLEL
     )
 
