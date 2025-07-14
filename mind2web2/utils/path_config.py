@@ -39,6 +39,9 @@ class PathConfig:
     tasks_root: Path = field(init=False)
     eval_results_root: Path = field(init=False)
     cache_root: Path = field(init=False)
+    
+    # Evaluation version
+    eval_version: str = field(init=False)
 
     # Scripts
     run_eval_script: Path = field(init=False)
@@ -58,6 +61,9 @@ class PathConfig:
         self.eval_results_root = self.project_root / "eval_results"
 
         self.cache_root = self.project_root / "cache"
+        
+        # Default eval version
+        self.eval_version = "2025_07_14"
 
         # Scripts
         self.run_eval_script = self.project_root / "run_eval.py"
@@ -67,8 +73,8 @@ class PathConfig:
     # Public API
     # ------------------------------------------------------------------ #
     def default_script_for(self, task_id: str) -> Path:
-        """Return `<eval_scripts_root>/<task_id>.py`."""
-        return self.eval_scripts_root / f"{task_id}.py"
+        """Return `<eval_scripts_root>/<eval_version>/<task_id>.py`."""
+        return self.eval_scripts_root / self.eval_version / f"{task_id}.py"
 
     def apply_overrides(
         self,
@@ -80,6 +86,7 @@ class PathConfig:
         eval_results_root: Optional[Path] = None,
         cache_root: Optional[Path] = None,
         run_eval_script: Optional[Path] = None,
+        eval_version: Optional[str] = None,
     ) -> None:
         """
         Overwrite selected directories in-place.
@@ -99,6 +106,8 @@ class PathConfig:
             self.cache_root = cache_root.expanduser().resolve()
         if run_eval_script is not None:
             self.run_eval_script = run_eval_script.expanduser().resolve()
+        if eval_version is not None:
+            self.eval_version = eval_version
 
     # ------------------------------------------------------------------ #
     # Debug helpers

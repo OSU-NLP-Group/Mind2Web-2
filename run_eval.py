@@ -36,6 +36,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Override output directory for results/logs")
     p.add_argument("--cache_root", type=Path,
                    help="Override cache directory")
+    p.add_argument("--eval_version", default="2025_07_14",
+                   help="Version of evaluation scripts to use (default: 2025_07_14)")
 
     # LLM configuration
     p.add_argument("--llm_provider", choices=["openai", "azure_openai"],
@@ -248,6 +250,7 @@ def main() -> None:
         eval_scripts_root=args.eval_scripts_root,
         eval_results_root=args.eval_results_root,
         cache_root=args.cache_root,
+        eval_version=args.eval_version,
     )
 
     # Validate answer folder structure

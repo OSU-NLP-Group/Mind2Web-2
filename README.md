@@ -139,22 +139,12 @@ python run_eval.py --agent_name example --task_id yu_lineage
 
 #### Advanced Configuration
 
-```bash
-python run_eval.py \
-    --agent_name <your_agent_name> \
-    --answer_folder answers \
-    --llm_provider openai \
-    --max_concurrent_tasks 2 \
-    --max_concurrent_answers 3 \
-    --max_webpage_retrieval 5 \
-    --max_llm_requests 30 \
-    --overwrite
-```
-
-#### Command Line Options
-
 - `--agent_name`: Name of your agent (required)
-- `--answer_folder`: Path to directory containing answer files (required)
+- `--answer_folder`: Path to directory containing answer files (default: `answers/`)
+- `--eval_scripts_root`: Root directory for evaluation scripts (default: `eval_scripts/`)
+- `--eval_results_root`: Root directory to save evaluation results (default: `eval_results/`)
+- `--cache_root`: Root directory for caching webpages (default: `cache/`)
+- `--eval_version`: Version of evaluation scripts to use (default: `2025_07_14`)
 - `--task_id`: Specific task to evaluate (optional, evaluates all tasks if not provided)
 - `--llm_provider`: LLM provider (`openai` or `azure_openai`, default: `openai`)
 - `--max_concurrent_tasks`: Maximum concurrent task evaluations (default: 2)
