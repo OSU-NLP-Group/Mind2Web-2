@@ -8,7 +8,7 @@ name = "mind2web2"
 version = "0.1.0"
 description = "Mind2Web2: tools, agents and code generation utilities for web‑based reasoning benchmarks"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.11"
 
 authors = [
     { name = "Boyu Gou", email = "gou.43@osu.edu" }
