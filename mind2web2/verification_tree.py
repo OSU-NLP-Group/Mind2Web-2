@@ -27,9 +27,9 @@ class VerificationNode(BaseModel):
 
 
     # Provenance (optional)
-    func: Optional[str] = None
-    line: Optional[int] = None
-    doc: Optional[str] = None
+    # func: Optional[str] = None
+    # line: Optional[int] = None
+    # doc: Optional[str] = None
 
     _cached_score: Optional[float] = PrivateAttr(default=None)
 
@@ -67,8 +67,8 @@ class VerificationNode(BaseModel):
         """Capture caller frame for provenance."""
         try:
             frame = sys._getframe(2)
-            self.func = frame.f_code.co_name
-            self.line = frame.f_lineno
+            # self.func = frame.f_code.co_name
+            # self.line = frame.f_lineno
             # self.doc = extract_doc_description_from_frame(frame)
         except Exception:
             pass
