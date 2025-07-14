@@ -188,3 +188,4 @@ cython_debug/
 /eval_results/
 /cache/
 /uv.lock
+/.claude/
