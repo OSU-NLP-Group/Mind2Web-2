@@ -153,7 +153,6 @@ python run_eval.py --agent_name example --task_id yu_lineage
 - `--max_llm_requests`: Maximum concurrent LLM API requests (default: 30)
 - `--dump_cache`: Persist cache to disk (default: True)
 - `--overwrite`: Overwrite existing results
-- `--self_debug`: Add debug suffix to logs/result files
 
 #### Path Overrides (Optional)
 
