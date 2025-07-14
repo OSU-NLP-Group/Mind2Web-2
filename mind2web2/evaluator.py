@@ -3,15 +3,13 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass  # @dataclass
 from enum import Enum, auto  # Enum type (auto for auto-increment values)
-from typing import List  # List type annotation
-from typing import Optional, Union, Type, Tuple, Any
+from typing import List, Optional, Union, Type, Tuple, Any
 
 from pydantic import BaseModel
 
 from .eval_toolkit import create_evaluator, Extractor, Verifier
 from .verification_tree import VerificationNode, AggregationStrategy
 import threading
-from collections import defaultdict
 
 class SourceKind(Enum):
     NONE = auto()
@@ -94,7 +92,7 @@ class Evaluator:
         self._agent_name = agent_name or "unknown_agent"
         self._answer_name = answer_name or "unknown_answer"
 
-        # Automatically generate task description
+        # Automatically generate task desc
         if 'task_description' not in evaluator_kwargs:
             evaluator_kwargs['task_description'] = f"Evaluation for {task_id}"
 
@@ -123,8 +121,8 @@ class Evaluator:
     def add_custom_node(
             self,
             result: bool,  # Any binary judgment result
-            node_id: str,
-            description: str,
+            id: str,
+            desc: str,
             parent: Optional[VerificationNode] = None,
             critical: bool = True # Typically critical for custom nodes
     ) -> VerificationNode:
@@ -133,8 +131,8 @@ class Evaluator:
 
         Args:
             result: Judgment result (True/False)
-            node_id: Node ID
-            description: Node description
+            id: Node ID
+            desc: Node description
             parent: Parent node
             critical: Whether it's a critical node
 
@@ -170,11 +168,11 @@ class Evaluator:
                 "All 5 items found and all are white"
             )
         """
-        unique_id = self._generate_unique_id(node_id)
+        unique_id = self._generate_unique_id(id)
 
         node = VerificationNode(
             id=unique_id,
-            desc=description,
+            desc=desc,
             critical=critical,
             score=1.0 if result else 0.0,
             status="passed" if result else "failed"
@@ -462,9 +460,9 @@ class Evaluator:
         # Add verification start context log
         verify_context = {
             "op_id": main_op_id,  # Add op_id
-            "node_id": node.id if node else None,
+            "id": node.id if node else None,
             "node_desc": node.desc if node else None,
-            "claim_preview": claim[:100] + "..." if len(claim) > 100 else claim,
+            "claim_preview": claim[:150] + "..." if len(claim) > 150 else claim,
             "has_sources": sources is not None,
             "source_count": len(sources) if isinstance(sources, list) else (1 if sources else 0)
         }
@@ -484,14 +482,7 @@ class Evaluator:
 
             if node:
                 # Get all preceding leaf nodes
-                prerequisite_leaves = self._get_auto_preconditions(node)
-
-                # Add additional prerequisites (also need to be converted to leaf nodes)
-                if extra_prerequisites:
-                    if node in extra_prerequisites:
-                        raise ValueError("A node cannot depend on itself.")
-                    for extra_node in extra_prerequisites:
-                        prerequisite_leaves.extend(self._get_all_leaf_nodes(extra_node))
+                prerequisite_leaves = self._get_auto_preconditions(node, extra_prerequisites=extra_prerequisites)
 
                 # Check if there are failed preceding conditions
                 failed_prereq_id = self._check_preconditions_failed(prerequisite_leaves)
@@ -584,6 +575,8 @@ class Evaluator:
 
             for extra_node in extra_prerequisites:
                 leaf_nodes = self._get_all_leaf_nodes(extra_node)
+
+
                 for leaf in leaf_nodes:
                     if leaf.id not in blocking_dep_ids:
                         blocking_dep_ids.add(leaf.id)

@@ -1,22 +1,25 @@
 from __future__ import annotations
-import re
+
 import asyncio
+import base64
+import io
 import logging
 import random
 import textwrap
+import uuid
 from typing import List, Type, Callable, Awaitable, Optional, Tuple, Union
-from pydantic import BaseModel
-import base64, io
+
 from PIL import Image
+from pydantic import BaseModel
+
 from .api_tools import tool_pdf
 from .llm_client.base_client import LLMClient
 from .utils.cache import CacheClass
 from .utils.misc import (
-    text_dedent,normalize_url_markdown
+    text_dedent, normalize_url_markdown
 )
 from .utils.page_info_retrieval import capture_page_content_async, is_pdf
 from .verification_tree import VerificationNode
-import uuid
 
 
 class BinaryEvalResult(BaseModel):
@@ -35,9 +38,9 @@ class EvaluatorConfig:
     default_use_screenshot: bool = True
     default_additional_instruction: str = "None"
 
+
 class BaseEvaluator:
     """Common utilities shared by Extractor & Verifier."""
-
 
     def __init__(
             self,
@@ -64,7 +67,9 @@ class BaseEvaluator:
     async def call_llm_with_semaphore(self, **kwargs):
         if "o" not in kwargs["model"]:
             kwargs["temperature"] = 0.0
-        async with self.semaphore:
+        # Use LLM semaphore if available, fallback to default semaphore
+        semaphore_to_use = getattr(self.semaphore, 'llm', self.semaphore)
+        async with semaphore_to_use:
             return await self.client.async_response(**kwargs)
 
     def _build_message_content(self, prompt: str, screenshot_b64: List[str], use_screenshot: bool = True):
@@ -83,13 +88,6 @@ class BaseEvaluator:
             return msg_content
         else:
             return [{"type": "text", "text": prompt}]
-
-    # ---------------------------------------------------------------------
-    # Page info helper (shared by both subclasses)
-    # ---------------------------------------------------------------------
-
-
-
 
     async def get_page_info(self, url: str, cancellation_event: Optional[asyncio.Event] = None):
         """Return (screenshot_b64, page_text). Uses global cache + semaphore."""
@@ -112,6 +110,7 @@ class BaseEvaluator:
                 early_stop = True
         if not early_stop:
             self.logger.info(f"⚠️⚠️⚠️ No Cache for {url}")
+            print(f"⚠️⚠️⚠️ No Cache for {url}")
             if await is_pdf(url):
 
                 try:
@@ -119,33 +118,39 @@ class BaseEvaluator:
                 except Exception as e:
                     self.logger.info(f"Fail to extract PDF from {url}: {e}")
                     self.logger.info(f"Lets try extract from webpage by playwright on {url}")
-                    async with self.semaphore:
+                    # Use webpage semaphore if available, fallback to default semaphore
+                    webpage_semaphore = getattr(self.semaphore, 'webpage', self.semaphore)
+                    async with webpage_semaphore:
                         screenshot_b64, page_text = await capture_page_content_async(
                             url,
                             self.logger,
-                            headless=False,
+                            headless=True,
                         )
                         self.cache.put_text(url, page_text)
                         self.cache.put_screenshot(url, screenshot_b64)
                 if page_text is None:
-                    async with self.semaphore:
+                    # Use webpage semaphore if available, fallback to default semaphore
+                    webpage_semaphore = getattr(self.semaphore, 'webpage', self.semaphore)
+                    async with webpage_semaphore:
                         await asyncio.sleep(0.2 * random.random())
                         screenshot_b64, page_text = await capture_page_content_async(
                             url,
                             self.logger,
-                            headless=False,
+                            headless=True,
                         )
                         self.cache.put_text(url, page_text)
                         self.cache.put_screenshot(url, screenshot_b64)
 
 
             else:
-                async with self.semaphore:
+                # Use webpage semaphore if available, fallback to default semaphore
+                webpage_semaphore = getattr(self.semaphore, 'webpage', self.semaphore)
+                async with webpage_semaphore:
                     await asyncio.sleep(0.2 * random.random())
                     screenshot_b64, page_text = await capture_page_content_async(
                         url,
                         self.logger,
-                        headless=False,
+                        headless=True,
                     )
                     self.cache.put_text(url, page_text)
                     self.cache.put_screenshot(url, screenshot_b64)
@@ -158,7 +163,6 @@ class BaseEvaluator:
             )
         if not isinstance(screenshot_b64, list):
             screenshot_b64 = [screenshot_b64]
-
 
         def _resize_b64_image(b64_str: str) -> str:
             try:
@@ -198,8 +202,14 @@ class Extractor(BaseEvaluator):
     GENERAL RULES:
     1. Do not add, omit, or invent any information. Extract only information explicitly mentioned in the provided answer exactly as it appears.
     2. If any required information is missing from the answer, explicitly return `null` as the JSON value.
-    3. You will also receive the original task description as context. Understand it clearly, as it provides essential background for the extraction. You may apply common-sense reasoning to assist your extraction, but your final result must be accurately extracted from the answer text provided.
+    3. You will also receive the original task desc as context. Understand it clearly, as it provides essential background for the extraction. You may apply common-sense reasoning to assist your extraction, but your final result must be accurately extracted from the answer text provided.
     4. Occasionally, additional instructions might be provided to aid your extraction. Carefully follow those instructions when available.
+    
+    
+    SPECIAL RULES FOR URL SOURCES EXTRACTION:
+    – These rules apply when the request involves extraction of urls sources, for example, the source attribution for a statement.
+    1. The sources must be explicitly mentioned in the answer text as URLs. If the answer only provides a description of the source (e.g., "according to Wikipedia" or "as stated on example.com"), but does not provide an actual URL, return `null` for that source.
+    2. The sources can be presented in various formats, including plain URLs, markdown links (e.g., `[text](url)`), or embedded within sentences with a dedicated sources section. You must extract the actual URLs. As long as the URLs are presented in a reasonable format, you should be able to extract them.
     
     SPECIAL RULES FOR URL EXTRACTION:
     – These rules apply only when URL fields are required in the extraction.
@@ -212,7 +222,7 @@ class Extractor(BaseEvaluator):
     {extraction_prompt}
     ```
     
-    Here is the original task description:
+    Here is the original task desc:
     ```
     {task_description}
     ```
@@ -234,7 +244,7 @@ class Extractor(BaseEvaluator):
         GENERAL RULES:
         1. Do not add, omit, or invent any information. Only extract information explicitly mentioned in the provided answer as it appears.
         2. If any required information is missing from the answer, explicitly return `null` as the JSON value.
-        3. You will also receive the original task description as context. Understand it clearly, as it provides essential background for the extraction. You may apply common-sense reasoning to assist your extraction, but your final result must be accurately extracted from the webpage content provided.
+        3. You will also receive the original task desc as context. Understand it clearly, as it provides essential background for the extraction. You may apply common-sense reasoning to assist your extraction, but your final result must be accurately extracted from the webpage content provided.
         4. Occasionally, additional instructions might be provided to aid your extraction. Carefully follow those instructions when available.
 
         SPECIAL RULES FOR URL EXTRACTION:
@@ -249,7 +259,7 @@ class Extractor(BaseEvaluator):
         {extraction_prompt}
         ```
 
-        Here is the original task description:
+        Here is the original task desc:
         ```
         {task_description}
         ```
@@ -431,6 +441,7 @@ class Extractor(BaseEvaluator):
         # Execute extraction
         return await self._log_and_extract(template_class, message_content, extract_context)
 
+
 class Verifier(BaseEvaluator):
     """Responsible for evidence‑based claim verification."""
 
@@ -438,21 +449,21 @@ class Verifier(BaseEvaluator):
             You are responsible for verifying whether a given claim or simple statement is correct and accurate. Typically, this verification involves straightforward factual judgments or logical checks (e.g., verifying if a given name matches another given name). For context, we are evaluating the correctness of an answer to a web information-gathering task. This verification step helps us determine part of the answer’s accuracy. Your task is to provide a binary judgment ("Correct" or "Incorrect") along with clear and detailed reasoning supporting your decision.
 
             To assist your judgment, you will also receive:
-            - The original task description (as context).
+            - The original task desc (as context).
             - The complete answer to the task (as context).
             - Additional instructions (occasionally provided to guide your verification).
 
             GENERAL RULES:
             1. Carefully examine the provided claim or statement to verify. Use logic, common sense, or basic reasoning to determine its accuracy.
-            2. Clearly understand the provided task description and complete answer, as they offer important context that may help you better handle variations or edge cases.
-            3. Although we provided task description and the complete answer, you should still focus on the given verification itself. DO NOT conduct any extra verification beyond the claim itself (e.g., verify the URL provenance or any violation to your knowledge). Usually, the verification has been phrased into a very simple logical or factual statement or a simple check. In other words, you should only verify the correctness of the claim itself, do not get distracted by the task description or the complete answer.
-            4. Most of the time, the claim or statement has been phrased into a simple check. If that is the case, you should not rely on your own knowledge or memory about the name or fact itself because those can be false or hallucinated. Instead, you should rely on the provided description to verify the claim itself. The only exception is when you are explicitly asked to call your own knowledge or memory to conduct the verification.
+            2. Clearly understand the provided task desc and complete answer, as they offer important context that may help you better handle variations or edge cases.
+            3. Although we provided task desc and the complete answer, you should still focus on the given verification itself. DO NOT conduct any extra verification beyond the claim itself (e.g., verify the URL provenance or any violation to your knowledge). Usually, the verification has been phrased into a very simple logical or factual statement or a simple check. In other words, you should only verify the correctness of the claim itself, do not get distracted by the task desc or the complete answer.
+            4. Most of the time, the claim or statement has been phrased into a simple check. If that is the case, you should not rely on your own knowledge or memory about the name or fact itself because those can be false or hallucinated. Instead, you should rely on the provided desc to verify the claim itself. The only exception is when you are explicitly asked to call your own knowledge or memory to conduct the verification.
             5. Your reasoning must be explicit, concise, and directly support your binary judgment.
             6. Carefully follow any additional instructions provided. They are crucial for your verification.
             7. Often the time, it is to check whether something (e.g., a name) matches another thing (e.g., another name). In those cases, you should try your best to allow minor or reasonable variants (e.g., letter casing, minor spelling variations, with or without middle name, etc.) to be considered as a match. Don't be very strict about the exact match.
             8. If the task asks for a number, then reasonable variations or simplifications should be acceptable—for example, rounding 66.7 to 67.
 
-            Here is the original task description:
+            Here is the original task desc:
 
             ```
             {task_description}
@@ -474,21 +485,20 @@ class Verifier(BaseEvaluator):
             ```
             """)
 
-
     URL_PROMPT = text_dedent("""
                             You are responsible for verifying whether a given claim or "fact" is fully supported by the actual content of a specified webpage (or a PDF file from a PDF webpage). For context, we are examining the correctness of an answer to a web information-gathering task. Typically, the claim or "fact" is extracted directly from the answer, and the webpage provided is the URL source referenced in the answer. This verification step helps us determine whether the claim or "fact" in the answer is accurate or hallucinated, a common issue in LLM-based systems. You will receive both the text content and a screenshot of the webpage for examination. Your task is to provide a binary judgment (i.e., supported or not supported) along with clear and detailed reasoning for your decision.
 
                             GENERAL RULES:
                             1. The provided webpage content may be lengthy. Carefully examine the relevant sections of both the webpage text and the screenshot. Determine clearly whether the claim or "fact" exactly matches or is explicitly supported by the webpage content. If the information appears to be not able to find from the text, but more likely from the screenshot, please check the screenshot carefully.
-                            2. You will also receive the original task description and the complete answer as context. Understand them clearly, as they provide essential background for evaluating the claim. You may apply common-sense reasoning (e.g., fuzzy matching for names differing only in letter casing or minor spelling variations) to assist your judgment, but your final decision must primarily rely on explicit evidence from the webpage content provided. You should never rely on your own knowledge or memory because those can be false or hallucinated. Instead, you should rely on the information on the webpage. The only exception is when you are explicitly asked to call your own knowledge or memory to conduct the verification.
-                            3. Although we provided task description and the complete answer, you should still focus on the given verification itself. DO NOT conduct any extra verification beyond the claim itself. In other words, you should only verify the correctness of the claim itself, do not get distracted by the task description or the complete answer.
+                            2. You will also receive the original task desc and the complete answer as context. Understand them clearly, as they provide essential background for evaluating the claim. You may apply common-sense reasoning (e.g., fuzzy matching for names differing only in letter casing or minor spelling variations) to assist your judgment, but your final decision must primarily rely on explicit evidence from the webpage content provided. You should never rely on your own knowledge or memory because those can be false or hallucinated. Instead, you should rely on the information on the webpage. The only exception is when you are explicitly asked to call your own knowledge or memory to conduct the verification.
+                            3. Although we provided task desc and the complete answer, you should still focus on the given verification itself. DO NOT conduct any extra verification beyond the claim itself. In other words, you should only verify the correctness of the claim itself, do not get distracted by the task desc or the complete answer.
                             4. If the provided webpage (the URL source mentioned in the answer) is entirely irrelevant, invalid, or inaccessible, you should conclude that the claim or "fact" is not supported.
                             5. Carefully follow any additional instructions provided. They are crucial for your verification.
                             6. Your reasoning must be explicit, concise, and directly support your binary judgment.
                             7. Always allow minor or reasonable variants if the verification is related to some naming or titles (e.g., letter casing, minor spelling variations, with or without middle name, etc.). Don't be very strict about the exact match.
                             8. If the task asks for a number, then reasonable variations or simplifications should be acceptable—for example, rounding 66.7 to 67.
                             
-                            Here is the original task description:
+                            Here is the original task desc:
 
                             ```
                             {task_description}
@@ -566,8 +576,6 @@ class Verifier(BaseEvaluator):
             use_screenshot=kwargs.get('use_screenshot', self.config.default_use_screenshot),
         )
 
-
-
     async def _execute_verification(
             self,
             verification_func: Callable[[], Awaitable[BinaryEvalResult]],
@@ -606,7 +614,7 @@ class Verifier(BaseEvaluator):
         context = {
             "op_id": op_id,
             "verify_type": verify_type,
-            "node_id": node.id if node else None,
+            "id": node.id if node else None,
             "node_desc": node.desc if node else None,
             "claim": claim,
             "claim_preview": claim[:150] + "..." if len(claim) > 150 else claim,
@@ -698,7 +706,7 @@ class Verifier(BaseEvaluator):
             # Log final result
             status = "passed" if result else "failed"
 
-            # Build description
+            # Build desc
             description = node.desc if node else verify_context.get("claim_preview", "Verification")
             if verify_context.get("url"):
                 description += f" @ {verify_context['url']}"
@@ -949,6 +957,8 @@ class Verifier(BaseEvaluator):
             node.status = "failed"
 
         return False
+
+
 # Factory function
 def create_evaluator(
         *,

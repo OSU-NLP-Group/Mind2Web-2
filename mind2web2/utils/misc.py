@@ -2,10 +2,6 @@ import base64
 import textwrap
 from os import PathLike
 import os
-import sys
-import importlib
-import functools
-import time
 import re
 import inspect
 
@@ -81,7 +77,7 @@ def _get_doc_from_frame(frame):
 
 def extract_doc_description(doc: str) -> str:
     """
-    Given a full docstring, return only the description part,
+    Given a full docstring, return only the desc part,
     i.e. all lines up until the first section header like
     'Parameters:', 'Returns:', etc.
     """
@@ -99,7 +95,7 @@ def extract_doc_description(doc: str) -> str:
 
 def extract_doc_description_from_frame(frame) -> str:
     """
-    Given a frame object, return the description part of the docstring
+    Given a frame object, return the desc part of the docstring
     of the function or method that the frame is in.
     """
     doc = _get_doc_from_frame(frame)

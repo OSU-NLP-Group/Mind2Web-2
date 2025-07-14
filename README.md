@@ -19,7 +19,22 @@ Mind2Web 2 is a benchmark for agentic search systems, featuring Agent-as-a-Judge
 
 ## ⚙️ Environment Setup
 
-Run the following commands to set up the Python environment:
+### Option 1: Using uv (Recommended)
+
+If you have [uv](https://docs.astral.sh/uv/) installed, it provides faster dependency resolution and installation:
+
+```bash
+# Automatically create virtual environment and install all dependencies
+uv sync
+
+# Activate the virtual environment
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+# Install browsers for Playwright
+playwright install
+```
+
+### Option 2: Using conda + pip
 
 ```bash
 # Create and activate conda environment
@@ -54,7 +69,18 @@ Mind2Web2-polish/
 
 ### 1. Prepare Your Data
 
-Put your answer folder under the `dataset` directory. The folder should contain your agent's responses in markdown format.
+Organize your agent's responses in the following directory structure:
+
+```
+answers/
+└── <your_agent_name>/
+    └── <task_id>/
+        ├── answer_1.md
+        ├── answer_2.md
+        └── ...
+```
+
+Each answer file should contain your agent's response in markdown format.
 
 ### 2. Set up API Keys
 
@@ -73,17 +99,17 @@ export AZURE_OPENAI_API_VERSION="2025-03-01-preview"
 export GOOGLE_MAPS_API_KEY="YOUR_GOOGLE_MAPS_API_KEY"
 ```
 
-### 3. Precache Webpages
+### 3. Precache Webpages (Optional but Recommended)
 
-Before running evaluation, you may want to precache the webpages to reduce evaluation latency. Loading webpages on-the-fly is very inefficient. 
+*Note: This step is not required but highly recommended for reducing evaluation latency, as fetching webpages on-the-fly during evaluation can be very slow.*
 
-Use the following script to precache:
+Before running evaluation, you may want to precache the webpages to improve performance:
 
 ```bash
 # Coming Soon!
 ```
 
-We also provide this lightweight script to fix the errors in the precached webpages (for example, some pages may be blocked by human verification):
+We also provide a lightweight script to fix errors in precached webpages (e.g., pages blocked by human verification):
 
 ```bash
 # Coming Soon!
@@ -91,11 +117,70 @@ We also provide this lightweight script to fix the errors in the precached webpa
 
 ### 4. Run Evaluation
 
-Execute the evaluation process:
+Execute the evaluation using the `run_eval.py` script:
+
+#### Basic Usage
 
 ```bash
-# Coming Soon!
+# Evaluate all tasks for a specific agent
+python run_eval.py --agent_name <your_agent_name>
+
+# Evaluate a specific task
+python run_eval.py --agent_name <your_agent_name> --task_id <task_id>
 ```
+
+for example:
+
+```bash
+python run_eval.py --agent_name example
+
+python run_eval.py --agent_name example --task_id yu_lineage
+```
+
+#### Advanced Configuration
+
+```bash
+python run_eval.py \
+    --agent_name <your_agent_name> \
+    --answer_folder answers \
+    --llm_provider openai \
+    --max_concurrent_tasks 2 \
+    --max_concurrent_answers 3 \
+    --max_webpage_retrieval 5 \
+    --max_llm_requests 30 \
+    --overwrite
+```
+
+#### Command Line Options
+
+- `--agent_name`: Name of your agent (required)
+- `--answer_folder`: Path to directory containing answer files (required)
+- `--task_id`: Specific task to evaluate (optional, evaluates all tasks if not provided)
+- `--llm_provider`: LLM provider (`openai` or `azure_openai`, default: `openai`)
+- `--max_concurrent_tasks`: Maximum concurrent task evaluations (default: 2)
+- `--max_concurrent_answers`: Maximum concurrent answer evaluations per task (default: 3)
+- `--max_webpage_retrieval`: Maximum concurrent webpage retrievals (default: 5)
+- `--max_llm_requests`: Maximum concurrent LLM API requests (default: 30)
+- `--dump_cache`: Persist cache to disk (default: True)
+- `--overwrite`: Overwrite existing results
+- `--self_debug`: Add debug suffix to logs/result files
+
+#### Path Overrides (Optional)
+
+```bash
+python run_eval.py \
+    --agent_name <your_agent_name> \
+    --answer_folder /path/to/your/answers \
+    --eval_scripts_root /custom/eval/scripts \
+    --eval_results_root /custom/results \
+    --cache_root /custom/cache
+```
+
+The evaluation will:
+1. Load evaluation scripts from `eval_scripts/`
+2. Process answers without precached webpages (fetching on-demand)
+3. Save results to `eval_results/`
+4. Generate merged results for all tasks when evaluating multiple tasks
 
 
 ## 📝 Citation

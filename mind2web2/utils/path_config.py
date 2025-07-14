@@ -35,17 +35,13 @@ class PathConfig:
     # Dataset subtree
     dataset_root: Path = field(init=False)
     answers_root: Path = field(init=False)
-    answers_sample_one_root: Path = field(init=False)
     eval_scripts_root: Path = field(init=False)
     tasks_root: Path = field(init=False)
     eval_results_root: Path = field(init=False)
     cache_root: Path = field(init=False)
 
-    # Workspace subtree
-    workspace_root: Path = field(init=False)
-    ws_cache_root: Path = field(init=False)
-    ws_eval_results_root: Path = field(init=False)
-    ws_eval_scripts_root: Path = field(init=False)
+    # Scripts
+    run_eval_script: Path = field(init=False)
 
     # ------------------------------------------------------------------ #
     # Construction helpers
@@ -55,25 +51,16 @@ class PathConfig:
 
         # Dataset
         self.dataset_root = self.project_root / "dataset"
-        self.answers_root = self.dataset_root / "answers"
-        self.answers_sample_one_root = self.dataset_root / "answers_sample_one"
+        self.answers_root = self.project_root / "answers"
 
-        self.eval_scripts_root = self.dataset_root / "eval_scripts"
-        self.tasks_root = self.dataset_root / "tasks"
-        self.eval_results_root = self.dataset_root / "eval_results"
+        self.eval_scripts_root = self.project_root / "eval_scripts"
+        self.tasks_root = self.project_root / "tasks"
+        self.eval_results_root = self.project_root / "eval_results"
 
-        # self.cache_root = self.dataset_root / "cache"
-
-        # Workspace
-        self.workspace_root = self.project_root / "workspace"
-        self.ws_cache_root = self.workspace_root / "cache"
-        self.ws_eval_results_root = self.workspace_root / "eval_results"
-        self.ws_eval_scripts_root = self.workspace_root / "eval_scripts"
+        self.cache_root = self.project_root / "cache"
 
         # Scripts
-        self.scripts_root = self.project_root / "scripts"
-        self.run_eval_script = self.scripts_root / "run_eval.py"
-
+        self.run_eval_script = self.project_root / "run_eval.py"
 
 
     # ------------------------------------------------------------------ #
@@ -86,23 +73,32 @@ class PathConfig:
     def apply_overrides(
         self,
         *,
+        dataset_root: Optional[Path] = None,
         answers_root: Optional[Path] = None,
-        ws_cache_root: Optional[Path] = None,
-        output_root: Optional[Path] = None,
         eval_scripts_root: Optional[Path] = None,
+        tasks_root: Optional[Path] = None,
+        eval_results_root: Optional[Path] = None,
+        cache_root: Optional[Path] = None,
+        run_eval_script: Optional[Path] = None,
     ) -> None:
         """
         Overwrite selected directories in-place.
         All arguments are absolute or will be resolved/expanded.
         """
+        if dataset_root is not None:
+            self.dataset_root = dataset_root.expanduser().resolve()
         if answers_root is not None:
             self.answers_root = answers_root.expanduser().resolve()
-        if ws_cache_root is not None:
-            self.ws_cache_root = ws_cache_root.expanduser().resolve()
-        if output_root is not None:
-            self.ws_eval_results_root = output_root.expanduser().resolve()
         if eval_scripts_root is not None:
             self.eval_scripts_root = eval_scripts_root.expanduser().resolve()
+        if tasks_root is not None:
+            self.tasks_root = tasks_root.expanduser().resolve()
+        if eval_results_root is not None:
+            self.eval_results_root = eval_results_root.expanduser().resolve()
+        if cache_root is not None:
+            self.cache_root = cache_root.expanduser().resolve()
+        if run_eval_script is not None:
+            self.run_eval_script = run_eval_script.expanduser().resolve()
 
     # ------------------------------------------------------------------ #
     # Debug helpers

@@ -99,6 +99,12 @@ class CacheClass:
         if not url_no_frag.endswith("/"):
             base_urls.add(f"{url_no_frag}/?utm_source=chatgpt.com")
 
+        # remove the "www." prefix variant
+        if url.startswith("http://www."):
+            base_urls.add("http://" + url[11:])
+        if url.startswith("https://www."):
+            base_urls.add("https://" + url[12:])
+
         # Do http/https swap for all current URLs
         for u in list(base_urls):  # Note: use list here to avoid set size change during iteration
             swapped = swap_scheme(u)

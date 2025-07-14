@@ -69,7 +69,7 @@ class VerificationNode(BaseModel):
             frame = sys._getframe(2)
             self.func = frame.f_code.co_name
             self.line = frame.f_lineno
-            self.doc = extract_doc_description_from_frame(frame)
+            # self.doc = extract_doc_description_from_frame(frame)
         except Exception:
             pass
 
