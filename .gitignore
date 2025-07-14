@@ -184,3 +184,7 @@ cython_debug/
 /workspace/
 /workflow_scripts/
 /dataset/answers/
+/answers/
+/eval_results/
+/cache/
+/uv.lock

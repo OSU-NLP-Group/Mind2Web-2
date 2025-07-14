@@ -29,7 +29,7 @@ dependencies = [
     "dill",
     "pillow",
     "python-json-logger",
-    "pyside6",
+#    "pyside6",
     "beautifulsoup4",
     "PyMuPDF",
     "google-auth",
