@@ -95,7 +95,7 @@ export AZURE_OPENAI_API_KEY="YOUR_AZURE_OPENAI_API_KEY"
 export AZURE_OPENAI_ENDPOINT_URL="YOUR_AZURE_OPENAI_ENDPOINT_URL"
 export AZURE_OPENAI_API_VERSION="2025-03-01-preview"
 
-# Tool APIs for certain evaluation tasks
+# (Optional) Tool APIs for tasks that require google map APIs
 export GOOGLE_MAPS_API_KEY="YOUR_GOOGLE_MAPS_API_KEY"
 ```
 
