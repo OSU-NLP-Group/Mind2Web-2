@@ -53,7 +53,7 @@ def prompt_extract_advisors() -> str:
 
     For each generation, extract:
     1. name: The full name of the advisor
-    2. sources: URLs or references cited to support this advisor-advisee relationship
+    2. sources: URLs or references cited that directly or potentially support this advisor-advisee relationship. For each advisor-advisee relationship and generation, for example, Yu Su to Xifeng Yan, the sources could be urls related to both the advisor (Xifeng Yan) and the advisee (Yu Su), or a page that explicitly states the advisor-advisee relationship. Do not omit any sources that are mentioned in the answer, even if they seem weak or indirect.
 
     Organize the extraction by generation:
     - generation1: Yu Su's direct doctoral advisor
