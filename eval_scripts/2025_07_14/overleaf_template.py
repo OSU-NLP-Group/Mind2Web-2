@@ -45,7 +45,7 @@ def prompt_extract_template_urls() -> str:
 
     For each template mentioned:
     1. Identify the main template URL (the primary link to the template)
-    2. Identify any related URLs that provide additional information about the same template (if any)
+    2. Identify any related URLs that provide additional but direct information about the same template (if any). Notice, related URLs should be directly relevant to the same template, such as links to example documents or official descriptions of that specific template. It should not be just a general link to Overleaf or a general category or gallery page.
 
     Group these together so we know which URLs refer to the same template.
     If no template URLs are mentioned, return an empty list.
