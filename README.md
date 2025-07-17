@@ -169,24 +169,6 @@ python run_eval.py --agent_name example --task_id yu_lineage
 - `--dump_cache`: Persist cache to disk (default: True)
 - `--overwrite`: Overwrite existing results
 
-#### Path Overrides (Optional)
-
-```bash
-python run_eval.py \
-    --agent_name <your_agent_name> \
-    --answer_folder /path/to/your/answers \
-    --eval_scripts_root /custom/eval/scripts \
-    --eval_results_root /custom/results \
-    --cache_root /custom/cache
-```
-
-The evaluation will:
-1. Load evaluation scripts from `eval_scripts/`
-2. Process answers without precached webpages (fetching on-demand)
-3. Save results to `eval_results/`
-4. Generate merged results for all tasks when evaluating multiple tasks
-
-
 ## 📝 Citation
 
 If you find this work useful, please consider starring our repo and citing our papers:
