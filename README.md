@@ -10,6 +10,7 @@ Mind2Web 2 is a benchmark for agentic search systems, featuring Agent-as-a-Judge
 ## 🔗 Links
 
 - [🏠 Homepage](https://osu-nlp-group.github.io/Mind2Web-2)
+- [🏆 Leaderboard](https://osu-nlp-group.github.io/Mind2Web-2/#leaderboard)
 - [📖 Paper](https://arxiv.org/abs/2506.21506)
 - [😊 Dataset (Tasks)](https://huggingface.co/datasets/osunlp/Mind2Web-2)
 
