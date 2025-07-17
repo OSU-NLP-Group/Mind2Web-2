@@ -51,7 +51,7 @@ We welcome all submissions and look forward to your participation! 🚀
 
 ## 🚀 Run Evaluation Locally Yourself
 
-### ⚙️ Environment Setup
+### 0. Environment Setup
 
 #### Option 1: Using uv (Recommended)
 
