@@ -49,7 +49,7 @@ We welcome all submissions and look forward to your participation! 🚀
 > If you would like to **explore our public dev set and run the evaluation locally**, please refer to the sections below for environment setup and evaluation instructions.
 
 
-## 🚀 Run Evaluation Yourself
+## 🚀 Run Evaluation Locally Yourself
 
 ### ⚙️ Environment Setup
 
