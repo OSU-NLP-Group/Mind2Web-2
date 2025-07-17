@@ -14,8 +14,38 @@ Mind2Web 2 is a benchmark for agentic search systems, featuring Agent-as-a-Judge
 - [😊 Dataset (Tasks)](https://huggingface.co/datasets/osunlp/Mind2Web-2)
 
 ## 🆕 Updates
-
+- **2025/07/17**: Check out our [submission guideline](#-submission-guideline). We welcome all submissions and look forward to your participation!
+- **2025/07/14**: The scripts of the public development set are released. Give them a try!
 - **2025/06/26**: The GitHub repo is live. The manuscript is now on arXiv.
+
+## 📥 Submission Guideline
+
+Submitting to our benchmark couldn't be easier! 
+
+Just collect your agent’s answers and send them to us. We’ll take care of all the evaluation steps for you, including the cost of running our Agent-as-a-Judge evaluation.
+
+1. **Collect answers from your agent:** Provide your agent with the task descriptions of our [private test set](https://huggingface.co/datasets/osunlp/Mind2Web-2/viewer/default/private_test_set) and collect its responses.
+
+2. **Organize your submission:** Arrange your agent's responses in the following directory structure (see [answers/examples](https://github.com/OSU-NLP-Group/Mind2Web-2/tree/main/answers/example) for reference):
+
+   ```
+   <agent_name>
+   ├── <task_id>
+   │   ├── answer_1.md
+   │   ├── answer_2.md
+   │   └── ...
+   └── ...
+   ```
+
+3. **Submit your answers:** Compress the directory and send it to us via email: m2w2-leaderboard@googlegroups.com.
+
+We welcome all submissions and look forward to your participation! 🚀
+
+> **Note:**
+>
+> The guidelines above describe how to submit your agent's answers on our **private test set** for official evaluation (**we will handle all evaluation steps for you**!).
+>
+> If you would like to **explore our public dev set and run the evaluation locally**, please refer to the sections below for environment setup and evaluation instructions.
 
 ## ⚙️ Environment Setup
 
@@ -51,7 +81,7 @@ playwright install
 ## 📁 Repo Structure
 
 ```
-Mind2Web2-polish/
+Mind2Web-2/
 ├── dataset/                 # Evaluation data and results
 ├── mind2web2/              # Main package
 │   ├── api_tools/          # External API tools
