@@ -48,9 +48,12 @@ We welcome all submissions and look forward to your participation! 🚀
 >
 > If you would like to **explore our public dev set and run the evaluation locally**, please refer to the sections below for environment setup and evaluation instructions.
 
-## ⚙️ Environment Setup
 
-### Option 1: Using uv (Recommended)
+## 🚀 Run Evaluation Yourself
+
+### ⚙️ Environment Setup
+
+#### Option 1: Using uv (Recommended)
 
 If you have [uv](https://docs.astral.sh/uv/) installed, it provides faster dependency resolution and installation:
 
@@ -65,7 +68,7 @@ source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 playwright install
 ```
 
-### Option 2: Using conda + pip
+#### Option 2: Using conda + pip
 
 ```bash
 # Create and activate conda environment
@@ -78,25 +81,6 @@ pip install -e .
 # Install browsers for Playwright
 playwright install
 ```
-
-## 📁 Repo Structure
-
-```
-Mind2Web-2/
-├── dataset/                 # Evaluation data and results
-├── mind2web2/              # Main package
-│   ├── api_tools/          # External API tools
-│   ├── llm_client/         # LLM client implementations
-│   ├── utils/              # Utility functions
-│   ├── eval_runner.py      # Evaluation execution
-│   ├── eval_toolkit.py     # Evaluation toolkit and utilities
-│   ├── evaluator.py        # Core evaluation logic
-│   └── verification_tree.py # Rubric tree implementation
-├── pyproject.toml          # Package configuration
-└── README.md              # This file
-```
-
-## 🚀 Run Evaluation
 
 ### 1. Prepare Your Data
 
