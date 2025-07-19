@@ -1,6 +1,6 @@
 # Mind2Web 2
 
-Mind2Web 2 is a benchmark for agentic search systems, featuring Agent-as-a-Judge methodology for comprehensive, rigorous, and reliable assessment.
+Mind2Web 2 is a benchmark for agentic search systems, featuring Agent-as-a-Judge methodology for comprehensive, rigorous, and reliable assessment on **long-horizon** and complex tasks that involve **complex and real-time information synthesis**.
 
 <div align="center">
   <img src="./assets/mind2web2_overview.jpg" alt="Mind2Web 2 Overview" width="800"/>
@@ -18,19 +18,6 @@ Mind2Web 2 is a benchmark for agentic search systems, featuring Agent-as-a-Judge
 - **2025/07/17**: Check out our [submission guideline](#-submission-guideline). We welcome all submissions and look forward to your participation!
 - **2025/07/14**: The scripts of the public development set are released. Give them a try!
 - **2025/06/26**: The GitHub repo is live. The manuscript is now on arXiv.
-
-## Comparisons with Existing Benchmarks
-| Name | Horizon | # of Tasks | Time-Varying | Complex Synthesis | Attribution Verification | Evaluation |
-|------|---------|------------|--------------|-------------------|-------------------------|------------|
-| **Mind2Web 2** | **Long** | 130 | ✅ | ✅ | ✅ | **Agent-as-a-Judge** |
-| [Online-Mind2Web](https://huggingface.co/spaces/osunlp/Online_Mind2Web_Leaderboard/) | Short | 300 | ✅ | ❌ | ❌ | LLM-as-a-Judge |
-| [WebVoyager](https://github.com/MinorJerry/WebVoyager?tab=readme-ov-file) | Short | 643 | ✅ | ❌ | ❌ | LLM-as-a-Judge |
-| [Mind2Web-Live](https://github.com/iMeanAI/WebCanvas?tab=readme-ov-file) | Short | 542 | ✅ | ❌ | ❌ | Rule |
-| [BEARCUBS](https://bear-cubs.github.io) | Short | 111 | ❌ | ❌ | ❌ | Answer Match |
-| [WebWalkerQA](https://github.com/Alibaba-NLP/WebAgent/tree/main/WebWalker) | Short | 680 | ❌ | ❌ | ❌ | Answer Match |
-| [GAIA](https://huggingface.co/spaces/gaia-benchmark/leaderboard) | Medium | 466 | ❌ | ❌ | ❌ | Answer Match |
-| [AssistantBench](https://assistantbench.github.io) | Medium | 214 | ❌ | ❌ | ❌ | Answer Match |
-| [BrowseComp](https://openai.com/index/browsecomp/) | Long | 1,266 | ❌ | ❌ | ❌ | Answer Match |
 
 
 ## 📥 Submission Guideline
