@@ -7,6 +7,19 @@ Mind2Web 2 is a benchmark for agentic search systems, featuring Agent-as-a-Judge
   <p><em>Mind2Web 2 features realistic and diverse long-horizon web search tasks and a novel Agent-as-a-Judge framework to evaluate complex, time-varying, and citation-backed answers.</em></p>
 </div>
 
+## Comparison to Existing Benchmarks
+| Name | Horizon | # of Tasks | Time-Varying | Complex Synthesis | Attribution Verification | Evaluation |
+|------|---------|------------|--------------|-------------------|-------------------------|------------|
+| **Mind2Web 2** | **Long** | 130 | ✅ | ✅ | ✅ | **Agent-as-a-Judge** |
+| [Online-Mind2Web](https://huggingface.co/spaces/osunlp/Online_Mind2Web_Leaderboard/) | Short | 300 | ✅ | ❌ | ❌ | LLM-as-a-Judge |
+| [WebVoyager](https://github.com/MinorJerry/WebVoyager?tab=readme-ov-file) | Short | 643 | ✅ | ❌ | ❌ | LLM-as-a-Judge |
+| [Mind2Web-Live](https://github.com/iMeanAI/WebCanvas?tab=readme-ov-file) | Short | 542 | ✅ | ❌ | ❌ | Rule |
+| [BEARCUBS](https://bear-cubs.github.io) | Short | 111 | ❌ | ❌ | ❌ | Answer Match |
+| [WebWalkerQA](https://github.com/Alibaba-NLP/WebAgent/tree/main/WebWalker) | Short | 680 | ❌ | ❌ | ❌ | Answer Match |
+| [GAIA](https://huggingface.co/spaces/gaia-benchmark/leaderboard) | Medium | 466 | ❌ | ❌ | ❌ | Answer Match |
+| [AssistantBench](https://assistantbench.github.io) | Medium | 214 | ❌ | ❌ | ❌ | Answer Match |
+| [BrowseComp](https://openai.com/index/browsecomp/) | Long | 1,266 | ❌ | ❌ | ❌ | Answer Match |
+
 ## 🔗 Links
 
 - [🏠 Homepage](https://osu-nlp-group.github.io/Mind2Web-2)
