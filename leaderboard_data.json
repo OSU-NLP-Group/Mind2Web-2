@@ -82,7 +82,7 @@
     },
     {
       "info": {
-        "name": "HF Open Deep Research",
+        "name": "HF Open Deep Research (w/ o3)",
         "date": "2025-06-26",
         "type": "deep_research",
         "tags": ["open_source", "huggingface"],
