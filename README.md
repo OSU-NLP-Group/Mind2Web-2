@@ -7,7 +7,19 @@ Mind2Web 2 is a benchmark for agentic search systems, featuring Agent-as-a-Judge
   <p><em>Mind2Web 2 features realistic and diverse long-horizon web search tasks and a novel Agent-as-a-Judge framework to evaluate complex, time-varying, and citation-backed answers.</em></p>
 </div>
 
-## Comparison to Existing Benchmarks
+## 🔗 Links
+
+- [🏠 Homepage](https://osu-nlp-group.github.io/Mind2Web-2)
+- [🏆 Leaderboard](https://osu-nlp-group.github.io/Mind2Web-2/#leaderboard)
+- [📖 Paper](https://arxiv.org/abs/2506.21506)
+- [😊 Dataset (Tasks)](https://huggingface.co/datasets/osunlp/Mind2Web-2)
+
+## 🆕 Updates
+- **2025/07/17**: Check out our [submission guideline](#-submission-guideline). We welcome all submissions and look forward to your participation!
+- **2025/07/14**: The scripts of the public development set are released. Give them a try!
+- **2025/06/26**: The GitHub repo is live. The manuscript is now on arXiv.
+
+## Comparisons with Existing Benchmarks
 | Name | Horizon | # of Tasks | Time-Varying | Complex Synthesis | Attribution Verification | Evaluation |
 |------|---------|------------|--------------|-------------------|-------------------------|------------|
 | **Mind2Web 2** | **Long** | 130 | ✅ | ✅ | ✅ | **Agent-as-a-Judge** |
@@ -20,17 +32,6 @@ Mind2Web 2 is a benchmark for agentic search systems, featuring Agent-as-a-Judge
 | [AssistantBench](https://assistantbench.github.io) | Medium | 214 | ❌ | ❌ | ❌ | Answer Match |
 | [BrowseComp](https://openai.com/index/browsecomp/) | Long | 1,266 | ❌ | ❌ | ❌ | Answer Match |
 
-## 🔗 Links
-
-- [🏠 Homepage](https://osu-nlp-group.github.io/Mind2Web-2)
-- [🏆 Leaderboard](https://osu-nlp-group.github.io/Mind2Web-2/#leaderboard)
-- [📖 Paper](https://arxiv.org/abs/2506.21506)
-- [😊 Dataset (Tasks)](https://huggingface.co/datasets/osunlp/Mind2Web-2)
-
-## 🆕 Updates
-- **2025/07/17**: Check out our [submission guideline](#-submission-guideline). We welcome all submissions and look forward to your participation!
-- **2025/07/14**: The scripts of the public development set are released. Give them a try!
-- **2025/06/26**: The GitHub repo is live. The manuscript is now on arXiv.
 
 ## 📥 Submission Guideline
 
