@@ -1,11 +1,13 @@
 # Mind2Web 2
 
+
 Mind2Web 2 is a benchmark for agentic search systems, featuring Agent-as-a-Judge methodology for comprehensive, rigorous, and reliable assessment on **long-horizon** and complex tasks that involve **complex and real-time information synthesis**.
 
 <div align="center">
   <img src="./assets/mind2web2_overview.jpg" alt="Mind2Web 2 Overview" width="800"/>
   <p><em>Mind2Web 2 features realistic and diverse long-horizon web search tasks and a novel Agent-as-a-Judge framework to evaluate complex, time-varying, and citation-backed answers.</em></p>
 </div>
+
 
 ## 🔗 Links
 
@@ -15,6 +17,7 @@ Mind2Web 2 is a benchmark for agentic search systems, featuring Agent-as-a-Judge
 - [😊 Dataset (Tasks)](https://huggingface.co/datasets/osunlp/Mind2Web-2)
 
 ## 🆕 Updates
+- **2025/09/18**: 🌟 **Accepted at NeurIPS 2025 (Datasets and Benchmarks Track)!**
 - **2025/07/17**: Check out our [submission guideline](#-submission-guideline). We welcome all submissions and look forward to your participation!
 - **2025/07/14**: The scripts of the public development set are released. Give them a try!
 - **2025/06/26**: The GitHub repo is live. The manuscript is now on arXiv.
@@ -175,12 +178,12 @@ python run_eval.py --agent_name example --task_id yu_lineage
 If you find this work useful, please consider starring our repo and citing our papers:
 
 ```bibtex
-@misc{gou2025mind2web2,
-    title = {Mind2Web 2: Evaluating Agentic Search with Agent-as-a-Judge}, 
-    author = {Boyu Gou and Zanming Huang and Yuting Ning and Yu Gu and Michael Lin and Weijian Qi and Andrei Kopanev and Botao Yu and Bernal Jiménez Gutiérrez and Yiheng Shu and Chan Hee Song and Jiaman Wu and Shijie Chen and Hanane Nour Moussa and Tianshu Zhang and Jian Xie and Yifei Li and Tianci Xue and Zeyi Liao and Kai Zhang and Boyuan Zheng and Zhaowei Cai and Viktor Rozgic and Morteza Ziyadi and Huan Sun and Yu Su},
-    year = {2025},
-    eprint = {2506.21506},
-    archivePrefix = {arXiv},
-    primaryClass = {cs.AI}
+@inproceedings{
+    gou2025mindweb,
+    title={Mind2Web 2: Evaluating Agentic Search with Agent-as-a-Judge},
+    author={Boyu Gou and Zanming Huang and Yuting Ning and Yu Gu and Michael Lin and Botao Yu and Andrei Kopanev and Weijian Qi and Yiheng Shu and Jiaman Wu and Chan Hee Song and Bernal Jimenez Gutierrez and Yifei Li and Zeyi Liao and Hanane Nour Moussa and TIANSHU ZHANG and Jian Xie and Tianci Xue and Shijie Chen and Boyuan Zheng and Kai Zhang and Zhaowei Cai and Viktor Rozgic and Morteza Ziyadi and Huan Sun and Yu Su},
+    booktitle={The Thirty-ninth Annual Conference on Neural Information Processing Systems Datasets and Benchmarks Track},
+    year={2025},
+    url={https://openreview.net/forum?id=AUaW6DS9si}
 }
 ```
