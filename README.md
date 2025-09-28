@@ -27,7 +27,7 @@ Mind2Web 2 is a benchmark for agentic search systems, featuring Agent-as-a-Judge
 
 Just collect your agent’s answers and send them to us. We’ll take care of all the evaluation steps for you, including the cost of running our Agent-as-a-Judge evaluation.
 
-1. **Collect answers from your agent:** Provide your agent with the task descriptions of our [private test set](https://huggingface.co/datasets/osunlp/Mind2Web-2/viewer/default/private_test_set) and collect its responses. **Either one run or three runs are acceptable.**
+1. **Collect answers from your agent:** Provide your agent with the task descriptions of our [private test set](https://huggingface.co/datasets/osunlp/Mind2Web-2/viewer/default/private_test_set) and collect its responses. **Either one 1 or 3 runs are acceptable.**
 
 2. **Organize your submission:** Arrange your agent's responses in the following directory structure (see [answers/examples](https://github.com/OSU-NLP-Group/Mind2Web-2/tree/main/answers/example) for reference):
 
