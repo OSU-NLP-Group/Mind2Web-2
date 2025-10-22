@@ -62,6 +62,7 @@ class CacheFileSys:
     def _get_url_variants(self, url: str) -> List[str]:
         """Generate all possible variants of URL for matching."""
         #TODO: remove UTM SOURCE, or add CHATGPT/OPENAI
+        #TODO: probably want to
         def swap_scheme(u: str):
             if u.startswith("http://"):
                 return "https://" + u[7:]

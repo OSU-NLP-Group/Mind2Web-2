@@ -129,8 +129,7 @@ class BaseEvaluator:
                             url,
                             self.logger,
                         )
-                        self.cache.put_text(url, page_text)
-                        self.cache.put_screenshot(url, screenshot_b64)
+                        self.cache.put_web(url, page_text,screenshot_b64)
                 if page_text is None:
                     # Use webpage semaphore if available, fallback to default semaphore
                     webpage_semaphore = getattr(self.semaphore, 'webpage', self.semaphore)
@@ -140,8 +139,7 @@ class BaseEvaluator:
                             url,
                             self.logger,
                         )
-                        self.cache.put_text(url, page_text)
-                        self.cache.put_screenshot(url, screenshot_b64)
+                        self.cache.put_web(url, page_text,screenshot_b64)
 
 
             else:
@@ -153,8 +151,7 @@ class BaseEvaluator:
                             url,
                             self.logger,
                         )
-                    self.cache.put_text(url, page_text)
-                    self.cache.put_screenshot(url, screenshot_b64)
+                    self.cache.put_web(url, page_text,screenshot_b64)
 
         if len(page_text) > self.config.max_text_chars:
             page_text = textwrap.shorten(
