@@ -1,6 +1,6 @@
 from .evaluator import Evaluator
 from .verification_tree import VerificationNode, AggregationStrategy
-from .utils.cache import CacheClass
+from .utils.cache_filesys import CacheFileSys
 from .eval_toolkit import create_evaluator, Extractor, Verifier, EvaluatorConfig
 from .llm_client.base_client import LLMClient
 
@@ -13,7 +13,7 @@ from .llm_client import (
 )
 from .utils import (
     create_logger, cleanup_logger, create_sub_logger,
-    PathConfig, PageManager, BlockingPopupError,
+    PathConfig, PageManager,
     load_eval_script,
     normalize_url_markdown, text_dedent, strip_extension,
     encode_image, encode_image_buffer,
@@ -50,7 +50,6 @@ __all__ = [
     "create_sub_logger", 
     "PathConfig",
     "PageManager",
-    "BlockingPopupError",
     "load_eval_script",
     "normalize_url_markdown",
     "text_dedent",

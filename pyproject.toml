@@ -27,9 +27,8 @@ dependencies = [
     "aiohttp",
     "httpx",
     "dill",
-    "pillow",
     "python-json-logger",
-#    "pyside6",
+    #    "pyside6",
     "beautifulsoup4",
     "PyMuPDF",
     "google-auth",
@@ -39,6 +38,12 @@ dependencies = [
     "jinja2",
     "markdown",
     "uvicorn[standard]",
+    "markdownify",
+    "html2text>=2025.4.15",
+    "pyside6>=6.9.2",
+    "pillow>=11.3.0",
+    "rebrowser-playwright>=1.52.0",
+    "validators>=0.35.0",
 ]
 
 # ── Optional: Code generation dependencies ─────────────────────────────

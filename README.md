@@ -1,6 +1,5 @@
 # Mind2Web 2
 
-
 Mind2Web 2 is a benchmark for agentic search systems, featuring Agent-as-a-Judge methodology for comprehensive, rigorous, and reliable assessment on **long-horizon** and complex tasks that involve **complex and real-time information synthesis**.
 
 <div align="center">
@@ -8,16 +7,15 @@ Mind2Web 2 is a benchmark for agentic search systems, featuring Agent-as-a-Judge
   <p><em>Mind2Web 2 features realistic and diverse long-horizon web search tasks and a novel Agent-as-a-Judge framework to evaluate complex, time-varying, and citation-backed answers.</em></p>
 </div>
 
-
 ## 🔗 Links
 
 - [🏠 Homepage](https://osu-nlp-group.github.io/Mind2Web-2)
 - [🏆 Leaderboard](https://osu-nlp-group.github.io/Mind2Web-2/#leaderboard)
 - [📖 Paper](https://arxiv.org/abs/2506.21506)
-- [😊 Dataset (Tasks)](https://huggingface.co/datasets/osunlp/Mind2Web-2)
+- [😊 Dataset (Tasks) and Evaluation Scripts (Judge Agents)](https://huggingface.co/datasets/osunlp/Mind2Web-2)
 
 ## 🆕 Updates
-- **2025/09/18**: 🌟 **Accepted at NeurIPS 2025 (Datasets and Benchmarks Track)!**
+- **2025/10/23**: To improve accessibility and adoption of Mind2Web 2, we release all the evaluation scripts are released for both public dev set and private test set. Check out the [Run Evaluation Locally Yourself](#-run-evaluation-locally-yourself) section for instructions.
 - **2025/07/17**: Check out our [submission guideline](#-submission-guideline). We welcome all submissions and look forward to your participation!
 - **2025/07/14**: The scripts of the public development set are released. Give them a try!
 - **2025/06/26**: The GitHub repo is live. The manuscript is now on arXiv.
@@ -25,11 +23,14 @@ Mind2Web 2 is a benchmark for agentic search systems, featuring Agent-as-a-Judge
 
 ## 📥 Submission Guideline
 
-Just collect your agent’s answers and send them to us. We’ll take care of all the evaluation steps for you, including the cost of running our Agent-as-a-Judge evaluation.
+To evaluate answers from an agent system, there are mainly three steps involved: 1) collecting answers from your agent on our [private test set](https://huggingface.co/datasets/osunlp/Mind2Web-2/viewer/default/private_test_set), 2) cache the webpages mentioned in the answers (to ensure consistency and reproducibility), where we provide the script in [Precache Webpage](#3-precache-webpages-optional-but-recommended) and 3) run the evaluation.
 
-1. **Collect answers from your agent:** Provide your agent with the task descriptions of our [private test set](https://huggingface.co/datasets/osunlp/Mind2Web-2/viewer/default/private_test_set) and collect its responses. **Either one 1 or 3 runs are acceptable.**
+For the submission, you can either:
+- (Recommended) submit your agent's answers as well as providing the webpage cache to us
+- (Recommended) run the whole evaluation pipeline by following the instructions in the next section and submit the evaluation results to us
+- Only provide your agent answers and let us handle the webpage caching and evaluation for you
 
-2. **Organize your submission:** Arrange your agent's responses in the following directory structure (see [answers/examples](https://github.com/OSU-NLP-Group/Mind2Web-2/tree/main/answers/example) for reference):
+If you choose to submit your agent's answer, please arrange your agent's responses in the following directory structure (see [answers/examples](https://github.com/OSU-NLP-Group/Mind2Web-2/tree/main/answers/example) for reference):
 
    ```
    <agent_name>
@@ -40,15 +41,13 @@ Just collect your agent’s answers and send them to us. We’ll take care of al
    └── ...
    ```
 
-3. **Submit your answers:** Compress the directory and send it to us via email: m2w2-leaderboard@googlegroups.com.
+Similarly, the according cache structure should be cache/<agent_name>/<task_id>/
 
-We welcome all submissions and look forward to your participation! 🚀
+Compress the directories and send it to us via email: m2w2-leaderboard@googlegroups.com.
 
 > **Note:**
->
-> The guidelines above describe how to submit your agent's answers on our **private test set** for official evaluation (**we will handle all evaluation steps for you**!).
->
-> If you would like to **explore our public dev set and run the evaluation locally**, please refer to the sections below for environment setup and evaluation instructions.
+
+> If you would like to **explore our tasks and run the evaluation locally**, please refer to the sections below for environment setup and evaluation instructions.
 
 
 ## 🚀 Run Evaluation Locally Yourself
@@ -81,7 +80,8 @@ conda activate mind2web2
 pip install -e .
 
 # Install browsers for Playwright
-playwright install
+#playwright install
+rebrowser_playwright install
 ```
 
 ### 1. Prepare Your Data
@@ -105,14 +105,14 @@ Configure the necessary API keys for evaluation:
 
 ```bash
 # Set up environment variables for OpenAI API
-export OPENAI_API_KEY="YOUR_OPENAI_API_KEY"
+export OPENAI_API_KEY="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"
 
 # (Optional) Environment variables for Azure OpenAI
 export AZURE_OPENAI_API_KEY="YOUR_AZURE_OPENAI_API_KEY"
 export AZURE_OPENAI_ENDPOINT_URL="YOUR_AZURE_OPENAI_ENDPOINT_URL"
 export AZURE_OPENAI_API_VERSION="2025-03-01-preview"
 
-# (Optional) Tool APIs for tasks that require google map APIs
+# (Optional, but necessary for several tasks) Tool APIs for tasks that require google map APIs
 export GOOGLE_MAPS_API_KEY="YOUR_GOOGLE_MAPS_API_KEY"
 ```
 
@@ -123,14 +123,30 @@ export GOOGLE_MAPS_API_KEY="YOUR_GOOGLE_MAPS_API_KEY"
 Before running evaluation, you may want to precache the webpages to improve performance:
 
 ```bash
-# Coming Soon!
+./cache_all_answers.sh
 ```
 
-We also provide a lightweight script to fix errors in precached webpages (e.g., pages blocked by human verification):
+We also provide a lightweight app to fix errors in precached webpages (e.g., pages blocked by human verification):
 
 ```bash
-# Coming Soon!
+# Start the Cache Manager GUI
+python run_cache_manager.py
+
+# Optionally load a cache folder on startup (recommended)
+python run_cache_manager.py cache/<your_agent_name>
+
+# Debug:
+python run_cache_manager.py --log-level DEBUG
+
 ```
+
+Notes:
+- The Cache Manager is a PySide6 (Qt) desktop app located under `cache_manager/`.
+- It helps you inspect, fix, and update cached URLs for each task:
+  - Open a cache folder via File → “Open Cache Folder…” and select `cache/<agent_name>`.
+  - Select a task (left), then a URL to preview its cached text/screenshot.
+  - Use "Live" view to reload the page, and click “Update Cache” to capture fresh content and overwrite the cache.
+  - Use "Upload MHTML" to manually upload a saved MHTML file for the selected URL.
 
 ### 4. Run Evaluation
 

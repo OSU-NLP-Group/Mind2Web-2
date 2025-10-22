@@ -11,15 +11,25 @@ from typing import Optional, Tuple, Union
 
 # Third-party imports
 from PIL import Image
-from playwright.async_api import (
+from rebrowser_playwright.async_api import (
+    Browser,
     BrowserContext,
     Page,
     async_playwright,
 )
-from pydantic import HttpUrl
 
-from mind2web2.api_tools.tool_pdf import is_pdf, format_url
-from mind2web2.utils.logging_setup import create_logger
+
+import html2text
+
+def html_to_markdown(html: str) -> str:
+    """Convert HTML to Markdown."""
+    h = html2text.HTML2Text()
+    h.ignore_links = True      # Ignore hyperlinks
+    h.ignore_emphasis = True   # Ignore bold/italic emphasis
+    h.images_to_alt = True     # Convert images to alt text
+    h.body_width = 0
+    return h.handle(html)
+
 
 
 # ================================ Constants ================================
@@ -135,234 +145,238 @@ class PageManager:
         self._handlers.clear()
 
 
-class BlockingPopupError(RuntimeError):
-    """Raised when a blocking popup / human-verification overlay is detected."""
-    pass
-
-
-async def capture_page_content_async(
-        url: HttpUrl,
+class BatchBrowserManager:
+    """Robust browser manager for both batch and single web content extraction.
+    
+    Integrates PageManager's stability features while maintaining efficiency for batch processing.
+    Can be used as a drop-in replacement for capture_page_content_async.
+    """
+    
+    def __init__(self, headless: bool = True, max_retries: int = 3, max_concurrent_pages: int = 10):
+        self.headless = headless
+        self.max_retries = max_retries
+        self.max_concurrent_pages = max_concurrent_pages
+        self.playwright = None
+        self.browser = None
+        self._browser_lock = asyncio.Lock()
+        self._page_semaphore = asyncio.Semaphore(max_concurrent_pages)
+        
+    async def __aenter__(self):
+        """Async context manager entry."""
+        await self.start()
+        return self
+        
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit."""
+        await self.stop()
+        
+    async def start(self):
+        """Initialize the browser instance."""
+        if self.browser is None:
+            self.playwright = await async_playwright().start()
+            self.browser = await self.playwright.chromium.launch(
+                headless=self.headless,
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-web-security",
+                    "--disable-site-isolation-trials", 
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    "--ignore-certificate-errors",
+                    "--safebrowsing-disable-auto-save",
+                    "--safebrowsing-disable-download-protection",
+                    "--password-store=basic",
+                    "--use-mock-keychain",
+                ]
+            )
+            
+    async def stop(self):
+        """Clean up browser resources."""
+        if self.browser:
+            await self.browser.close()
+            self.browser = None
+        if self.playwright:
+            await self.playwright.stop()
+            self.playwright = None
+            
+    async def _restart_browser(self):
+        """Restart browser if it crashes."""
+        await self.stop()
+        await self.start()
+        
+    async def capture_page(
+        self, 
+        url: str, 
         logger: Logger,
         wait_until: str = "load",
-        headless: bool= True,
-        user_data_dir: Union[str, Path] = None,
+        timeout: int = 30000,
         grant_permissions: bool = True,
-) -> Tuple[Optional[str], Optional[str]]:
-    # ----------- prepare persistent context dir -----------
-    # if user_data_dir is None:
-    #     random_bytes = str(random.random()).encode("utf-8")
-    #     hash_prefix = hashlib.sha256(random_bytes).hexdigest()[:6]
-    #     user_data_dir = Path.cwd() / "tmp" / f"browser_context_{hash_prefix}"
-    if user_data_dir:
-        user_data_dir.mkdir(parents=True, exist_ok=True)
+        user_data_dir: Union[str, Path] = None
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """Robust page capture with PageManager integration for stability.
+        
+        Returns:
+            Tuple of (screenshot_b64, text_content)
+        """
 
-    target = format_url(url)
-
-    user_agent = random.choice(DEFAULT_USER_AGENTS)
-    headers = {"user-agent": user_agent}
-
-    screenshot_b64=make_blank_png_b64()
-    page_text=ERROR_TEXT
-
-
-    # Set location. Set Language to English
-    async with async_playwright() as p:
-        if user_data_dir:
-            context = await p.chromium.launch_persistent_context(
-                user_data_dir=user_data_dir,
-                locale='en-US',
-                headless=headless,
-                ignore_https_errors=True,
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--disable-web-security",
-                    "--disable-site-isolation-trials",
-                    "--no-sandbox",
-                    "--disable-setuid-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu",
-                    "--ignore-certificate-errors",
-                    "--safebrowsing-disable-auto-save",
-                    "--safebrowsing-disable-download-protection",
-                    '--password-store=basic',
-                    '--use-mock-keychain',
-                ],
-                extra_http_headers=headers,
-                viewport={
-                    "width": random.randint(1050, 1150),
-                    "height": random.randint(700, 800),
-                },
-            )
-            browser = None  # No separate browser object for persistent context
-        else:
-            browser = await p.chromium.launch(
-                headless=headless,
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--disable-web-security",
-                    "--disable-site-isolation-trials",
-                    "--no-sandbox",
-                    "--disable-setuid-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu",
-                    "--ignore-certificate-errors",
-                    "--safebrowsing-disable-auto-save",
-                    "--safebrowsing-disable-download-protection",
-                    '--password-store=basic',
-                    '--use-mock-keychain',
-                ],
-            )
-            context = await browser.new_context(
-                locale='en-US',
-                ignore_https_errors=True,
-                extra_http_headers=headers,
-                viewport={
-                    "width": random.randint(1050, 1150),
-                    "height": random.randint(700, 800),
-                },
-            )
-
-        if grant_permissions:
-            try:
-                await context.grant_permissions(
-                    [
-                        "geolocation",
-                        "notifications",
-                        "camera",
-                        "microphone",
-                        "clipboard-read",
-                        "clipboard-write",
-                    ],
-                    origin=target,
-                )
-            except Exception as e:
-                logger.error(f'Failed to grant permissions: {e}')
-
-        mgr = PageManager(context, logger)
-        # page = await mgr.get()
-        # cdp = await context.new_cdp_session(page)
-        # await cdp.send("Page.enable")
-        # await cdp.send("DOM.enable")
-        # await cdp.send("Runtime.enable")
-
-        start_ts = time.time()
-        try:
-            async def navigate():
-                pg = await mgr.get()
-                return await pg.goto(target, wait_until=wait_until, timeout=15000)
-
-            try:
-                await navigate()
-            except Exception as e:
-                logger.info(f"Navigation failed (Timeout is fine): {e}")
-
-            # ---------- scroll & full-page capture ----------
-            page = await mgr.get()
-            for _ in range(3):
-                await page.keyboard.press("End")
-                await asyncio.sleep(random.uniform(1.0, 2.0))
-            for _ in range(random.randint(5, 10)):
-                await page.mouse.wheel(0, random.randint(-500, 500))
-                await asyncio.sleep(random.uniform(0.5, 1.5))
-            await page.keyboard.press("Home")
-            await asyncio.sleep(random.uniform(1.0, 2.0))
-
-            try:
-                page = await mgr.get()
-                cdp = await context.new_cdp_session(page)
-                metrics = await cdp.send("Page.getLayoutMetrics")
-                css_vp = metrics["cssVisualViewport"]
-                css_content = metrics["cssContentSize"]
-                width = round(css_vp["clientWidth"])
-                height = round(min(css_content["height"], 6000))
-                scale = round(metrics.get("visualViewport", {}).get("scale", 1))
-                await cdp.send(
-                    "Emulation.setDeviceMetricsOverride",
-                    {
-                        "mobile": False,
-                        "width": width,
-                        "height": height,
-                        "deviceScaleFactor": scale,
-                    },
-                )
-                await asyncio.sleep(random.uniform(2.1, 3.2))
-                shot = await cdp.send(
-                    "Page.captureScreenshot",
-                    {"format": "png", "captureBeyondViewport": True},
-                )
-                screenshot_b64 = shot.get("data")
-                text_res = await cdp.send(
-                    "Runtime.evaluate",
-                    {
-                        "expression": "document.documentElement.innerText",
-                        "returnByValue": True,
-                    },
-                )
-                page_text = text_res.get("result", {}).get("value")
-                elapsed = time.time() - start_ts
-                logger.debug(f"Completed capture for {target} in {elapsed:.2f}s")
-                return screenshot_b64, page_text
-            except Exception as e:
-                logger.error(f"Error capturing content: {e}")
-                return screenshot_b64, page_text
-        finally:
-            mgr.dispose()
-            try:
-                await cdp.detach()
-            except Exception:
-                pass
-            try:
-                await context.close()
-            except Exception:
-                pass
-            # Close browser if it was created (non-persistent mode)
-            if browser:
+        print(f"Start collecting page {url}")
+        # Use semaphore to limit concurrent pages
+        async with self._page_semaphore:
+            # Ensure browser is running
+            if not self.browser:
+                async with self._browser_lock:
+                    if not self.browser:  # Double-check pattern
+                        await self.start()
+            
+            browser = self.browser  # Cache reference
+            
+            for attempt in range(self.max_retries):
+                context = None
+                page_manager = None
                 try:
-                    await browser.close()
-                except Exception:
-                    pass
+                    # Create context with enhanced settings (similar to original capture_page_content_async)
+                    user_agent = random.choice(DEFAULT_USER_AGENTS)
+                    headers = {"user-agent": user_agent}
+                    
+                    if user_data_dir:
+                        # Use persistent context if user_data_dir provided
+                        context = await self.playwright.chromium.launch_persistent_context(
+                            user_data_dir=user_data_dir,
+                            locale='en-US',
+                            headless=self.headless,
+                            ignore_https_errors=True,
+                            extra_http_headers=headers,
+                            viewport={
+                                "width": random.randint(1050, 1150),
+                                "height": random.randint(700, 800),
+                            },
+                        )
+                    else:
+                        # Regular context
+                        context = await browser.new_context(
+                            locale='en-US',
+                            ignore_https_errors=True,
+                            extra_http_headers=headers,
+                            viewport={
+                                "width": random.randint(1050, 1150),
+                                "height": random.randint(700, 800),
+                            }
+                        )
+                    
+                    # Grant permissions if requested
+                    if grant_permissions:
+                        try:
+                            await context.grant_permissions(
+                                [
+                                    "geolocation",
+                                    "notifications", 
+                                    "camera",
+                                    "microphone",
+                                    "clipboard-read",
+                                    "clipboard-write",
+                                ],
+                                origin=url,
+                            )
+                        except Exception as e:
+                            logger.debug(f'Failed to grant permissions: {e}')
+                    
+                    # Use PageManager for robust page handling
+                    page_manager = PageManager(context, logger)
+                    
+                    # Navigate with robust error handling
+                    try:
+                        page = await page_manager.get()
+                        await page.goto(url, wait_until=wait_until, timeout=timeout)
+                    except Exception as e:
+                        logger.info(f"Navigation timeout/error (continuing): {e}")
+                    
+                    # Enhanced scrolling for content discovery (from original implementation)
+                    page = await page_manager.get()
+                    for _ in range(3):
+                        await page.keyboard.press("End")
+                        await asyncio.sleep(random.uniform(0.3, 0.8))  # Faster for batch
+                    await page.keyboard.press("Home")
+                    await asyncio.sleep(random.uniform(0.3, 0.8))
+                    
+                    # Use CDP for efficient and reliable capture
+                    page = await page_manager.get()
+                    cdp = await context.new_cdp_session(page)
+                    await cdp.send("Page.enable")
+                    await cdp.send("DOM.enable")
+                    await cdp.send("Runtime.enable")
+                    
+                    # Get proper page metrics
+                    metrics = await cdp.send("Page.getLayoutMetrics")
+                    css_vp = metrics["cssVisualViewport"]
+                    css_content = metrics["cssContentSize"]
+                    width = round(css_vp["clientWidth"])
+                    height = round(min(css_content["height"], 6000))
+                    scale = round(metrics.get("visualViewport", {}).get("scale", 1))
+                    
+                    # Set device metrics
+                    await cdp.send(
+                        "Emulation.setDeviceMetricsOverride",
+                        {
+                            "mobile": False,
+                            "width": width,
+                            "height": height,
+                            "deviceScaleFactor": scale,
+                        },
+                    )
+                    
+                    # Small delay for stability
+                    await asyncio.sleep(random.uniform(0.5, 1.0))
+                    
+                    # Capture screenshot and text using CDP
+                    screenshot_task = cdp.send(
+                        "Page.captureScreenshot",
+                        {"format": "png", "captureBeyondViewport": True},
+                    )
+
+                    html_task = cdp.send("Runtime.evaluate", {
+                        "expression": "document.documentElement.outerHTML",
+                        "returnByValue": True,
+                    })
 
 
 
-async def test_pdf_detection():
-    """Test PDF detection functionality."""
-    logger, _ = create_logger(__name__, r"tmp")
-    
-    # Test URLs
-    test_urls = [
-        "https://www.fhwa.dot.gov/policyinformation/statistics/2023/pdf/mv1.pdf",  # Should be PDF
-        "https://arxiv.org/pdf/2301.00001.pdf",  # Should be PDF (arxiv)
-        "https://www.google.com",  # Should NOT be PDF
-        "https://example.com/document.pdf",  # Should be PDF by suffix
-    ]
-    
-    print("🧪 Testing PDF detection functionality...")
-    print("=" * 50)
-    
-    for url in test_urls:
-        print(f"\n🔍 Testing: {url}")
-        try:
-            result = await is_pdf(url, logger)
-            status = "✅ IS PDF" if result else "❌ NOT PDF"
-            print(f"   Result: {status}")
-        except Exception as e:
-            print(f"   Error: {e}")
-    
-    print("\n" + "=" * 50)
-    print("✅ PDF detection test completed!")
+                    shot_result, html_result = await asyncio.gather(screenshot_task, html_task)
+                    screenshot_b64 = shot_result.get("data")
+                    page_html = html_result.get("result", {}).get("value", "")
+                    page_text=html_to_markdown(page_html)
 
-if __name__ == '__main__':
-    # Run the async test function
-    asyncio.run(test_pdf_detection())
-    
-    # Optional: Test webpage capture (commented out by default)
-    # logger, _ = create_logger(__name__, r"tmp")
-    # test_url = 'https://www.akc.org/dog-breeds/west-highland-white-terrier/'
-    # shot_b64, text = asyncio.run(capture_page_content_async(test_url, logger, headless=False))
-    # print(text)
-    # if shot_b64:
-    #     Path('screenshot.png').write_bytes(base64.b64decode(shot_b64))
-    #     logger.info('Saved screenshot.png')
-    # if text:
-    #     Path('page.txt').write_text(text, encoding='utf-8')
-    #     logger.info('Saved page.txt')
+
+
+                    return screenshot_b64, page_text
+                    
+                except Exception as e:
+                    logger.error(f"Attempt {attempt + 1} failed for {url}: {e}")
+                    
+                    # Check if browser crashed
+                    if ("Target page, context or browser has been closed" in str(e) or 
+                        "Browser has been closed" in str(e) or
+                        "browser.newContext" in str(e)):
+                        # Browser crash - restart under lock
+                        async with self._browser_lock:
+                            if self.browser == browser:
+                                logger.warning("Browser crashed, restarting...")
+                                await self._restart_browser()
+                                browser = self.browser
+                        
+                    if attempt == self.max_retries - 1:
+                        # Last attempt failed
+                        return make_blank_png_b64(), ERROR_TEXT
+                        
+                finally:
+                    # Cleanup resources
+                    if page_manager:
+                        page_manager.dispose()
+                    if context:
+                        try:
+                            await context.close()
+                        except:
+                            pass
+                            
+            return make_blank_png_b64(), ERROR_TEXT

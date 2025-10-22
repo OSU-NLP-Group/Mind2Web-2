@@ -9,13 +9,13 @@ from datetime import datetime
 from pythonjsonlogger import jsonlogger
 from typing import Literal, Optional
 
-# 全局共享的错误handler，用于所有answer logger
+# Globally shared error handler, used by all answer loggers
 _shared_error_handler = None
 _handler_lock = threading.Lock()
 
 
 class ColoredStructuredFormatter(logging.Formatter):
-    """带颜色的结构化日志格式化器"""
+    """Colored structured log formatter."""
 
     COLORS = {
         'DEBUG': '\033[36m',  # Cyan
@@ -26,29 +26,29 @@ class ColoredStructuredFormatter(logging.Formatter):
     }
 
     def format(self, record):
-        # 对于验证操作，使用特殊格式
+        # Use a special format for verification operations
         if hasattr(record, 'op_id'):
             op_id = record.op_id
             level_color = self.COLORS.get(record.levelname, '')
             reset = self.COLORS['RESET']
 
-            # 构建主消息 - 移除重复的levelname
+            # Build main message - remove duplicate levelname
             msg_parts = [
                 f"{level_color}[{op_id}]{reset}"
             ]
 
-            # 添加节点信息
+            # Add node info
             if hasattr(record, 'node_id') and record.node_id:
                 msg_parts.append(f"Node({record.node_id})")
 
-            # 添加验证类型
+            # Add verification type
             if hasattr(record, 'verify_type'):
                 msg_parts.append(f"<{record.verify_type}>")
 
-            # 添加主消息
+            # Add main message
             msg_parts.append(record.getMessage())
 
-            # 构建详细信息（缩进显示）
+            # Build detailed info (indented display)
             details = []
 
             if hasattr(record, 'node_desc') and record.node_desc:
@@ -70,14 +70,14 @@ class ColoredStructuredFormatter(logging.Formatter):
                 result_str = "✅ PASS" if record.result else "❌ FAIL"
                 details.append(f"  📊 Result: {result_str}")
 
-            # 组合所有部分
+            # Combine all parts
             full_msg = " ".join(msg_parts)
             if details:
                 full_msg += "\n" + "\n".join(details)
 
             return full_msg
 
-        # 对于其他日志，使用标准格式 - 只在ERROR时显示级别
+        # For other logs, use standard format - show level only for ERROR/WARNING
         level_indicator = ""
         if record.levelname == 'ERROR':
             level_indicator = f"{self.COLORS['ERROR']}[ERROR]{self.COLORS['RESET']} "
@@ -88,7 +88,7 @@ class ColoredStructuredFormatter(logging.Formatter):
 
 
 class ErrorWithContextFormatter(logging.Formatter):
-    """专门用于错误的格式化器，添加上下文信息"""
+    """Formatter specialized for errors, adding context information."""
 
     COLORS = {
         'ERROR': '\033[31m',  # Red
@@ -100,10 +100,10 @@ class ErrorWithContextFormatter(logging.Formatter):
         level_color = self.COLORS.get(record.levelname, '')
         reset = self.COLORS['RESET']
 
-        # 构建上下文信息
+        # Build context information
         context_parts = []
 
-        # 添加agent和answer信息
+        # Add agent and answer information
         if hasattr(record, 'agent_name') and record.agent_name:
             context_parts.append(f"Agent:{record.agent_name}")
         if hasattr(record, 'answer_name') and record.answer_name:
@@ -120,10 +120,10 @@ class ErrorWithContextFormatter(logging.Formatter):
 
 
 class HumanReadableFormatter(logging.Formatter):
-    """人类可读的文件日志格式，保留emoji"""
+    """Human-readable file log format, keep emojis."""
 
     def format(self, record):
-        # 时间戳 - 精确到秒
+        # Timestamp - second precision
         timestamp = self.formatTime(record, '%Y-%m-%d %H:%M:%S')
 
         # 基本信息 - 只在重要级别显示level
@@ -133,7 +133,7 @@ class HumanReadableFormatter(logging.Formatter):
 
         base_info = f"[{timestamp}] {level_prefix}{record.getMessage()}"
 
-        # 添加结构化信息
+        # Add structured fields
         extras = []
         skip_fields = {
             'name', 'msg', 'args', 'levelname', 'levelno', 'pathname',
@@ -145,7 +145,7 @@ class HumanReadableFormatter(logging.Formatter):
 
         for key, value in record.__dict__.items():
             if key not in skip_fields and value is not None:
-                # 特殊处理一些字段的显示
+                # Special handling for some fields
                 if key == 'final_score' and isinstance(value, (int, float)):
                     extras.append(f"score={value}")
                 elif key == 'agent_name':
@@ -164,17 +164,17 @@ class HumanReadableFormatter(logging.Formatter):
 
 
 class CompactJsonFormatter(jsonlogger.JsonFormatter):
-    """精简的 JSON 格式化器，移除冗余字段"""
+    """Compact JSON formatter that removes redundant fields."""
 
     def add_fields(self, log_record, record, message_dict):
         super().add_fields(log_record, record, message_dict)
 
-        # 移除不需要的字段
+        # Remove unnecessary fields
         fields_to_remove = ['name', 'levelname']
         for field in fields_to_remove:
             log_record.pop(field, None)
 
-        # 简化时间格式到秒
+        # Simplify time format to seconds
         if 'asctime' in log_record:
             try:
                 asctime = log_record['asctime']
@@ -185,14 +185,14 @@ class CompactJsonFormatter(jsonlogger.JsonFormatter):
 
 
 def _get_shared_error_handler() -> StreamHandler:
-    """获取或创建全局共享的错误handler"""
+    """Get or create the globally shared error handler."""
     global _shared_error_handler
 
     with _handler_lock:
         if _shared_error_handler is None:
-            _shared_error_handler = StreamHandler(sys.stderr)  # 使用stderr显示错误
+            _shared_error_handler = StreamHandler(sys.stderr)  # Use stderr for errors
             _shared_error_handler.setFormatter(ErrorWithContextFormatter())
-            _shared_error_handler.setLevel(logging.ERROR)  # 只显示ERROR级别
+            _shared_error_handler.setLevel(logging.ERROR)  # Show only ERROR level
 
     return _shared_error_handler
 
@@ -202,44 +202,44 @@ def create_logger(
         log_folder: str,
         enable_console: bool = True,
         file_format: Literal["jsonl", "readable", "both"] = "both",
-        enable_shared_errors: bool = False  # 新增参数
+        enable_shared_errors: bool = False  # New parameter
 ) -> tuple[Logger, str]:
     """
-    创建独立的logger实例，支持多种文件格式
+    Create an independent logger instance, supporting multiple file formats.
 
     Args:
-        lgr_nm: logger名称
-        log_folder: 日志文件夹
-        enable_console: 是否启用控制台输出
-        file_format: 文件日志格式
-        enable_shared_errors: 是否将ERROR级别的日志输出到共享的terminal
+        lgr_nm: Logger name
+        log_folder: Log folder
+        enable_console: Whether to enable console output
+        file_format: File log format
+        enable_shared_errors: Whether to output ERROR-level logs to the shared terminal
 
     Returns:
-        (logger实例, 时间戳)
+        (logger instance, timestamp)
     """
     if not os.path.exists(log_folder):
         os.makedirs(log_folder)
 
     current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    # 创建唯一的logger名称，避免重复
+    # Create a unique logger name to avoid duplication
     unique_logger_name = f"{lgr_nm}_{current_time}_{id(log_folder)}"
 
-    # 检查logger是否已存在，如果存在则先清理
+    # If a logger already exists, clean it up first
     existing_logger = logging.getLogger(unique_logger_name)
     if existing_logger.handlers:
         for handler in existing_logger.handlers[:]:
             existing_logger.removeHandler(handler)
             handler.close()
 
-    # 创建新的logger
+    # Create a new logger
     new_logger = logging.getLogger(unique_logger_name)
     new_logger.setLevel(logging.DEBUG)
     new_logger.propagate = False
 
-    # 文件handlers
+    # File handlers
     if file_format in ["jsonl", "both"]:
-        # JSON Lines 格式
+        # JSON Lines format
         jsonl_file = os.path.join(log_folder, f"{current_time}_{lgr_nm}.jsonl")
         jsonl_handler = TimedRotatingFileHandler(
             jsonl_file,
@@ -253,7 +253,7 @@ def create_logger(
         new_logger.addHandler(jsonl_handler)
 
     if file_format in ["readable", "both"]:
-        # 人类可读格式
+        # Human-readable format
         readable_file = os.path.join(log_folder, f"{current_time}_{lgr_nm}.log")
         readable_handler = TimedRotatingFileHandler(
             readable_file,
@@ -266,14 +266,14 @@ def create_logger(
         readable_handler.setLevel(logging.DEBUG)
         new_logger.addHandler(readable_handler)
 
-    # 控制台handler - 使用彩色结构化格式
+    # Console handler - use colored structured format
     if enable_console:
         console_handler = StreamHandler(sys.stdout)
         console_handler.setFormatter(ColoredStructuredFormatter())
         console_handler.setLevel(logging.INFO)
         new_logger.addHandler(console_handler)
 
-    # 共享错误handler - 用于在并行执行时显示错误
+    # Shared error handler - for displaying errors during parallel execution
     if enable_shared_errors:
         shared_error_handler = _get_shared_error_handler()
         new_logger.addHandler(shared_error_handler)
@@ -297,20 +297,20 @@ def create_sub_logger(parent_logger: Logger, sub_name: str) -> Logger:
 
 
 def cleanup_logger(logger: Logger) -> None:
-    """清理logger的所有handlers（但不清理共享的错误handler）"""
+    """Clean up all handlers of the logger (but not the shared error handler)."""
     global _shared_error_handler
 
     for handler in logger.handlers[:]:
-        # 不要清理共享的错误handler
+        # Do not clean up the shared error handler
         if handler is not _shared_error_handler:
             logger.removeHandler(handler)
             handler.close()
         else:
-            logger.removeHandler(handler)  # 只移除，不关闭
+            logger.removeHandler(handler)  # Remove only, do not close
 
 
 def cleanup_shared_error_handler():
-    """在程序结束时清理共享的错误handler"""
+    """Clean up the shared error handler at program end."""
     global _shared_error_handler
 
     with _handler_lock:
@@ -319,27 +319,27 @@ def cleanup_shared_error_handler():
             _shared_error_handler = None
 
 
-# 使用示例和说明
+# Usage examples and notes
 """
-在 evaluation runner 中的使用方法：
+How to use in the evaluation runner:
 
-1. 主logger - 正常的控制台输出：
+1. Main logger — normal console output:
    main_logger, timestamp = create_logger("main_task", log_folder, enable_console=True)
 
-2. 各个answer的logger - 错误会显示到terminal：
+2. Per-answer loggers — errors are shown in the terminal:
    logger, timestamp = create_logger(
        log_tag, 
        str(log_dir), 
-       enable_console=False,  # 不启用常规控制台输出
-       enable_shared_errors=True  # 启用共享错误输出
+       enable_console=False,  # Do not enable regular console output
+       enable_shared_errors=True  # Enable shared error output
    )
 
-这样的效果：
-- 主要的进度信息在主terminal显示
-- 各个answer的ERROR级别信息也会显示到terminal（带上下文）
-- 所有详细日志仍然保存到各自的文件中
+This results in:
+- Primary progress information shown in the main terminal
+- Each answer's ERROR-level messages also shown in the terminal (with context)
+- All detailed logs still saved to their respective files
 
-终端输出示例：
+Example terminal output:
 🚀 Starting concurrent evaluation of 10 answers
 👉 Processing human/answer_1.md
 [ERROR] [Agent:human | Answer:answer_1.md | Node:price_check] Failed to verify price claim

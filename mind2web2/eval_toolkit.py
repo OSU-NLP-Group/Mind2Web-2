@@ -14,11 +14,14 @@ from pydantic import BaseModel
 
 from .api_tools import tool_pdf
 from .llm_client.base_client import LLMClient
-from .utils.cache import CacheClass
+from .utils.cache_filesys import CacheFileSys
 from .utils.misc import (
     text_dedent, normalize_url_markdown
 )
-from .utils.page_info_retrieval import capture_page_content_async, is_pdf
+from .utils.page_info_retrieval import (
+    BatchBrowserManager,
+)
+from .api_tools.tool_pdf import is_pdf
 from .verification_tree import VerificationNode
 
 
@@ -48,7 +51,7 @@ class BaseEvaluator:
             client: LLMClient,
             task_description: str,
             answer: str,
-            global_cache: CacheClass,
+            global_cache: CacheFileSys,
             global_semaphore: asyncio.Semaphore,
             logger: logging.Logger,
             model="o4-mini",
@@ -63,6 +66,7 @@ class BaseEvaluator:
         self.pdf_parser = tool_pdf.PDFParser()
         self.MODEL_NAME = model
         self.config = config or EvaluatorConfig()  # Initialize configuration
+        self.browser_manager = BatchBrowserManager(headless=False, max_concurrent_pages=50,max_retries=1)
 
     async def call_llm_with_semaphore(self, **kwargs):
         if "o" not in kwargs["model"]:
@@ -105,8 +109,8 @@ class BaseEvaluator:
                 screenshot_b64, page_text = await self.pdf_parser.extract(pdf_bytes)
                 early_stop = True
             else:
-                page_text = self.cache.get_text(url)
-                screenshot_b64 = self.cache.get_screenshot(url)
+                page_text, screenshot_bytes = self.cache.get_web(url)
+                screenshot_b64 = base64.b64encode(screenshot_bytes).decode()
                 early_stop = True
         if not early_stop:
             self.logger.info(f"⚠️⚠️⚠️ No Cache for {url}")
@@ -121,10 +125,9 @@ class BaseEvaluator:
                     # Use webpage semaphore if available, fallback to default semaphore
                     webpage_semaphore = getattr(self.semaphore, 'webpage', self.semaphore)
                     async with webpage_semaphore:
-                        screenshot_b64, page_text = await capture_page_content_async(
+                        screenshot_b64, page_text = await self.browser_manager.capture_page(
                             url,
                             self.logger,
-                            headless=True,
                         )
                         self.cache.put_text(url, page_text)
                         self.cache.put_screenshot(url, screenshot_b64)
@@ -133,10 +136,9 @@ class BaseEvaluator:
                     webpage_semaphore = getattr(self.semaphore, 'webpage', self.semaphore)
                     async with webpage_semaphore:
                         await asyncio.sleep(0.2 * random.random())
-                        screenshot_b64, page_text = await capture_page_content_async(
+                        screenshot_b64, page_text = await self.browser_manager.capture_page(
                             url,
                             self.logger,
-                            headless=True,
                         )
                         self.cache.put_text(url, page_text)
                         self.cache.put_screenshot(url, screenshot_b64)
@@ -147,11 +149,10 @@ class BaseEvaluator:
                 webpage_semaphore = getattr(self.semaphore, 'webpage', self.semaphore)
                 async with webpage_semaphore:
                     await asyncio.sleep(0.2 * random.random())
-                    screenshot_b64, page_text = await capture_page_content_async(
-                        url,
-                        self.logger,
-                        headless=True,
-                    )
+                    screenshot_b64, page_text = await self.browser_manager.capture_page(
+                            url,
+                            self.logger,
+                        )
                     self.cache.put_text(url, page_text)
                     self.cache.put_screenshot(url, screenshot_b64)
 
@@ -965,7 +966,7 @@ def create_evaluator(
         client: LLMClient,
         task_description: str,
         answer: str,
-        global_cache: CacheClass,
+        global_cache: CacheFileSys,
         global_semaphore: asyncio.Semaphore,
         logger: logging.Logger,
         default_model: str = "o4-mini",

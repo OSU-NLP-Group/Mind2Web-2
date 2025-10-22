@@ -17,7 +17,61 @@ from openai import (
     APITimeoutError,
 )
 import logging
+
 logging.getLogger("httpx").setLevel(logging.WARNING)
+
+logger = logging.getLogger(__name__)
+
+
+def _log_backoff(details):
+    """Log retry attempts triggered by backoff."""
+    exc = details.get("exception")
+    tries = details.get("tries")
+    wait = details.get("wait")
+    target = details.get("target")
+    target_name = getattr(target, "__name__", str(target))
+    kwargs = details.get("kwargs") or {}
+    model = kwargs.get("model")
+    if exc is not None:
+        logger.warning(
+            "OpenAI retry #%s after %.1fs in %s (model=%s) due to %s: %s",
+            tries,
+            wait or 0,
+            target_name,
+            model,
+            type(exc).__name__,
+            exc,
+        )
+    else:
+        logger.warning(
+            "OpenAI retry #%s after %.1fs in %s (model=%s, no exception info)",
+            tries,
+            wait or 0,
+            target_name,
+            model,
+        )
+
+
+def _log_giveup(details):
+    exc = details.get("exception")
+    target = details.get("target")
+    target_name = getattr(target, "__name__", str(target))
+    kwargs = details.get("kwargs") or {}
+    model = kwargs.get("model")
+    if exc is not None:
+        logger.error(
+            "OpenAI retries exhausted in %s (model=%s) due to %s: %s",
+            target_name,
+            model,
+            type(exc).__name__,
+            exc,
+        )
+    else:
+        logger.error(
+            "OpenAI retries exhausted in %s (model=%s, no exception info)",
+            target_name,
+            model,
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -28,6 +82,8 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 @backoff.on_exception(
     backoff.expo,
     (OpenAIError, APIConnectionError, RateLimitError, InternalServerError, APITimeoutError),
+    on_backoff=_log_backoff,
+    on_giveup=_log_giveup,
 )
 def completion_with_backoff(client: OpenAI, **kwargs):
     """
@@ -44,6 +100,8 @@ def completion_with_backoff(client: OpenAI, **kwargs):
 @backoff.on_exception(
     backoff.expo,
     (OpenAIError, APIConnectionError, RateLimitError, InternalServerError, APITimeoutError),
+    on_backoff=_log_backoff,
+    on_giveup=_log_giveup,
 )
 async def acompletion_with_backoff(client: AsyncOpenAI, **kwargs):
     """

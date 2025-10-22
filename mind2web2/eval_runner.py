@@ -11,7 +11,7 @@ from typing import Dict, List, Union, Optional
 
 from tqdm import tqdm
 
-from .utils.cache import CacheClass
+from .utils.cache_filesys import CacheFileSys
 from .utils.load_eval_script import load_eval_script
 from .utils.logging_setup import create_logger, cleanup_logger
 
@@ -75,7 +75,7 @@ async def _eval_one_answer(
         task_id: str,
         agent_name: str,
         answer_path: Path,
-        cache: CacheClass,
+        cache: CacheFileSys,
         webpage_semaphore: asyncio.Semaphore,
         llm_semaphore: asyncio.Semaphore,
         output_dir: Path,
@@ -293,8 +293,8 @@ async def evaluate_task(
         main_logger.info("📜 Loading evaluation script")
         eval_fn = load_eval_script(script_path)
 
-        cache_path = cache_root / f"{task_id}.pkl"
-        cache = CacheClass(cache_path=str(cache_path))
+        cache_path = cache_root / f"{task_id}"
+        cache = CacheFileSys(task_dir=str(cache_path))
         main_logger.info(f"💾 Cache loaded from {cache_path}")
 
         # ------------------------------------------------------------------
@@ -481,9 +481,7 @@ async def evaluate_task(
         # ------------------------------------------------------------------
         # 7. Persist cache & save summary
         # ------------------------------------------------------------------
-        if dump_cache:
-            cache.dump(str(cache_path))
-            main_logger.info("💾 Cache dumped successfully")
+        cache.save()
 
         # Save summary for this agent/task combination
         _save_agent_task_summary(output_root / agent_name / task_id, ok_results)

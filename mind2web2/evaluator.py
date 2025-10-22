@@ -182,9 +182,9 @@ class Evaluator:
         return node
 
     # For backward compatibility, can keep an alias
-    def add_existence_node(self, result: bool, node_id: str, description: str, **kwargs) -> VerificationNode:
+    def add_existence_node(self, result: bool, id: str, desc: str, **kwargs) -> VerificationNode:
         """Convenient method for existence check (alias for add_custom_node)"""
-        return self.add_custom_node(result, node_id, description, **kwargs)
+        return self.add_custom_node(result, id, desc, **kwargs)
 
 
     def _generate_unique_id(self, base_id: str) -> str:
@@ -205,13 +205,13 @@ class Evaluator:
 
     def add_parallel(
             self,
-            id_: str,
+            id: str,
             desc: str,
             parent: Optional[VerificationNode] = None,
             **kwargs
     ) -> VerificationNode:
         """Add parallel node"""
-        unique_id = self._generate_unique_id(id_)
+        unique_id = self._generate_unique_id(id)
 
         node = VerificationNode(
             id=unique_id,
@@ -224,13 +224,13 @@ class Evaluator:
 
     def add_sequential(
             self,
-            id_: str,
+            id: str,
             desc: str,
             parent: Optional[VerificationNode] = None,
             **kwargs
     ) -> VerificationNode:
         """Add sequential node"""
-        unique_id = self._generate_unique_id(id_)
+        unique_id = self._generate_unique_id(id)
 
         node = VerificationNode(
             id=unique_id,
@@ -243,7 +243,7 @@ class Evaluator:
 
     def add_leaf(
             self,
-            id_: str,
+            id: str,
             desc: str,
             parent: Optional[VerificationNode] = None,
             critical: bool = False,
@@ -252,7 +252,7 @@ class Evaluator:
             **kwargs
     ) -> VerificationNode:
         """Add leaf node"""
-        unique_id = self._generate_unique_id(id_)
+        unique_id = self._generate_unique_id(id)
         if score not in (0.0, 1.0):
             raise ValueError(f"Leaf nodes must have binary scores (0.0 or 1.0), got {score}")
 

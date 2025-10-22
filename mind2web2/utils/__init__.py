@@ -1,7 +1,7 @@
-from .cache import CacheClass
+from .cache_filesys import CacheFileSys
 from .logging_setup import create_logger, cleanup_logger, create_sub_logger
 from .path_config import PathConfig
-from .page_info_retrieval import PageManager, BlockingPopupError
+from .page_info_retrieval import PageManager
 from .load_eval_script import load_eval_script
 from .misc import (
     normalize_url_markdown,
@@ -14,13 +14,12 @@ from .misc import (
 )
 
 __all__ = [
-    "CacheClass",
+    "CacheFileSys",
     "create_logger",
     "cleanup_logger", 
     "create_sub_logger",
     "PathConfig",
     "PageManager",
-    "BlockingPopupError",
     "load_eval_script",
     "normalize_url_markdown",
     "text_dedent",

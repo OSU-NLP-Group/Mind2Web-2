@@ -17,6 +17,7 @@ from io import BytesIO
 from logging import Logger
 from typing import List, Tuple, Union, Optional
 from urllib.parse import urlparse, unquote
+import certifi
 
 import aiohttp
 import certifi
@@ -24,7 +25,7 @@ import fitz  # PyMuPDF
 import httpx
 import requests
 from PIL import Image
-
+from ..utils.url_tools import remove_utm_parameters,normalize_url_for_browser
 
 def make_blank_png_b64() -> str:
     # Create 1×1 RGBA fully transparent pixel
@@ -52,16 +53,6 @@ USER_AGENT_STRINGS = [
 
 
 # ================================ PDF Detection Functions ================================
-
-def format_url(url: Union[str, str]) -> str:
-    """Format URL for PDF detection."""
-    text = str(url)
-    if text.endswith("?utm_source=chatgpt.com"):
-        text = text.replace("?utm_source=chatgpt.com", "")
-        print("REMOVED GPT SUFFIX")
-    if not text.startswith(('http://', 'https://', 'ftp://')):
-        return f'https://{text}'
-    return text
 
 
 def is_pdf_by_suffix(url: str) -> bool:
@@ -92,55 +83,22 @@ def is_pdf_by_suffix(url: str) -> bool:
     return any(pattern in url_lower for pattern in pdf_patterns)
 
 
-def is_pdf_by_requests_head(url: str, timeout: int = 10) -> bool:
-    """Check PDF via HEAD request with proper error handling."""
+
+def is_pdf_by_requests_head(url: str) -> bool:
+    """Check via HEAD request whether URL is a PDF, with strict certificate verification."""
     try:
-        headers = {
-            "User-Agent": random.choice(USER_AGENT_STRINGS),
-            "Accept": "*/*",
-            "Accept-Encoding": "gzip, deflate",
-            "Connection": "keep-alive",
-        }
-
-        # Create SSL context that's more permissive
-        session = requests.Session()
-        session.verify = certifi.where()
-
-        resp = session.head(
+        r = requests.head(
             url,
             allow_redirects=True,
-            timeout=timeout,
-            headers=headers,
-            verify=False  # Less strict SSL verification
+            timeout=10,
+            verify=certifi.where()  # Use certifi's root CA bundle
         )
-
-        content_type = resp.headers.get("Content-Type", "").split(";")[0].strip().lower()
-
-        # Check various PDF content types
-        pdf_types = [
-            "application/pdf",
-            "application/x-pdf",
-            "application/acrobat",
-            "applications/vnd.pdf",
-            "text/pdf",
-            "text/x-pdf"
-        ]
-
-        return any(pdf_type in content_type for pdf_type in pdf_types)
-
-    except requests.exceptions.SSLError as e:
-        print(f"[is_pdf_requests_head] SSL error for {url}: {type(e).__name__}")
+        ct = r.headers.get("content-type", "").lower()
+        return "pdf" in ct
+    except requests.RequestException as e:
+        # If some sites have certificate issues, you can log it
+        # print(f"HEAD request failed for {url}: {e}")
         return False
-    except requests.exceptions.ConnectionError as e:
-        print(f"[is_pdf_requests_head] Connection error for {url}: {type(e).__name__}")
-        return False
-    except requests.exceptions.Timeout as e:
-        print(f"[is_pdf_requests_head] Timeout error for {url}: {type(e).__name__}")
-        return False
-    except Exception as e:
-        print(f"[is_pdf_requests_head] Unexpected error for {url}: {type(e).__name__}: {e}")
-        return False
-
 
 async def is_pdf_by_httpx_get_range(url: str, timeout: int = 10) -> bool:
     """Check PDF via partial GET request to read file header."""
@@ -231,7 +189,7 @@ async def is_pdf(url: str, logger: Logger = None) -> bool:
     Returns:
         bool: True if URL points to a PDF, False otherwise
     """
-    url = format_url(url)
+    url = normalize_url_for_browser(url)
 
     if logger:
         logger.debug(f"Checking if URL is PDF: {url}")
@@ -268,11 +226,11 @@ async def is_pdf(url: str, logger: Logger = None) -> bool:
             print(f"{url} IS a PDF (by full GET)")
         return True
 
-    # Not a PDF
-    if logger:
-        logger.debug(f"URL is not a PDF: {url}")
-    else:
-        print(f"{url} IS NOT a PDF")
+    # # Not a PDF
+    # if logger:
+    #     logger.debug(f"URL is not a PDF: {url}")
+    # else:
+    #     print(f"{url} IS NOT a PDF")
     return False
 
 
