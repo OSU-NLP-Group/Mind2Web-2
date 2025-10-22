@@ -105,7 +105,7 @@ Configure the necessary API keys for evaluation:
 
 ```bash
 # Set up environment variables for OpenAI API
-export OPENAI_API_KEY="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"
+export OPENAI_API_KEY="YOUR_OPENAI_KEY"
 
 # (Optional) Environment variables for Azure OpenAI
 export AZURE_OPENAI_API_KEY="YOUR_AZURE_OPENAI_API_KEY"
