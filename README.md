@@ -23,11 +23,19 @@ Mind2Web 2 is a benchmark for agentic search systems, featuring Agent-as-a-Judge
 
 ## 📥 Submission Guideline
 
-To evaluate answers from an agent system, there are mainly three steps involved: 1) collecting answers from your agent on our [private test set](https://huggingface.co/datasets/osunlp/Mind2Web-2/viewer/default/private_test_set), 2) cache the webpages mentioned in the answers (to ensure consistency and reproducibility), where we provide the script in [Precache Webpage](#3-precache-webpages-optional-but-recommended) and 3) run the evaluation.
+To get answers for tasks of Mind2Web 2:
+- If you are developing and testing a base model and have no agent framework, you may start from go-to frameworks such as [Hugging Face's Open Deep Research](). You may want to do some zero-shot or few-shot prompting to let the agent better understand how to provide citations, to pass our attribution verifications in the task evaluations.
+- If you have your own agent, still notice that we expect the agent to also provide **URL sources** to the critical facts included in the answers. You may also refer to the evaluation script to understand how the evaluation is conducted.
+
+To evaluate answers from an agent system, there are mainly three steps involved: 
+1. Collecting answers from your agent on our [private test set](https://huggingface.co/datasets/osunlp/Mind2Web-2/viewer/default/private_test_set)
+2. Cache the webpages mentioned in the answers (to ensure consistency and reproducibility), where we provide the script in [Precache Webpage](#3-precache-webpages-optional-but-recommended)
+3. Run the evaluation.
+4. (Optionally) We also encourage submitting the avg. time and answer lengths to better understand how the agent works.
 
 For the submission, you can either:
-- (Recommended) submit your agent's answers as well as providing the webpage cache to us
-- (Recommended) run the whole evaluation pipeline by following the instructions in the next section and submit the evaluation results to us
+- (Recommended) submit your agent's answers as well as providing the webpage cache to us. This ensures the best consistency between the inference and evaluation. We will handle the evaluation cost for you.
+- (Recommended) run the whole evaluation by following the instructions in the next section and submit the evaluation results to us.
 - Only provide your agent answers and let us handle the webpage caching and evaluation for you
 
 If you choose to submit your agent's answer, please arrange your agent's responses in the following directory structure (see [answers/examples](https://github.com/OSU-NLP-Group/Mind2Web-2/tree/main/answers/example) for reference):
