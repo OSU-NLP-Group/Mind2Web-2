@@ -18,6 +18,22 @@
     },
     {
       "info": {
+        "name": "Tencent Youtu Deep Research",
+        "date": "2025-10-23",
+        "type": "deep_research",
+        "tags": ["proprietary", "tencent"],
+        "url": "https://open.youtu.qq.com/"
+      },
+      "eval_set": {
+        "partial_completion": "0.60",
+        "success_rate": "0.27",
+        "pass3": "-",
+        "time": "-",
+        "answer_length": "805"
+      }
+    },
+    {
+      "info": {
         "name": "Gemini Deep Research",
         "date": "2025-06-26",
         "type": "deep_research",
