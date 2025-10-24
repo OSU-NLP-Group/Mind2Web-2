@@ -15,7 +15,7 @@ Mind2Web 2 is a benchmark for agentic search systems, featuring Agent-as-a-Judge
 - [😊 Dataset (Tasks) and Evaluation Scripts (Judge Agents)](https://huggingface.co/datasets/osunlp/Mind2Web-2)
 
 ## 🆕 Updates
-- **2025/10/23**: To improve accessibility and adoption of Mind2Web 2, we release all the evaluation scripts are released for both public dev set and private test set. Check out the [Run Evaluation Locally Yourself](#-run-evaluation-locally-yourself) section for instructions.
+- **2025/10/23**: To improve accessibility and adoption of Mind2Web 2, we release all the evaluation scripts are released for both public dev set and test set. Check out the [Run Evaluation Locally Yourself](#-run-evaluation-locally-yourself) section for instructions.
 - **2025/07/17**: Check out our [submission guideline](#-submission-guideline). We welcome all submissions and look forward to your participation!
 - **2025/07/14**: The scripts of the public development set are released. Give them a try!
 - **2025/06/26**: The GitHub repo is live. The manuscript is now on arXiv.
@@ -28,7 +28,7 @@ To get answers for tasks of Mind2Web 2:
 - If you have your own agent, still notice that we expect the agent to also provide **URL sources** to the critical facts included in the answers. You may also refer to the evaluation script to understand how the evaluation is conducted.
 
 To evaluate answers from an agent system, there are mainly three steps involved: 
-1. Collecting answers from your agent on our [private test set](https://huggingface.co/datasets/osunlp/Mind2Web-2/viewer/default/private_test_set)
+1. Collecting answers from your agent on our [test set](https://huggingface.co/datasets/osunlp/Mind2Web-2/viewer/default/private_test_set)
 2. Cache the webpages mentioned in the answers (to ensure consistency and reproducibility), where we provide the script in [Precache Webpage](#3-precache-webpages-optional-but-recommended)
 3. Run the evaluation.
 4. (Optionally) We also encourage submitting the avg. time and answer lengths to better understand how the agent works.
