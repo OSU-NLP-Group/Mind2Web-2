@@ -1,4 +1,4 @@
-# Mind2Web 2
+# Mind2Web 2 [NeurIPS'25 D&B]
 
 Mind2Web 2 is a benchmark for agentic search systems, featuring Agent-as-a-Judge methodology for comprehensive, rigorous, and reliable assessment on **long-horizon** and complex tasks that involve **complex and real-time information synthesis**.
 
