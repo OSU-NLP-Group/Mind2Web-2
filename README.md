@@ -158,7 +158,7 @@ Notes:
 
 ### 4. Run Evaluation
 
-Execute the evaluation using the `run_eval.py` script:
+Download the evaluation script from [link](https://huggingface.co/datasets/osunlp/Mind2Web-2), and execute the evaluation using the `run_eval.py` script:
 
 #### Basic Usage
 
