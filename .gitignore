@@ -189,3 +189,4 @@ cython_debug/
 /cache/
 /uv.lock
 /.claude/
+/osunlp/
