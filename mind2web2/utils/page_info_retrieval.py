@@ -31,7 +31,6 @@ def html_to_markdown(html: str) -> str:
     return h.handle(html)
 
 
-
 # ================================ Constants ================================
 
 def make_blank_png_b64() -> str:

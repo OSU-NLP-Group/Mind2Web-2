@@ -63,7 +63,7 @@ CACHE_ROOT = paths.cache_root                                # <repo>/workspace/
 # CACHE_ROOT = paths.dataset_root / "cache"
 
 # Logging
-logger, _ = create_logger(__name__, "tmp_logs")
+logger, _ = create_logger(__name__, "cache_logs")
 
 # -------------------------------------------------------------------- #
 # Helpers for URL extraction

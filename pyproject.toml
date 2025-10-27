@@ -38,7 +38,6 @@ dependencies = [
     "jinja2",
     "markdown",
     "uvicorn[standard]",
-    "markdownify",
     "html2text>=2025.4.15",
     "pyside6>=6.9.2",
     "pillow>=11.3.0",
