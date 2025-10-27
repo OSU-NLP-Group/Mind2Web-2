@@ -131,7 +131,7 @@ export GOOGLE_MAPS_API_KEY="YOUR_GOOGLE_MAPS_API_KEY"
 Before running evaluation, you may want to precache the webpages to improve performance:
 
 ```bash
-./cache_all_answers.sh
+./cache_all_answers.sh <your_agent_name>
 ```
 
 We also provide a lightweight app to fix errors in precached webpages (e.g., pages blocked by human verification):

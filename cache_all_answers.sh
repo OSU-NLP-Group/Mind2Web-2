@@ -21,5 +21,5 @@ fi
 for d in "${dirs[@]}"; do
   task_id="$(basename "$d")"
   echo ">>> Running: ${AGENT}/${task_id}"
-  python batch_cache_filesys.py "${AGENT}" "${task_id}"
+  python batch_answer_cache.py "${AGENT}" "${task_id}"
 done

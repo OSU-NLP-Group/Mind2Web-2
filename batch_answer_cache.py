@@ -423,19 +423,19 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max_concurrent_pages",
         type=int,
-        default=15,
+        default=5,
         help="Maximum number of concurrent pages to process (default: 30)"
     )
     parser.add_argument(
         "--max_retries",
         type=int,
-        default=2,
+        default=1,
         help="Maximum number of retries per page (default: 1)"
     )
     parser.add_argument(
         "--overall_timeout",
         type=int,
-        default=240,
+        default=120,
         help="Overall timeout in seconds for each page capture to prevent hanging (default: 240s)"
     )
     parser.add_argument(
