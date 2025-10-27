@@ -190,3 +190,4 @@ cython_debug/
 /uv.lock
 /.claude/
 /osunlp/
+/tmp_logs/
