@@ -73,8 +73,8 @@ uv sync
 # Activate the virtual environment
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
-# Install browsers for Playwright
-playwright install
+# Install browsers for Playwright (we use rebrowser playwright for better webpage fetching)
+rebrowser_playwright install
 ```
 
 #### Option 2: Using conda + pip
