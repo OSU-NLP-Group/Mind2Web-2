@@ -187,6 +187,7 @@ cython_debug/
 /answers/
 /eval_results/
 /cache/
+/uv.lock
 /.claude/
 /osunlp/
 /tmp_logs/
