@@ -201,7 +201,7 @@ If you find this work useful, please consider starring our repo and citing our p
 
 ```bibtex
 @inproceedings{
-    gou2025mindweb,
+    gou2025mind2web2,
     title={Mind2Web 2: Evaluating Agentic Search with Agent-as-a-Judge},
     author={Boyu Gou and Zanming Huang and Yuting Ning and Yu Gu and Michael Lin and Botao Yu and Andrei Kopanev and Weijian Qi and Yiheng Shu and Jiaman Wu and Chan Hee Song and Bernal Jimenez Gutierrez and Yifei Li and Zeyi Liao and Hanane Nour Moussa and TIANSHU ZHANG and Jian Xie and Tianci Xue and Shijie Chen and Boyuan Zheng and Kai Zhang and Zhaowei Cai and Viktor Rozgic and Morteza Ziyadi and Huan Sun and Yu Su},
     booktitle={The Thirty-ninth Annual Conference on Neural Information Processing Systems Datasets and Benchmarks Track},
