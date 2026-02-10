@@ -45,7 +45,7 @@ export function initPreview() {
     subscribe(render, [
         'previewMode', 'selectedUrl', 'selectedTaskId', 'urls',
         'currentText', 'currentIssues', 'answers',
-        'fitToWidth', 'zoomLevel',
+        'fitToWidth', 'zoomLevel', 'contentVersion',
     ]);
 }
 
@@ -109,9 +109,9 @@ function renderScreenshot(s) {
         return;
     }
 
-    const imgSrc = api.screenshotUrl(s.selectedTaskId, s.selectedUrl);
+    const imgSrc = api.screenshotUrl(s.selectedTaskId, s.selectedUrl, s.contentVersion);
 
-    // Only recreate img if URL changed
+    // Recreate img if URL or version changed
     if (imgSrc !== currentImgSrc) {
         currentImgSrc = imgSrc;
         const img = document.createElement('img');

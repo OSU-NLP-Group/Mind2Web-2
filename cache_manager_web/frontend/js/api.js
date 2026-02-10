@@ -38,8 +38,8 @@ export async function getText(taskId, url) {
     return (await request('GET', `/api/content/${encodeURIComponent(taskId)}/text?url=${encodeURIComponent(url)}`)).json();
 }
 
-export function screenshotUrl(taskId, url) {
-    return `/api/content/${encodeURIComponent(taskId)}/screenshot?url=${encodeURIComponent(url)}`;
+export function screenshotUrl(taskId, url, version = 0) {
+    return `/api/content/${encodeURIComponent(taskId)}/screenshot?url=${encodeURIComponent(url)}&v=${version}`;
 }
 
 export function pdfUrl(taskId, url) {

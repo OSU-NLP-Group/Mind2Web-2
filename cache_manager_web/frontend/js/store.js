@@ -41,6 +41,9 @@ const state = {
     urlIssuesFilter: false,
     urlTodoFilter: false,
 
+    // Content version — incremented on capture to bust browser cache
+    contentVersion: 0,
+
     // Zoom
     fitToWidth: true,
     zoomLevel: 1.0,

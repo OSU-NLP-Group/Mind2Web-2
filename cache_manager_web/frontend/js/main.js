@@ -107,6 +107,7 @@ async function onRefresh() {
     if (!s.agentPath) return;
     try {
         showStatus('Refreshing & scanning...', 'warning');
+        setState({ contentVersion: s.contentVersion + 1 });
         const result = await api.loadCache(s.agentPath);
         refreshAfterLoad(result);
         toast('Refreshed', 'success');
@@ -270,6 +271,8 @@ function initSSE() {
     api.subscribeEvents((data) => {
         if (data.type === 'capture_complete') {
             toast(`Captured: ${data.url?.substring(0, 60)}...`, 'success');
+            // Bump contentVersion to bust browser cache for screenshots
+            setState({ contentVersion: getState().contentVersion + 1 });
             reloadCurrentTask();
             updateReviewProgress();
         }
