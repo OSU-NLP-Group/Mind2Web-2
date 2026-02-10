@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from cache_manager.models import CacheManager, KeywordDetector
@@ -58,3 +58,9 @@ app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
 async def serve_index():
     """Serve the main SPA page."""
     return FileResponse(str(FRONTEND_DIR / "index.html"))
+
+
+@app.get("/favicon.ico")
+async def favicon():
+    """Return an empty favicon to avoid 404 in browser console."""
+    return Response(content=b"", media_type="image/x-icon")

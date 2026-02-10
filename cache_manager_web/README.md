@@ -142,6 +142,11 @@ You can also upload MHTML files (saved from Chrome's "Save as MHTML") by:
 - Clicking **Upload MHTML** in the preview footer
 - Dragging and dropping `.mhtml` files onto the preview panel
 
+### Known Limitations
+
+- **Screenshots capture only the visible viewport** — the Chrome extension uses `captureVisibleTab`, which captures what's currently visible in the browser window. For long pages, scroll to the most relevant section before capturing.
+- **Extension requires the backend to be running** — the capture button is disabled if the backend at `127.0.0.1:8000` is unreachable.
+
 ## API Reference
 
 The backend exposes a REST API at `http://127.0.0.1:8000/api/`:

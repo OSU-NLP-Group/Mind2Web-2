@@ -81,7 +81,8 @@ function initToolbar() {
         $('#btn-delete-url').disabled = !hasUrl;
         $('#btn-upload-mhtml').disabled = !hasUrl;
         $('#btn-recapture').disabled = !hasUrl;
-    });
+    }, ['loaded', 'issueIndex', 'issueCursor', 'agentName', 'stats',
+        'selectedTaskId', 'selectedUrl']);
 }
 
 // ============================================================

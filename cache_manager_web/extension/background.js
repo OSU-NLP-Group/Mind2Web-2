@@ -83,5 +83,12 @@ async function capturePage(tab) {
     }
 }
 
-// Expose capturePage for popup to call
-self.capturePage = capturePage;
+// Listen for messages from popup
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (msg.action === 'capture') {
+        chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
+            if (tab) capturePage(tab).then(sendResponse);
+        });
+        return true; // async response
+    }
+});

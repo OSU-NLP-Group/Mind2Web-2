@@ -115,9 +115,14 @@ function renderScreenshot(s) {
     if (imgSrc !== currentImgSrc) {
         currentImgSrc = imgSrc;
         const img = document.createElement('img');
+        img.style.opacity = '0';
+        img.style.transition = 'opacity .2s ease';
         img.src = imgSrc;
         img.alt = 'Screenshot';
         img.addEventListener('load', () => {
+            img.style.opacity = '1';
+            const loader = container.querySelector('.screenshot-loading');
+            if (loader) loader.remove();
             document.getElementById('screenshot-info').textContent =
                 `${img.naturalWidth} x ${img.naturalHeight}`;
         });
@@ -126,7 +131,7 @@ function renderScreenshot(s) {
             currentImgEl = null;
             currentImgSrc = '';
         });
-        container.innerHTML = '';
+        container.innerHTML = '<div class="screenshot-loading">Loading screenshot...</div>';
         container.appendChild(img);
         currentImgEl = img;
     }

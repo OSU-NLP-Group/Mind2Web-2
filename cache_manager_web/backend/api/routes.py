@@ -3,7 +3,6 @@
 from __future__ import annotations
 import asyncio
 import base64
-import hashlib
 import json
 import logging
 import time
@@ -15,7 +14,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Query
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
-from cache_manager.models import CacheManager, KeywordDetector, DetectionResult
+from cache_manager.models import CacheManager, KeywordDetector
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +29,9 @@ _kd: Optional[KeywordDetector] = None
 
 # Active capture target — tells the extension what task/URL we're capturing for
 _capture_target: dict = {}  # {"task_id": ..., "url": ..., "ts": ...}
+
+# Per-URL issue cache: {task_id: {url: {"issues": [...], "severity": "..."}}}
+_url_issue_cache: dict = {}
 
 # SSE subscribers — each is an asyncio.Queue
 _sse_queues: list[asyncio.Queue] = []
@@ -139,10 +141,17 @@ async def load_cache(req: LoadRequest):
         except Exception as e:
             logger.warning(f"Issue scan failed: {e}")
 
-        # Build issue index
+        # Build per-URL issue cache and issue index
+        global _url_issue_cache
+        _url_issue_cache = {}
         issue_index = []
         for task_id in sorted(issues_map.keys()):
+            _url_issue_cache[task_id] = {}
             for url, det in issues_map[task_id]:
+                _url_issue_cache[task_id][url] = {
+                    "issues": det.matched_keywords + det.matched_patterns,
+                    "severity": det.severity,
+                }
                 issue_index.append({
                     "task_id": task_id,
                     "url": url,
@@ -225,6 +234,7 @@ async def list_urls(task_id: str):
     url_infos = _cm.get_task_urls(task_id)
     reviewed_map = _cm.load_reviewed(task_id)
 
+    task_issue_cache = _url_issue_cache.get(task_id, {})
     urls = []
     for ui in url_infos:
         # Parse domain/path for display
@@ -240,19 +250,10 @@ async def list_urls(task_id: str):
             domain = ui.url[:40]
             path = ""
 
-        # Scan for issues
-        issues = []
-        severity = ""
-        if ui.content_type == "web":
-            try:
-                text, _ = cache.get_web(ui.url, get_screenshot=False)
-                if text:
-                    det = _kd.detect_issues(text)
-                    if det.has_issues:
-                        issues = det.matched_keywords + det.matched_patterns
-                        severity = det.severity
-            except Exception:
-                pass
+        # Use cached issue results (populated during /api/load)
+        cached = task_issue_cache.get(ui.url)
+        issues = cached["issues"] if cached else []
+        severity = cached["severity"] if cached else ""
 
         urls.append({
             "url": ui.url,
@@ -300,7 +301,8 @@ async def get_screenshot(task_id: str, url: str = Query(...)):
     ct = cache.has(url)
     if ct != "web" or data is None:
         raise HTTPException(404, "Screenshot not found")
-    return Response(content=data, media_type="image/jpeg")
+    return Response(content=data, media_type="image/jpeg",
+                    headers={"Cache-Control": "public, max-age=86400"})
 
 
 @router.get("/content/{task_id}/pdf")
@@ -364,6 +366,10 @@ async def receive_capture(req: CaptureRequest):
 
     # Auto-mark as reviewed
     _cm.mark_url_reviewed(req.task_id, req.url, "fixed")
+
+    # Invalidate issue cache for this URL (content changed)
+    if req.task_id in _url_issue_cache:
+        _url_issue_cache[req.task_id].pop(req.url, None)
 
     # Push SSE event to frontend
     await _push_event("capture_complete", {

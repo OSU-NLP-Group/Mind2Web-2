@@ -419,6 +419,7 @@ body {
     align-items: flex-start;
     padding: 8px;
     background: #f0f0f0;
+    position: relative;
 }
 .screenshot-container img {
     max-width: 100%;
@@ -433,6 +434,14 @@ body {
     padding: 60px 20px;
     text-align: center;
     line-height: 1.8;
+}
+.screenshot-loading {
+    position: absolute;
+    top: 40%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    color: var(--c-text-muted);
+    font-size: 13px;
 }
 
 .text-content {
