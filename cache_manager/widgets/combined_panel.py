@@ -18,10 +18,11 @@ logger = logging.getLogger(__name__)
 
 class CombinedPanel(QWidget):
     """Combined panel with tasks on top and URLs on bottom."""
-    
+
     # Signals
     url_selected = Signal(str, str)  # task_id, url
     url_delete_requested = Signal(str, str)  # task_id, url
+    url_mark_reviewed = Signal(str, str, str)  # task_id, url, status
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -71,6 +72,7 @@ class CombinedPanel(QWidget):
         # Forward URL signals
         self.url_widget.url_selected.connect(self.url_selected.emit)
         self.url_widget.url_delete_requested.connect(self.url_delete_requested.emit)
+        self.url_widget.url_mark_reviewed.connect(self.url_mark_reviewed.emit)
     
     def load_cache_manager(self, cache_manager: CacheManager):
         """Load cache manager into both panels."""
@@ -82,10 +84,11 @@ class CombinedPanel(QWidget):
         self.current_task_id = task_id
         # The main window will handle loading URLs via signal
         
-    def load_urls_for_task(self, task_id: str, urls: List, keyword_detector: KeywordDetector):
+    def load_urls_for_task(self, task_id: str, urls: List, keyword_detector: KeywordDetector,
+                          reviewed_map: dict | None = None):
         """Load URLs for the selected task."""
         if task_id == self.current_task_id:
-            self.url_widget.load_urls(task_id, urls, keyword_detector)
+            self.url_widget.load_urls(task_id, urls, keyword_detector, reviewed_map=reviewed_map)
     
     def update_url_issues(self, url: str, issues: List[str], severity: str | None = None):
         """Update issues for a specific URL."""

@@ -330,15 +330,61 @@ class CacheManager:
         """Get all unique URLs across all tasks."""
         return list(self._url_index.keys())
     
+    # --- Reviewed status persistence ---
+
+    def _reviewed_path(self, task_id: str) -> Path:
+        """Return path to the reviewed.json file for a task."""
+        cache = self.task_caches.get(task_id)
+        if cache:
+            return Path(cache.task_dir) / "reviewed.json"
+        return Path()
+
+    def load_reviewed(self, task_id: str) -> Dict[str, str]:
+        """Load reviewed statuses for a task.
+
+        Returns:
+            Dict mapping url -> status ("ok", "fixed", "skip").
+        """
+        path = self._reviewed_path(task_id)
+        if path.exists():
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    return data
+            except Exception as e:
+                logger.warning(f"Failed to load reviewed.json for {task_id}: {e}")
+        return {}
+
+    def save_reviewed(self, task_id: str, reviewed_map: Dict[str, str]):
+        """Save reviewed statuses for a task."""
+        path = self._reviewed_path(task_id)
+        if not path.parent.exists():
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(reviewed_map, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"Failed to save reviewed.json for {task_id}: {e}")
+
+    def mark_url_reviewed(self, task_id: str, url: str, status: str):
+        """Mark a single URL as reviewed and persist."""
+        reviewed = self.load_reviewed(task_id)
+        if status:
+            reviewed[url] = status
+        else:
+            reviewed.pop(url, None)
+        self.save_reviewed(task_id, reviewed)
+
     def get_statistics(self) -> Dict[str, int]:
         """Get overall statistics."""
         total_urls = len(self._url_index)
         total_tasks = len(self.task_caches)
-        total_web = sum(1 for infos in self._url_index.values() 
+        total_web = sum(1 for infos in self._url_index.values()
                        for info in infos if info.content_type == "web")
-        total_pdf = sum(1 for infos in self._url_index.values() 
+        total_pdf = sum(1 for infos in self._url_index.values()
                        for info in infos if info.content_type == "pdf")
-        
+
         return {
             "total_tasks": total_tasks,
             "total_urls": total_urls,

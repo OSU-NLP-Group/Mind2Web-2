@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cache Manager</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <!-- Toolbar -->
+    <header id="toolbar">
+        <div class="toolbar-left">
+            <button id="btn-open" class="toolbar-btn" title="Open cache folder (Ctrl+O)">
+                <span class="icon">&#128193;</span> Open
+            </button>
+            <button id="btn-refresh" class="toolbar-btn" title="Refresh &amp; scan" disabled>
+                <span class="icon">&#8635;</span> Refresh
+            </button>
+            <div class="toolbar-sep"></div>
+            <button id="btn-prev-issue" class="toolbar-btn" title="Previous issue (Shift+N)" disabled>
+                &#9664; Prev
+            </button>
+            <button id="btn-next-issue" class="toolbar-btn" title="Next issue (N)" disabled>
+                Next &#9654;
+            </button>
+            <span id="issue-counter" class="toolbar-info"></span>
+            <div class="toolbar-sep"></div>
+            <button id="btn-shortcuts-help" class="toolbar-btn" title="Keyboard shortcuts">
+                <span class="icon">&#9000;</span>
+            </button>
+        </div>
+        <div class="toolbar-right">
+            <span id="review-progress" class="toolbar-info"></span>
+            <span id="agent-info" class="toolbar-info muted">No cache loaded</span>
+        </div>
+    </header>
+
+    <!-- Main three-panel layout -->
+    <main id="app">
+        <!-- Task Panel -->
+        <section id="task-panel" class="panel">
+            <div class="panel-header">
+                <h2>Tasks</h2>
+            </div>
+            <div class="panel-controls">
+                <input type="text" id="task-search" placeholder="Search tasks..." class="search-input">
+                <label class="toggle-label">
+                    <input type="checkbox" id="task-issues-only"> Issues only
+                </label>
+            </div>
+            <div id="task-list" class="item-list"></div>
+            <div id="task-stats" class="panel-footer">No tasks loaded</div>
+        </section>
+
+        <!-- URL Panel -->
+        <section id="url-panel" class="panel">
+            <div class="panel-header">
+                <h2>URLs</h2>
+            </div>
+            <div class="panel-controls">
+                <input type="text" id="url-search" placeholder="Search URLs..." class="search-input">
+                <div class="filter-row">
+                    <span class="filter-label">Show:</span>
+                    <button class="filter-btn active" data-filter="all">All</button>
+                    <button class="filter-btn" data-filter="web">Web</button>
+                    <button class="filter-btn" data-filter="pdf">PDF</button>
+                    <span class="filter-sep">|</span>
+                    <button class="filter-btn" data-filter="issues">Issues</button>
+                    <button class="filter-btn" data-filter="todo">Todo</button>
+                </div>
+                <div id="url-progress-bar" class="progress-bar" style="display:none">
+                    <div class="progress-fill"></div>
+                    <span class="progress-text"></span>
+                </div>
+            </div>
+            <div id="url-list" class="item-list"></div>
+            <div class="panel-footer" style="display:flex; gap:8px; align-items:center;">
+                <button id="btn-mark-reviewed" class="action-btn" disabled title="Mark reviewed (Ctrl+Enter)">
+                    &#10003; Reviewed
+                </button>
+                <button id="btn-open-browser" class="action-btn" disabled title="Open in browser &amp; set capture target">
+                    &#8599; Open
+                </button>
+                <span style="flex:1"></span>
+                <button id="btn-delete-url" class="action-btn danger" disabled title="Delete this URL">Delete</button>
+            </div>
+            <div id="url-stats" class="panel-footer">Select a task</div>
+        </section>
+
+        <!-- Preview Panel -->
+        <section id="preview-panel" class="panel">
+            <div class="panel-header">
+                <h2>Preview</h2>
+                <div id="preview-url" class="preview-url">No URL selected</div>
+            </div>
+            <div class="panel-controls">
+                <div class="mode-tabs">
+                    <button class="mode-btn active" data-mode="screenshot" title="View screenshot (1)">Screenshot</button>
+                    <button class="mode-btn" data-mode="text" title="View extracted text (2)">Text</button>
+                    <button class="mode-btn" data-mode="answer" title="View answer files (3)">Answer</button>
+                </div>
+                <div id="screenshot-controls" class="screenshot-controls">
+                    <span id="screenshot-info" class="muted"></span>
+                    <span style="flex:1"></span>
+                    <span id="zoom-label" class="muted">Fit</span>
+                    <button id="btn-fit-width" class="small-btn active" title="Fit to width">Fit</button>
+                    <button id="btn-zoom-in" class="small-btn" title="Zoom in (Ctrl+Wheel)">+</button>
+                    <button id="btn-zoom-out" class="small-btn" title="Zoom out (Ctrl+Wheel)">&minus;</button>
+                </div>
+                <div id="answer-controls" class="answer-controls" style="display:none">
+                    <label>File: <select id="answer-file-select"></select></label>
+                </div>
+            </div>
+
+            <div id="preview-content" class="preview-content">
+                <!-- Screenshot view -->
+                <div id="view-screenshot" class="view active">
+                    <div id="screenshot-container" class="screenshot-container">
+                        <div class="placeholder">Select a URL to preview</div>
+                    </div>
+                </div>
+                <!-- Text view -->
+                <div id="view-text" class="view">
+                    <pre id="text-content" class="text-content">Select a URL to view text content</pre>
+                </div>
+                <!-- Answer view -->
+                <div id="view-answer" class="view">
+                    <pre id="answer-content" class="text-content">Select a task to view answers</pre>
+                </div>
+            </div>
+
+            <div class="panel-footer">
+                <span id="preview-status" class="status-text">Ready</span>
+                <span style="flex:1"></span>
+                <button id="btn-upload-mhtml" class="action-btn" disabled title="Upload MHTML file">
+                    Upload MHTML
+                </button>
+                <button id="btn-recapture" class="action-btn primary" disabled title="Open in browser for recapture (Ctrl+U)">
+                    Recapture Live
+                </button>
+            </div>
+        </section>
+    </main>
+
+    <!-- Keyboard shortcuts modal -->
+    <div id="shortcuts-modal" class="modal-overlay" style="display:none">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Keyboard Shortcuts</h3>
+                <button class="modal-close" id="shortcuts-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <table class="shortcuts-table">
+                    <tr><th colspan="2">Navigation</th></tr>
+                    <tr><td><kbd>&#8593;</kbd> / <kbd>k</kbd></td><td>Previous URL</td></tr>
+                    <tr><td><kbd>&#8595;</kbd> / <kbd>j</kbd></td><td>Next URL</td></tr>
+                    <tr><td><kbd>N</kbd></td><td>Next issue URL</td></tr>
+                    <tr><td><kbd>Shift+N</kbd></td><td>Previous issue URL</td></tr>
+                    <tr><th colspan="2">Preview</th></tr>
+                    <tr><td><kbd>1</kbd></td><td>Screenshot view</td></tr>
+                    <tr><td><kbd>2</kbd></td><td>Text view</td></tr>
+                    <tr><td><kbd>3</kbd></td><td>Answer view</td></tr>
+                    <tr><td><kbd>Space</kbd></td><td>Toggle Screenshot / Text</td></tr>
+                    <tr><td><kbd>Ctrl+Wheel</kbd></td><td>Zoom screenshot</td></tr>
+                    <tr><th colspan="2">Actions</th></tr>
+                    <tr><td><kbd>Ctrl+Enter</kbd></td><td>Mark as reviewed</td></tr>
+                    <tr><td><kbd>Ctrl+U</kbd></td><td>Recapture live</td></tr>
+                    <tr><td><kbd>Ctrl+O</kbd></td><td>Open cache folder</td></tr>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Hidden file inputs -->
+    <input type="file" id="folder-picker" webkitdirectory directory style="display:none">
+    <input type="file" id="mhtml-picker" accept=".mhtml,.mht" style="display:none">
+
+    <!-- Toast notification -->
+    <div id="toast" class="toast"></div>
+
+    <!-- Scripts -->
+    <script type="module" src="/static/js/main.js"></script>
+    <script>
+        // Keyboard shortcuts modal
+        document.getElementById('btn-shortcuts-help').addEventListener('click', () => {
+            document.getElementById('shortcuts-modal').style.display = '';
+        });
+        document.getElementById('shortcuts-close').addEventListener('click', () => {
+            document.getElementById('shortcuts-modal').style.display = 'none';
+        });
+        document.getElementById('shortcuts-modal').addEventListener('click', (e) => {
+            if (e.target.id === 'shortcuts-modal') {
+                e.target.style.display = 'none';
+            }
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                document.getElementById('shortcuts-modal').style.display = 'none';
+            }
+            if (e.key === '?' && !['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName)) {
+                document.getElementById('shortcuts-modal').style.display = '';
+            }
+        });
+    </script>
+</body>
+</html>
