@@ -99,7 +99,24 @@ captureBtn.addEventListener('click', async () => {
 
         captureBtn.textContent = 'Captured!';
         captureBtn.className = 'capture-btn success';
-        setTimeout(() => window.close(), 1500);
+
+        // Close captured tab and switch to cache manager
+        try {
+            const isCM = tab.url?.startsWith(BACKEND);
+            if (!isCM) {
+                await chrome.tabs.remove(tab.id);
+            }
+            const cmTabs = await chrome.tabs.query({
+                url: ['http://127.0.0.1:8000/*', 'http://localhost:8000/*'],
+            });
+            if (cmTabs.length > 0) {
+                await chrome.tabs.update(cmTabs[0].id, { active: true });
+            }
+        } catch (e) {
+            console.warn('Tab switch failed:', e);
+        }
+
+        setTimeout(() => window.close(), 500);
     } catch (err) {
         captureBtn.textContent = 'Failed: ' + err.message;
         captureBtn.className = 'capture-btn error';

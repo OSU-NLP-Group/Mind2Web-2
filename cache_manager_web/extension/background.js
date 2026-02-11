@@ -68,10 +68,12 @@ async function capturePage(tab) {
             throw new Error(`Backend returned ${captureRes.status}`);
         }
 
-        // Success feedback
+        // Success — close captured tab and switch back to cache manager
         chrome.action.setBadgeText({ text: '✓' });
         chrome.action.setBadgeBackgroundColor({ color: '#22c55e' });
         setTimeout(() => chrome.action.setBadgeText({ text: '' }), 2000);
+
+        await switchToCacheManager(tab.id);
 
         return { success: true };
     } catch (err) {
@@ -80,6 +82,30 @@ async function capturePage(tab) {
         chrome.action.setBadgeBackgroundColor({ color: '#dc2626' });
         setTimeout(() => chrome.action.setBadgeText({ text: '' }), 3000);
         return { success: false, error: err.message };
+    }
+}
+
+/**
+ * Close the captured tab and switch back to the Cache Manager tab.
+ */
+async function switchToCacheManager(capturedTabId) {
+    try {
+        // Don't close the cache manager tab itself
+        const capturedTab = await chrome.tabs.get(capturedTabId);
+        const isCM = capturedTab.url?.startsWith(BACKEND);
+        if (!isCM) {
+            await chrome.tabs.remove(capturedTabId);
+        }
+        // Find and activate cache manager tab
+        const cmTabs = await chrome.tabs.query({
+            url: ['http://127.0.0.1:8000/*', 'http://localhost:8000/*'],
+        });
+        if (cmTabs.length > 0) {
+            await chrome.tabs.update(cmTabs[0].id, { active: true });
+            await chrome.windows.update(cmTabs[0].windowId, { focused: true });
+        }
+    } catch (e) {
+        console.warn('switchToCacheManager:', e);
     }
 }
 

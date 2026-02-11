@@ -35,6 +35,18 @@ export async function selectUrl(taskId, url) {
     try {
         const data = await api.getText(taskId, url);
         setState({ currentText: data.text, currentIssues: data.issues });
+
+        // Auto-mark clean URLs as reviewed when viewed
+        if (!data.issues?.has_issues) {
+            const s = getState();
+            const urlData = s.urls.find(u => u.url === url);
+            if (urlData && !['ok', 'fixed', 'skip'].includes(urlData.reviewed)) {
+                api.setReview(taskId, url, 'ok').catch(() => {});
+                const urls = s.urls.map(u => u.url === url ? { ...u, reviewed: 'ok' } : u);
+                setState({ urls, urlReviewedCount: (s.urlReviewedCount || 0) + 1 });
+                updateReviewProgress();
+            }
+        }
     } catch {
         setState({ currentText: null, currentIssues: null });
     }

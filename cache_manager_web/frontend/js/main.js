@@ -256,12 +256,45 @@ function initKeyboardShortcuts() {
 
 function navigateUrlList(direction) {
     const s = getState();
-    if (!s.urls.length || !s.selectedTaskId) return;
+    if (!s.selectedTaskId) return;
+
+    // If no URLs in current task or navigating past boundaries, jump to adjacent task
+    if (!s.urls.length) {
+        navigateToAdjacentTask(direction);
+        return;
+    }
+
     const currentIdx = s.urls.findIndex(u => u.url === s.selectedUrl);
     let nextIdx = currentIdx + direction;
-    if (nextIdx < 0) nextIdx = s.urls.length - 1;
-    if (nextIdx >= s.urls.length) nextIdx = 0;
+
+    if (nextIdx < 0 || nextIdx >= s.urls.length) {
+        // Past the boundary — jump to next/previous task
+        navigateToAdjacentTask(direction);
+        return;
+    }
+
     selectUrl(s.selectedTaskId, s.urls[nextIdx].url);
+}
+
+function navigateToAdjacentTask(direction) {
+    const s = getState();
+    if (!s.tasks.length) return;
+    const taskIdx = s.tasks.findIndex(t => t.task_id === s.selectedTaskId);
+    if (taskIdx < 0) return;
+
+    let nextTaskIdx = taskIdx + direction;
+    if (nextTaskIdx < 0) nextTaskIdx = s.tasks.length - 1;
+    if (nextTaskIdx >= s.tasks.length) nextTaskIdx = 0;
+
+    const nextTask = s.tasks[nextTaskIdx];
+    selectTask(nextTask.task_id).then(() => {
+        const urls = getState().urls;
+        if (urls.length > 0) {
+            // Down → select first URL; Up → select last URL
+            const url = direction > 0 ? urls[0].url : urls[urls.length - 1].url;
+            selectUrl(nextTask.task_id, url);
+        }
+    });
 }
 
 // ============================================================
