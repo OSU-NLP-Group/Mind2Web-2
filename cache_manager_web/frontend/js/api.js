@@ -70,6 +70,26 @@ export async function scanAll() {
     return (await request('POST', '/api/scan')).json();
 }
 
+export async function startBatch(items) {
+    return (await request('POST', '/api/capture/batch/start', { items })).json();
+}
+
+export async function getBatchStatus() {
+    return (await request('GET', '/api/capture/batch/status')).json();
+}
+
+export async function skipBatchUrl() {
+    return (await request('POST', '/api/capture/batch/skip')).json();
+}
+
+export async function stopBatch() {
+    return (await request('POST', '/api/capture/batch/stop')).json();
+}
+
+export async function flagUrl(taskId, url) {
+    return (await request('POST', `/api/flag/${encodeURIComponent(taskId)}`, { url })).json();
+}
+
 export async function uploadMhtml(taskId, url, file) {
     const form = new FormData();
     form.append('file', file);

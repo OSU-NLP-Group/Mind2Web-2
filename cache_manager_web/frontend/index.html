@@ -25,6 +25,11 @@
             </button>
             <span id="issue-counter" class="toolbar-info"></span>
             <div class="toolbar-sep"></div>
+            <button id="btn-batch" class="toolbar-btn" title="Batch recapture all red URLs" disabled>
+                Batch Recapture
+            </button>
+            <span id="batch-status" class="toolbar-info"></span>
+            <div class="toolbar-sep"></div>
             <button id="btn-shortcuts-help" class="toolbar-btn" title="Keyboard shortcuts">
                 <span class="icon">&#9000;</span>
             </button>
@@ -152,10 +157,10 @@
             <div class="modal-body">
                 <table class="shortcuts-table">
                     <tr><th colspan="2">Navigation</th></tr>
-                    <tr><td><kbd>&#8593;</kbd> / <kbd>k</kbd></td><td>Previous URL</td></tr>
                     <tr><td><kbd>&#8595;</kbd> / <kbd>j</kbd></td><td>Next URL</td></tr>
-                    <tr><td><kbd>N</kbd></td><td>Next issue URL</td></tr>
-                    <tr><td><kbd>Shift+N</kbd></td><td>Previous issue URL</td></tr>
+                    <tr><td><kbd>&#8593;</kbd> / <kbd>k</kbd></td><td>Previous URL</td></tr>
+                    <tr><td><kbd>n</kbd></td><td>Next issue (cross-task)</td></tr>
+                    <tr><td><kbd>N</kbd></td><td>Previous issue (cross-task)</td></tr>
                     <tr><th colspan="2">Preview</th></tr>
                     <tr><td><kbd>1</kbd></td><td>Screenshot view</td></tr>
                     <tr><td><kbd>2</kbd></td><td>Text view</td></tr>
@@ -163,6 +168,8 @@
                     <tr><td><kbd>Space</kbd></td><td>Toggle Screenshot / Text</td></tr>
                     <tr><td><kbd>Ctrl+Wheel</kbd></td><td>Zoom screenshot</td></tr>
                     <tr><th colspan="2">Actions</th></tr>
+                    <tr><td><kbd>r</kbd></td><td>Mark as reviewed</td></tr>
+                    <tr><td><kbd>f</kbd></td><td>Flag as issue (red)</td></tr>
                     <tr><td><kbd>Ctrl+Enter</kbd></td><td>Mark as reviewed</td></tr>
                     <tr><td><kbd>Ctrl+U</kbd></td><td>Recapture live</td></tr>
                     <tr><td><kbd>Ctrl+O</kbd></td><td>Open cache folder</td></tr>

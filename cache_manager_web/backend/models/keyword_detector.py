@@ -42,7 +42,8 @@ class KeywordDetector:
         "you have been blocked",
         "suspicious activity",
         "security check failed",
-        "Spotify is unavailable on this browser."
+        "Spotify is unavailable on this browser.",
+        "该网页无法正常运作",
     ]
     
     # Possible problem keywords

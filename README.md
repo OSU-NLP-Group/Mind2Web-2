@@ -50,7 +50,7 @@ There are two recommended paths:
 
 | Option | What you provide | What we handle |
 |--------|-----------------|----------------|
-| **A. Full submission** (recommended) | Answers + webpage cache + evaluation results | We verify and publish |
+| **A. Full submission** | Answers + webpage cache + evaluation results | We verify and publish |
 | **B. Answers + cache** | Answers + webpage cache | We run evaluation |
 | **C. Answers only** | Answers | We cache webpages and run evaluation |
 
@@ -115,7 +115,7 @@ export AZURE_OPENAI_API_VERSION="2025-03-01-preview"
 export GOOGLE_MAPS_API_KEY="YOUR_GOOGLE_MAPS_API_KEY"
 ```
 
-### Step 3: Pre-cache Webpages (Recommended)
+### Step 3: Pre-cache Webpages
 
 Pre-caching webpages significantly reduces evaluation time (live fetching during evaluation is slow):
 
@@ -134,9 +134,11 @@ The Cache Manager provides:
 - **Issue detection** — automatically flags pages with problems (CAPTCHA, access denied, etc.)
 - **Side-by-side preview** — view cached screenshots and extracted text
 - **Live recapture** — open the page in a real browser, solve any verification, then capture back using the Chrome extension
-- **Progress tracking** — mark URLs as reviewed and track completion
+- **Batch recapture** — auto-capture all flagged URLs with CAPTCHA detection and retry logic
+- **Keyboard shortcuts** — `r` mark reviewed, `f` flag as issue, `n`/`N` navigate issues, `j`/`k` navigate URLs, `?` for full list
+- **Progress tracking** — mark URLs as reviewed and track completion across tasks
 
-See [`cache_manager_web/README.md`](cache_manager_web/README.md) for full documentation, keyboard shortcuts, and Chrome extension setup.
+See [`cache_manager_web/CLAUDE.md`](cache_manager_web/CLAUDE.md) for full documentation, architecture details, and Chrome extension setup.
 
 ### Step 4: Run Evaluation
 

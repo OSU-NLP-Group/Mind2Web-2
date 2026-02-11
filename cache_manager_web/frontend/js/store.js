@@ -41,6 +41,11 @@ const state = {
     urlIssuesFilter: false,
     urlTodoFilter: false,
 
+    // Batch capture
+    batchActive: false,
+    batchTotal: 0,
+    batchCompleted: 0,
+
     // Content version — incremented on capture to bust browser cache
     contentVersion: 0,
 

@@ -138,6 +138,26 @@ export function toast(msg, type = '') {
     _toastTimer = setTimeout(() => { el.className = 'toast'; }, 3000);
 }
 
+// ---- URL filtering (shared between url-list.js and main.js) ----
+
+export function filterUrls(s) {
+    let urls = s.urls;
+    if (s.urlSearch) {
+        const q = s.urlSearch.toLowerCase();
+        urls = urls.filter(u => u.url.toLowerCase().includes(q) || u.domain.toLowerCase().includes(q));
+    }
+    if (s.urlContentFilter !== 'all') {
+        urls = urls.filter(u => u.content_type === s.urlContentFilter);
+    }
+    if (s.urlIssuesFilter) {
+        urls = urls.filter(u => u.issues?.length > 0);
+    }
+    if (s.urlTodoFilter) {
+        urls = urls.filter(u => !['ok', 'fixed', 'skip'].includes(u.reviewed));
+    }
+    return urls;
+}
+
 // ---- DOM helper ----
 
 export function $(sel) { return document.querySelector(sel); }

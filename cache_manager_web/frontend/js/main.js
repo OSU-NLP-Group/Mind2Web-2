@@ -3,7 +3,7 @@
  */
 import { getState, setState, subscribe } from './store.js';
 import * as api from './api.js';
-import { selectTask, selectUrl, reloadCurrentTask, updateReviewProgress, incrementTaskIssueFixedCount, showStatus, toast, $ } from './actions.js';
+import { selectTask, selectUrl, reloadCurrentTask, updateReviewProgress, incrementTaskIssueFixedCount, showStatus, toast, filterUrls, $ } from './actions.js';
 import { initTaskPanel } from './components/task-panel.js';
 import { initUrlList } from './components/url-list.js';
 import { initPreview } from './components/preview.js';
@@ -44,6 +44,7 @@ function initToolbar() {
     $('#btn-delete-url').addEventListener('click', onDeleteUrl);
     $('#btn-upload-mhtml').addEventListener('click', onUploadMhtml);
     $('#btn-recapture').addEventListener('click', onRecapture);
+    $('#btn-batch').addEventListener('click', onBatchRecapture);
 
     // MHTML file picker callback
     $('#mhtml-picker').addEventListener('change', async (e) => {
@@ -81,8 +82,18 @@ function initToolbar() {
         $('#btn-delete-url').disabled = !hasUrl;
         $('#btn-upload-mhtml').disabled = !hasUrl;
         $('#btn-recapture').disabled = !hasUrl;
+        // Batch button: enabled when there are definite-severity issues
+        const hasDefiniteIssues = s.issueIndex.some(i => i.severity === 'definite');
+        $('#btn-batch').disabled = !hasDefiniteIssues || s.batchActive;
+        // Batch status display
+        const batchEl = $('#batch-status');
+        if (s.batchActive) {
+            batchEl.textContent = `Batch: ${s.batchCompleted}/${s.batchTotal}`;
+        } else {
+            batchEl.textContent = '';
+        }
     }, ['loaded', 'issueIndex', 'issueCursor', 'agentName', 'stats',
-        'selectedTaskId', 'selectedUrl']);
+        'selectedTaskId', 'selectedUrl', 'batchActive', 'batchCompleted', 'batchTotal']);
 }
 
 // ============================================================
@@ -160,6 +171,22 @@ async function onMarkReviewed() {
     }
 }
 
+async function onFlagAsIssue() {
+    const s = getState();
+    if (!s.selectedTaskId || !s.selectedUrl) return;
+    try {
+        await api.flagUrl(s.selectedTaskId, s.selectedUrl);
+        // Update local state: mark URL as having issues, clear review
+        const urls = s.urls.map(u => u.url === s.selectedUrl
+            ? { ...u, issues: ['access denied'], severity: 'definite', reviewed: '' }
+            : u);
+        setState({ urls, currentText: 'access denied', currentIssues: { has_issues: true, severity: 'definite', keywords: ['access denied'], patterns: [] } });
+        toast('Flagged as issue (red)');
+    } catch (err) {
+        toast('Flag failed: ' + err.message, 'error');
+    }
+}
+
 async function onOpenInBrowser() {
     const s = getState();
     if (!s.selectedUrl) return;
@@ -192,6 +219,31 @@ async function onRecapture() {
     await api.setCaptureTarget(s.selectedTaskId, s.selectedUrl).catch(() => {});
     window.open(s.selectedUrl, '_blank');
     toast('Page opened. Pass any verification, then use the extension to capture.', 'success');
+}
+
+async function onBatchRecapture() {
+    const s = getState();
+    // Build queue: definite-severity issues only
+    const items = s.issueIndex
+        .filter(i => i.severity === 'definite')
+        .map(i => ({ task_id: i.task_id, url: i.url }));
+
+    if (items.length === 0) {
+        toast('No red (definite-issue) URLs to recapture.', 'error');
+        return;
+    }
+
+    try {
+        const result = await api.startBatch(items);
+        if (result.total === 0) {
+            toast('All red URLs are already reviewed.', 'success');
+            return;
+        }
+        setState({ batchActive: true, batchTotal: result.total, batchCompleted: 0 });
+        toast(`Batch queued: ${result.total} URLs. Click the extension icon to start.`, 'success');
+    } catch (err) {
+        toast('Batch start failed: ' + err.message, 'error');
+    }
 }
 
 // ============================================================
@@ -235,6 +287,8 @@ function initKeyboardShortcuts() {
         // Don't handle single-key shortcuts when typing in inputs
         if (inInput) return;
 
+        if (e.key === 'r') { e.preventDefault(); onMarkReviewed(); return; }
+        if (e.key === 'f') { e.preventDefault(); onFlagAsIssue(); return; }
         if (e.key === 'n') { e.preventDefault(); navigateIssue(1); return; }
         if (e.key === 'N') { e.preventDefault(); navigateIssue(-1); return; }
         if (e.key === '1') { setState({ previewMode: 'screenshot' }); return; }
@@ -264,30 +318,33 @@ function navigateUrlList(direction) {
     const s = getState();
     if (!s.selectedTaskId) return;
 
+    // Use filtered URLs to respect active filters (Issues, Todo, etc.)
+    const filtered = filterUrls(s);
+
     // If no URLs in current task or navigating past boundaries, jump to adjacent task
-    if (!s.urls.length) {
+    if (!filtered.length) {
         navigateToAdjacentTask(direction);
         return;
     }
 
-    const currentIdx = s.urls.findIndex(u => u.url === s.selectedUrl);
+    const currentIdx = filtered.findIndex(u => u.url === s.selectedUrl);
 
     // No URL selected yet — select first or last in current task
     if (currentIdx < 0) {
-        const url = direction > 0 ? s.urls[0].url : s.urls[s.urls.length - 1].url;
+        const url = direction > 0 ? filtered[0].url : filtered[filtered.length - 1].url;
         selectUrl(s.selectedTaskId, url);
         return;
     }
 
     let nextIdx = currentIdx + direction;
 
-    if (nextIdx < 0 || nextIdx >= s.urls.length) {
+    if (nextIdx < 0 || nextIdx >= filtered.length) {
         // Past the boundary — jump to next/previous task
         navigateToAdjacentTask(direction);
         return;
     }
 
-    selectUrl(s.selectedTaskId, s.urls[nextIdx].url);
+    selectUrl(s.selectedTaskId, filtered[nextIdx].url);
 }
 
 function navigateToAdjacentTask(direction) {
@@ -302,10 +359,10 @@ function navigateToAdjacentTask(direction) {
 
     const nextTask = s.tasks[nextTaskIdx];
     selectTask(nextTask.task_id).then(() => {
-        const urls = getState().urls;
-        if (urls.length > 0) {
+        const filtered = filterUrls(getState());
+        if (filtered.length > 0) {
             // Down → select first URL; Up → select last URL
-            const url = direction > 0 ? urls[0].url : urls[urls.length - 1].url;
+            const url = direction > 0 ? filtered[0].url : filtered[filtered.length - 1].url;
             selectUrl(nextTask.task_id, url);
         }
     });
@@ -318,11 +375,32 @@ function navigateToAdjacentTask(direction) {
 function initSSE() {
     api.subscribeEvents((data) => {
         if (data.type === 'capture_complete') {
-            toast(`Captured: ${data.url?.substring(0, 60)}...`, 'success');
-            // Bump contentVersion to bust browser cache for screenshots
-            setState({ contentVersion: getState().contentVersion + 1 });
+            const s = getState();
+            if (!s.batchActive) {
+                toast(`Captured: ${data.url?.substring(0, 60)}...`, 'success');
+            }
+            setState({ contentVersion: s.contentVersion + 1 });
             reloadCurrentTask();
             updateReviewProgress();
+        }
+        if (data.type === 'batch_progress') {
+            setState({ batchCompleted: data.completed });
+        }
+        if (data.type === 'batch_complete') {
+            setState({ batchActive: false, batchCompleted: 0, batchTotal: 0 });
+            toast(`Batch complete! ${data.completed}/${data.total} URLs captured.`, 'success');
+            reloadCurrentTask();
+            updateReviewProgress();
+        }
+        if (data.type === 'batch_stopped') {
+            setState({ batchActive: false, batchCompleted: 0, batchTotal: 0 });
+            toast('Batch stopped.');
+        }
+        if (data.type === 'batch_captcha') {
+            toast(`CAPTCHA detected (${data.captcha_type}) — switch to the browser tab to solve it.`, 'warning');
+        }
+        if (data.type === 'batch_started') {
+            setState({ batchActive: true, batchTotal: data.total, batchCompleted: 0 });
         }
     });
 }

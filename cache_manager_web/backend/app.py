@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 
-from cache_manager.models import CacheManager, KeywordDetector
+from .models import CacheManager, KeywordDetector
 from .config import FRONTEND_DIR, CORS_ORIGINS
 from .api.routes import router, set_app_state
 

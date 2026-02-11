@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Query
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
-from cache_manager.models import CacheManager, KeywordDetector
+from ..models import CacheManager, KeywordDetector
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +32,12 @@ _capture_target: dict = {}  # {"task_id": ..., "url": ..., "ts": ...}
 
 # Per-URL issue cache: {task_id: {url: {"issues": [...], "severity": "..."}}}
 _url_issue_cache: dict = {}
+
+# Batch capture state
+_batch_queue: list[dict] = []   # [{task_id, url}, ...]
+_batch_active: bool = False
+_batch_total: int = 0
+_batch_completed: int = 0
 
 # SSE subscribers — each is an asyncio.Queue
 _sse_queues: list[asyncio.Queue] = []
@@ -72,6 +78,7 @@ class CaptureRequest(BaseModel):
     url: str
     text: str
     screenshot_base64: str  # JPEG base64
+    actual_url: Optional[str] = None  # URL after redirects (may differ from url)
 
 class ReviewRequest(BaseModel):
     url: str
@@ -88,6 +95,16 @@ class AddUrlRequest(BaseModel):
 
 class AddPdfRequest(BaseModel):
     url: str
+
+class FlagRequest(BaseModel):
+    url: str
+
+class BatchItem(BaseModel):
+    task_id: str
+    url: str
+
+class BatchStartRequest(BaseModel):
+    items: list[BatchItem]
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +227,11 @@ async def list_tasks():
         if summary:
             reviewed = _cm.load_reviewed(task_id)
             task_issue_cache = _url_issue_cache.get(task_id, {})
-            issue_reviewed = sum(1 for url in task_issue_cache if url in reviewed)
+            # "recaptured" doesn't count as fixed
+            issue_reviewed = sum(
+                1 for url in task_issue_cache
+                if url in reviewed and reviewed[url] != "recaptured"
+            )
             tasks.append({
                 "task_id": summary.task_id,
                 "total_urls": summary.total_urls,
@@ -360,7 +381,7 @@ async def receive_capture(req: CaptureRequest):
 
     text = req.text or ""
 
-    # Update cache
+    # Update cache for the original URL
     success = _cm.update_url_content(req.task_id, req.url, text, screenshot_bytes)
     if not success:
         # Try adding as new URL
@@ -368,18 +389,33 @@ async def receive_capture(req: CaptureRequest):
     if not success:
         raise HTTPException(500, "Failed to save capture")
 
-    # Auto-mark as reviewed
-    _cm.mark_url_reviewed(req.task_id, req.url, "fixed")
+    # If redirected to a different URL, also save for the actual URL
+    if req.actual_url and req.actual_url != req.url:
+        if not _cm.update_url_content(req.task_id, req.actual_url, text, screenshot_bytes):
+            _cm.add_url_to_task(req.task_id, req.actual_url, text=text, screenshot=screenshot_bytes)
+        # Mark redirect URL as reviewed too
+        review_status = "recaptured" if _batch_active else "fixed"
+        _cm.mark_url_reviewed(req.task_id, req.actual_url, review_status)
+
+    # Mark review status: "recaptured" for batch (needs human review), "fixed" for single
+    review_status = "recaptured" if _batch_active else "fixed"
+    _cm.mark_url_reviewed(req.task_id, req.url, review_status)
 
     # Invalidate issue cache for this URL (content changed)
     if req.task_id in _url_issue_cache:
         _url_issue_cache[req.task_id].pop(req.url, None)
+        if req.actual_url:
+            _url_issue_cache[req.task_id].pop(req.actual_url, None)
 
     # Push SSE event to frontend
     await _push_event("capture_complete", {
         "task_id": req.task_id,
         "url": req.url,
     })
+
+    # Advance batch queue if active
+    if _batch_active:
+        await _advance_batch()
 
     return {"ok": True, "task_id": req.task_id, "url": req.url}
 
@@ -402,6 +438,40 @@ async def set_review(task_id: str, req: ReviewRequest):
     return {"ok": True}
 
 
+@router.post("/flag/{task_id}")
+async def flag_url(task_id: str, req: FlagRequest):
+    """Flag a URL as having definite issues.
+
+    Replaces the text with 'access denied' to trigger definite keyword detection,
+    clears the review status, and updates the issue cache.
+    """
+    _require_loaded()
+    cache = _cm.get_task_cache(task_id)
+    if not cache:
+        raise HTTPException(404, f"Task not found: {task_id}")
+
+    # Replace text with keyword that triggers definite detection
+    flag_text = "access denied"
+    # Keep existing screenshot — only replace text
+    _, screenshot = _cm.get_url_content(task_id, req.url)
+    if screenshot is None:
+        screenshot = _placeholder_jpeg()
+    _cm.update_url_content(task_id, req.url, flag_text, screenshot)
+
+    # Clear review status
+    _cm.mark_url_reviewed(task_id, req.url, "")
+
+    # Update issue cache
+    if task_id not in _url_issue_cache:
+        _url_issue_cache[task_id] = {}
+    _url_issue_cache[task_id][req.url] = {
+        "issues": ["access denied"],
+        "severity": "definite",
+    }
+
+    return {"ok": True}
+
+
 @router.get("/review-progress")
 async def review_progress():
     """Get overall review progress across all tasks.
@@ -416,8 +486,129 @@ async def review_progress():
         total_issues += len(task_issue_cache)
         if task_issue_cache:
             reviewed = _cm.load_reviewed(task_id)
-            fixed_issues += sum(1 for url in task_issue_cache if url in reviewed)
+            # "recaptured" doesn't count as fixed — still needs human review
+            fixed_issues += sum(
+                1 for url in task_issue_cache
+                if url in reviewed and reviewed[url] != "recaptured"
+            )
     return {"total": total_issues, "reviewed": fixed_issues}
+
+
+# ---------------------------------------------------------------------------
+# Batch Capture
+# ---------------------------------------------------------------------------
+
+async def _advance_batch():
+    """Pop the completed item and advance to the next URL in the batch queue."""
+    global _batch_queue, _batch_active, _batch_completed, _batch_total, _capture_target
+
+    # Pop the completed item
+    if _batch_queue:
+        _batch_queue.pop(0)
+    _batch_completed += 1
+
+    if _batch_queue:
+        # Set next item as capture target
+        nxt = _batch_queue[0]
+        _capture_target = {"task_id": nxt["task_id"], "url": nxt["url"], "ts": time.time()}
+        await _push_event("batch_progress", {
+            "completed": _batch_completed,
+            "total": _batch_total,
+            "remaining": len(_batch_queue),
+            "next": nxt,
+        })
+    else:
+        # Batch complete
+        _batch_active = False
+        await _push_event("batch_complete", {
+            "completed": _batch_completed,
+            "total": _batch_total,
+        })
+
+
+@router.post("/capture/batch/start")
+async def batch_start(req: BatchStartRequest):
+    """Start a batch capture session with a queue of URLs.
+
+    Filters to only definite-issue unreviewed URLs.
+    """
+    _require_loaded()
+    global _batch_queue, _batch_active, _batch_total, _batch_completed, _capture_target
+
+    # Filter: only definite-severity, unreviewed URLs
+    queue = []
+    for item in req.items:
+        issue_cache = _url_issue_cache.get(item.task_id, {})
+        issue_info = issue_cache.get(item.url)
+        if not issue_info or issue_info.get("severity") != "definite":
+            continue
+        reviewed = _cm.load_reviewed(item.task_id)
+        if item.url in reviewed:
+            continue
+        queue.append({"task_id": item.task_id, "url": item.url})
+
+    if not queue:
+        return {"ok": True, "total": 0, "message": "No qualifying URLs to capture"}
+
+    _batch_queue = queue
+    _batch_active = True
+    _batch_total = len(queue)
+    _batch_completed = 0
+
+    # Set first item as capture target
+    first = _batch_queue[0]
+    _capture_target = {"task_id": first["task_id"], "url": first["url"], "ts": time.time()}
+
+    await _push_event("batch_started", {"total": _batch_total})
+    return {"ok": True, "total": _batch_total}
+
+
+@router.get("/capture/batch/status")
+async def batch_status():
+    """Get current batch capture status (polled by extension)."""
+    if not _batch_active:
+        return {"active": False}
+
+    current = _batch_queue[0] if _batch_queue else None
+    return {
+        "active": True,
+        "total": _batch_total,
+        "completed": _batch_completed,
+        "remaining": len(_batch_queue),
+        "current": current,
+    }
+
+
+class CaptchaNotify(BaseModel):
+    type: str = "unknown"
+
+@router.post("/capture/batch/captcha")
+async def batch_captcha_notify(req: CaptchaNotify):
+    """Called by extension when CAPTCHA is detected during batch mode."""
+    await _push_event("batch_captcha", {"captcha_type": req.type})
+    return {"ok": True}
+
+
+@router.post("/capture/batch/skip")
+async def batch_skip():
+    """Skip the current batch URL (e.g., capture failed, page unreachable)."""
+    global _batch_active
+    if not _batch_active:
+        return {"ok": False, "message": "No active batch"}
+    await _advance_batch()
+    return {"ok": True, "remaining": len(_batch_queue)}
+
+
+@router.post("/capture/batch/stop")
+async def batch_stop():
+    """Stop the current batch capture."""
+    global _batch_queue, _batch_active, _batch_total, _batch_completed
+    _batch_queue = []
+    _batch_active = False
+    _batch_total = 0
+    _batch_completed = 0
+    await _push_event("batch_stopped", {})
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------

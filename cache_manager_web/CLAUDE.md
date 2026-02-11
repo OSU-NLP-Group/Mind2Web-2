@@ -1,6 +1,6 @@
 # Cache Manager Web
 
-Web-based tool for reviewing and fixing cached web pages used by Mind2Web agents. Replaces the PySide6 GUI (`cache_manager/`) with a browser-based UI + Chrome Extension.
+Web-based tool for reviewing and fixing cached web pages used by Mind2Web agents. Uses a browser-based UI + Chrome Extension.
 
 ## Architecture
 
@@ -10,7 +10,10 @@ cache_manager_web/
 ├── backend/
 │   ├── app.py                 # FastAPI app, lifespan, CORS, static file serving
 │   ├── config.py              # Constants (paths, limits)
-│   └── api/routes.py          # ALL API endpoints + SSE + MHTML parsing
+│   ├── api/routes.py          # ALL API endpoints + SSE + MHTML parsing
+│   └── models/
+│       ├── cache_manager.py   # CacheManager — reads/writes cache directory structure
+│       └── keyword_detector.py # KeywordDetector — scans text for issue keywords
 ├── frontend/
 │   ├── index.html             # Single-page app shell (no framework, no build step)
 │   ├── css/style.css          # Complete design system with CSS custom properties
@@ -25,8 +28,8 @@ cache_manager_web/
 │           └── preview.js     # Screenshot/text/answer preview with zoom
 └── extension/
     ├── manifest.json          # Chrome Extension Manifest V3
-    ├── background.js          # Service worker (Alt+Shift+C capture)
-    └── popup.html/js          # Extension popup UI
+    ├── background.js          # Service worker: capture, batch mode, CAPTCHA detection
+    └── popup.html/js          # Extension popup UI with batch progress display
 ```
 
 ## Key Design Decisions
@@ -37,14 +40,7 @@ cache_manager_web/
 - **Chrome Extension for capture**: Uses a real browser session (not Playwright/Selenium) so it works on Cloudflare-protected and anti-bot pages.
 - **SSE for real-time updates**: When the extension captures a page, the frontend updates instantly.
 - **contentVersion cache busting**: Screenshot URLs include `&v={contentVersion}` to force browser to re-fetch after capture.
-- **MHTML parsing without Qt**: Uses Python's `email` module to parse MHTML (MIME format), no PySide6 dependency.
-
-## Reused from cache_manager/
-
-The backend imports these from `cache_manager.models` (pure Python, no Qt):
-- `CacheManager` — loads/reads/writes the cache directory structure
-- `KeywordDetector` / `DetectionResult` — scans text for issue keywords (CAPTCHA, access denied, etc.)
-- `reviewed.json` — per-task review status persistence
+- **MHTML parsing without Qt**: Uses Python's `email` module to parse MHTML (MIME format).
 
 ## Running
 
@@ -69,7 +65,13 @@ This project uses `uv`, not pip. Use `uv run`, `uv sync`, `uv add`.
 | GET | /api/content/{id}/screenshot | Screenshot JPEG |
 | GET | /api/content/{id}/pdf | PDF content |
 | POST/GET | /api/capture/target | Active capture target for extension |
+| POST | /api/capture/batch/start | Start batch capture with URL queue |
+| GET | /api/capture/batch/status | Batch progress (polled by extension) |
+| POST | /api/capture/batch/skip | Skip current URL (on failure) |
+| POST | /api/capture/batch/stop | Stop batch capture |
+| POST | /api/capture/batch/captcha | CAPTCHA detected notification |
 | POST | /api/capture | Receive capture from extension |
+| POST | /api/flag/{id} | Flag URL as issue (replace text) |
 | POST | /api/review/{id} | Set review status |
 | GET | /api/review-progress | Overall progress |
 | GET | /api/answers/{id} | Answer markdown files |
@@ -86,7 +88,25 @@ Key state fields:
 - `previewMode`, `currentText`, `currentIssues`, `answers` — preview
 - `issueIndex`, `issueCursor` — cross-task issue navigation
 - `contentVersion` — incremented on capture to bust screenshot cache
+- `batchActive`, `batchTotal`, `batchCompleted` — batch capture state
 - `fitToWidth`, `zoomLevel` — screenshot zoom
+
+## Keyboard Shortcuts
+
+| Key | Action |
+|-----|--------|
+| `j` / `↓` | Next URL |
+| `k` / `↑` | Previous URL |
+| `n` | Next issue (cross-task) |
+| `N` | Previous issue (cross-task) |
+| `r` | Mark as reviewed |
+| `f` | Flag as issue (red) |
+| `1` / `2` / `3` | Screenshot / Text / Answer view |
+| `Space` | Toggle Screenshot / Text |
+| `Ctrl+Enter` | Mark as reviewed |
+| `Ctrl+U` | Recapture live |
+| `Ctrl+O` | Open cache folder |
+| `?` | Show shortcuts help |
 
 ## Common Tasks for Contributors
 
@@ -98,10 +118,31 @@ Key state fields:
 
 **Changing the extension**: Edit files in `extension/`, then reload in `chrome://extensions/`.
 
+## Review Statuses
+
+| Status | Meaning | Border Color | Counts as Fixed? |
+|--------|---------|-------------|-----------------|
+| `""` | Not reviewed | grey/yellow/red | No |
+| `"ok"` | Reviewed OK | green | Yes |
+| `"fixed"` | Single-capture fixed | green | Yes |
+| `"skip"` | Skipped | green | Yes |
+| `"recaptured"` | Batch-recaptured, needs human review | blue | No |
+
+## Batch Capture Features
+
+- **Two modes**: Auto (captures CAPTCHA pages and moves on) and Pause-on-CAPTCHA (waits for manual solving)
+- **Retry logic**: Pages with body < 200 chars are auto-retried up to 2 times
+- **15s timeout**: Force-captures after 15s if page hasn't loaded
+- **URL redirect handling**: `actual_url` field saves content for both original and redirected URLs
+- **CAPTCHA detection**: Cloudflare, Turnstile, reCAPTCHA, hCaptcha, generic blocked pages
+- **Rich popup UI**: Live progress bar, status badge, current URL, scrollable log
+- **Skip on failure**: Failed captures skip and advance to prevent infinite loops
+
 ## Gotchas
 
 - `Ctrl+R` conflicts with browser refresh — don't use it as a shortcut.
-- `LiveWebLoader` in `cache_manager/utils/web_engine.py` depends on PySide6/Qt — never import it from the web backend.
-- The extension needs `activeTab` + `scripting` + `tabs` permissions to capture pages.
+- The extension needs `activeTab` + `scripting` + `tabs` + `<all_urls>` permissions for batch mode.
 - Screenshot browser caching: always use `contentVersion` in screenshot URLs.
-- MHTML upload uses Python's `email` module parser, not Qt's WebEngine.
+- MHTML upload uses Python's `email` module parser.
+- `"recaptured"` status is NOT counted in progress — these URLs still need human review.
+- `captureVisibleTab` captures the active tab, not a specific tab — must activate the target tab first.

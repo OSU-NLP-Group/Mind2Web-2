@@ -272,6 +272,7 @@ body {
 }
 .url-border.clean { background: var(--c-border-light); }
 .url-border.reviewed { background: var(--c-success); }
+.url-border.recaptured { background: var(--c-primary); }
 .url-border.possible { background: var(--c-warning); }
 .url-border.definite { background: var(--c-danger); }
 

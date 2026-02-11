@@ -2,7 +2,7 @@
  * URL list component — renders URLs with filters, progress bar, and actions.
  */
 import { getState, setState, subscribe } from '../store.js';
-import { selectUrl } from '../actions.js';
+import { selectUrl, filterUrls } from '../actions.js';
 
 export function initUrlList() {
     const searchInput = document.getElementById('url-search');
@@ -65,12 +65,16 @@ function renderUrlList(container, s) {
         const isSelected = u.url === s.selectedUrl;
         let borderClass = 'clean';
         if (u.issues?.length > 0) {
-            // Reviewed issue URLs show green instead of yellow/red
-            if (['ok', 'fixed', 'skip'].includes(u.reviewed)) {
+            if (u.reviewed === 'recaptured') {
+                // Batch-recaptured — blue, still needs human review
+                borderClass = 'recaptured';
+            } else if (['ok', 'fixed', 'skip'].includes(u.reviewed)) {
                 borderClass = 'reviewed';
             } else {
                 borderClass = u.severity === 'definite' ? 'definite' : 'possible';
             }
+        } else if (u.reviewed === 'recaptured') {
+            borderClass = 'recaptured';
         } else if (['ok', 'fixed', 'skip'].includes(u.reviewed)) {
             borderClass = 'reviewed';
         }
@@ -132,7 +136,9 @@ function renderProgressBar(s) {
     const bar = document.getElementById('url-progress-bar');
     // Progress tracks only issue URLs (yellow/red), not all URLs
     const issueUrls = s.urls.filter(u => u.issues?.length > 0);
-    const fixedCount = issueUrls.filter(u => ['ok', 'fixed', 'skip'].includes(u.reviewed)).length;
+    const fixedCount = issueUrls.filter(u =>
+        ['ok', 'fixed', 'skip'].includes(u.reviewed) && u.reviewed !== 'recaptured'
+    ).length;
     const issueTotal = issueUrls.length;
     if (issueTotal === 0) {
         bar.style.display = 'none';
@@ -142,24 +148,6 @@ function renderProgressBar(s) {
     const pct = Math.round((fixedCount / issueTotal) * 100);
     bar.querySelector('.progress-fill').style.width = pct + '%';
     bar.querySelector('.progress-text').textContent = `Fixed: ${fixedCount}/${issueTotal} issues`;
-}
-
-function filterUrls(s) {
-    let urls = s.urls;
-    if (s.urlSearch) {
-        const q = s.urlSearch.toLowerCase();
-        urls = urls.filter(u => u.url.toLowerCase().includes(q) || u.domain.toLowerCase().includes(q));
-    }
-    if (s.urlContentFilter !== 'all') {
-        urls = urls.filter(u => u.content_type === s.urlContentFilter);
-    }
-    if (s.urlIssuesFilter) {
-        urls = urls.filter(u => u.issues?.length > 0);
-    }
-    if (s.urlTodoFilter) {
-        urls = urls.filter(u => !['ok', 'fixed', 'skip'].includes(u.reviewed));
-    }
-    return urls;
 }
 
 function esc(str) {
