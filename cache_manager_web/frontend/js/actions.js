@@ -44,6 +44,7 @@ export async function selectUrl(taskId, url) {
                 api.setReview(taskId, url, 'ok').catch(() => {});
                 const urls = s.urls.map(u => u.url === url ? { ...u, reviewed: 'ok' } : u);
                 setState({ urls, urlReviewedCount: (s.urlReviewedCount || 0) + 1 });
+                incrementTaskReviewedCount(taskId);
                 updateReviewProgress();
             }
         }
@@ -83,6 +84,16 @@ export async function updateReviewProgress() {
                 : '';
         }
     } catch {}
+}
+
+// ---- Task reviewed count ----
+
+export function incrementTaskReviewedCount(taskId) {
+    const s = getState();
+    const tasks = s.tasks.map(t =>
+        t.task_id === taskId ? { ...t, reviewed_count: (t.reviewed_count || 0) + 1 } : t
+    );
+    setState({ tasks });
 }
 
 // ---- Toast & Status ----
