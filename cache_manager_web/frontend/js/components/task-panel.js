@@ -30,15 +30,20 @@ function renderTaskList(container, s) {
         const issueInfo = s.taskIssues[task.task_id] || {};
         const issueCount = issueInfo.count || 0;
         const severity = issueInfo.severity || '';
-        const dotClass = issueCount > 0 ? severity : 'clean';
+        const allFixed = issueCount > 0 && (task.issue_reviewed_count || 0) >= issueCount;
+        const dotClass = allFixed ? 'clean' : (issueCount > 0 ? severity : 'clean');
         const isSelected = task.task_id === s.selectedTaskId;
 
         const detailParts = [`${task.total_urls} URLs`];
         if (issueCount > 0) {
-            detailParts.push(`<span class="task-issue-count">${issueCount} issues</span>`);
-        }
-        if (task.reviewed_count > 0) {
-            detailParts.push(`${task.reviewed_count} reviewed`);
+            const fixedCount = task.issue_reviewed_count || 0;
+            if (fixedCount > 0 && fixedCount >= issueCount) {
+                detailParts.push(`<span class="task-issue-count" style="color: var(--c-success)">${issueCount} issues (all fixed)</span>`);
+            } else if (fixedCount > 0) {
+                detailParts.push(`<span class="task-issue-count">${fixedCount}/${issueCount} fixed</span>`);
+            } else {
+                detailParts.push(`<span class="task-issue-count">${issueCount} issues</span>`);
+            }
         }
 
         return `<div class="task-item${isSelected ? ' selected' : ''}" data-task-id="${esc(task.task_id)}">

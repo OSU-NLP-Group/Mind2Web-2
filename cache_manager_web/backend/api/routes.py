@@ -209,6 +209,8 @@ async def list_tasks():
         summary = _cm.get_task_summary(task_id)
         if summary:
             reviewed = _cm.load_reviewed(task_id)
+            task_issue_cache = _url_issue_cache.get(task_id, {})
+            issue_reviewed = sum(1 for url in task_issue_cache if url in reviewed)
             tasks.append({
                 "task_id": summary.task_id,
                 "total_urls": summary.total_urls,
@@ -216,6 +218,8 @@ async def list_tasks():
                 "pdf_urls": summary.pdf_urls,
                 "issue_urls": summary.issue_urls,
                 "reviewed_count": len(reviewed),
+                "issue_count": len(task_issue_cache),
+                "issue_reviewed_count": issue_reviewed,
             })
     return {"tasks": tasks}
 
@@ -402,17 +406,18 @@ async def set_review(task_id: str, req: ReviewRequest):
 async def review_progress():
     """Get overall review progress across all tasks.
 
-    Caches URL counts since they rarely change; reviewed counts are re-read.
+    Only counts URLs that have detected issues — clean URLs are excluded.
     """
     _require_loaded()
-    total_urls = 0
-    total_reviewed = 0
+    total_issues = 0
+    fixed_issues = 0
     for task_id in _cm.get_task_ids():
-        urls = _cm.get_task_urls(task_id)
-        total_urls += len(urls)
-        reviewed = _cm.load_reviewed(task_id)
-        total_reviewed += sum(1 for u in urls if u.url in reviewed)
-    return {"total": total_urls, "reviewed": total_reviewed}
+        task_issue_cache = _url_issue_cache.get(task_id, {})
+        total_issues += len(task_issue_cache)
+        if task_issue_cache:
+            reviewed = _cm.load_reviewed(task_id)
+            fixed_issues += sum(1 for url in task_issue_cache if url in reviewed)
+    return {"total": total_issues, "reviewed": fixed_issues}
 
 
 # ---------------------------------------------------------------------------

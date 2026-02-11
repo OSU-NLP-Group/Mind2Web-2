@@ -3,7 +3,7 @@
  */
 import { getState, setState, subscribe } from './store.js';
 import * as api from './api.js';
-import { selectTask, selectUrl, reloadCurrentTask, updateReviewProgress, incrementTaskReviewedCount, showStatus, toast, $ } from './actions.js';
+import { selectTask, selectUrl, reloadCurrentTask, updateReviewProgress, incrementTaskIssueFixedCount, showStatus, toast, $ } from './actions.js';
 import { initTaskPanel } from './components/task-panel.js';
 import { initUrlList } from './components/url-list.js';
 import { initPreview } from './components/preview.js';
@@ -143,15 +143,17 @@ async function onMarkReviewed() {
     const s = getState();
     if (!s.selectedTaskId || !s.selectedUrl) return;
     try {
-        const wasReviewed = s.urls.find(u => u.url === s.selectedUrl)?.reviewed;
+        const urlData = s.urls.find(u => u.url === s.selectedUrl);
+        const wasReviewed = urlData?.reviewed;
         await api.setReview(s.selectedTaskId, s.selectedUrl, 'ok');
         // Update local state
         const urls = s.urls.map(u => u.url === s.selectedUrl ? { ...u, reviewed: 'ok' } : u);
         setState({ urls });
-        if (!['ok', 'fixed', 'skip'].includes(wasReviewed)) {
-            incrementTaskReviewedCount(s.selectedTaskId);
+        // Only update issue progress if this URL has issues
+        if (!['ok', 'fixed', 'skip'].includes(wasReviewed) && urlData?.issues?.length > 0) {
+            incrementTaskIssueFixedCount(s.selectedTaskId);
+            await updateReviewProgress();
         }
-        await updateReviewProgress();
         toast('Marked as reviewed');
     } catch (err) {
         toast('Failed: ' + err.message, 'error');

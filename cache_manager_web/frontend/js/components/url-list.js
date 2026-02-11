@@ -65,7 +65,12 @@ function renderUrlList(container, s) {
         const isSelected = u.url === s.selectedUrl;
         let borderClass = 'clean';
         if (u.issues?.length > 0) {
-            borderClass = u.severity === 'definite' ? 'definite' : 'possible';
+            // Reviewed issue URLs show green instead of yellow/red
+            if (['ok', 'fixed', 'skip'].includes(u.reviewed)) {
+                borderClass = 'reviewed';
+            } else {
+                borderClass = u.severity === 'definite' ? 'definite' : 'possible';
+            }
         } else if (['ok', 'fixed', 'skip'].includes(u.reviewed)) {
             borderClass = 'reviewed';
         }
@@ -125,16 +130,18 @@ function renderUrlStats(el, s) {
 
 function renderProgressBar(s) {
     const bar = document.getElementById('url-progress-bar');
-    const total = s.urlTotal || s.urls.length;
-    const reviewed = s.urlReviewedCount || 0;
-    if (total === 0) {
+    // Progress tracks only issue URLs (yellow/red), not all URLs
+    const issueUrls = s.urls.filter(u => u.issues?.length > 0);
+    const fixedCount = issueUrls.filter(u => ['ok', 'fixed', 'skip'].includes(u.reviewed)).length;
+    const issueTotal = issueUrls.length;
+    if (issueTotal === 0) {
         bar.style.display = 'none';
         return;
     }
     bar.style.display = '';
-    const pct = Math.round((reviewed / total) * 100);
+    const pct = Math.round((fixedCount / issueTotal) * 100);
     bar.querySelector('.progress-fill').style.width = pct + '%';
-    bar.querySelector('.progress-text').textContent = `${reviewed}/${total} reviewed`;
+    bar.querySelector('.progress-text').textContent = `Fixed: ${fixedCount}/${issueTotal} issues`;
 }
 
 function filterUrls(s) {

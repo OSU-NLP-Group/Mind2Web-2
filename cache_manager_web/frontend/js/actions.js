@@ -38,13 +38,11 @@ export async function selectUrl(taskId, url) {
 
     if (isPdf) {
         setState({ currentText: '', currentIssues: { has_issues: false } });
-        // Auto-mark PDF as reviewed when viewed
+        // Auto-mark PDF as reviewed when viewed (no issue progress impact)
         if (urlData && !['ok', 'fixed', 'skip'].includes(urlData.reviewed)) {
             api.setReview(taskId, url, 'ok').catch(() => {});
             const urls = s.urls.map(u => u.url === url ? { ...u, reviewed: 'ok' } : u);
-            setState({ urls, urlReviewedCount: (s.urlReviewedCount || 0) + 1 });
-            incrementTaskReviewedCount(taskId);
-            updateReviewProgress();
+            setState({ urls });
         }
         return;
     }
@@ -54,16 +52,22 @@ export async function selectUrl(taskId, url) {
         const data = await api.getText(taskId, url);
         setState({ currentText: data.text, currentIssues: data.issues });
 
-        // Auto-mark clean URLs as reviewed when viewed
-        if (!data.issues?.has_issues) {
+        // Auto-mark as reviewed when viewed:
+        // - Clean URLs (no issues) — no progress impact
+        // - Possible-issue URLs (yellow) — viewing confirms they're OK
+        // - Definite-issue URLs (red) — require manual recapture/mark
+        if (!data.issues?.has_issues || data.issues?.severity !== 'definite') {
             const fresh = getState();
             const ud = fresh.urls.find(u => u.url === url);
             if (ud && !['ok', 'fixed', 'skip'].includes(ud.reviewed)) {
                 api.setReview(taskId, url, 'ok').catch(() => {});
                 const urls = fresh.urls.map(u => u.url === url ? { ...u, reviewed: 'ok' } : u);
-                setState({ urls, urlReviewedCount: (fresh.urlReviewedCount || 0) + 1 });
-                incrementTaskReviewedCount(taskId);
-                updateReviewProgress();
+                setState({ urls });
+                // Update issue progress for possible-issue URLs
+                if (data.issues?.has_issues) {
+                    incrementTaskIssueFixedCount(taskId);
+                    updateReviewProgress();
+                }
             }
         }
     } catch {
@@ -98,18 +102,18 @@ export async function updateReviewProgress() {
         const el = document.querySelector('#review-progress');
         if (el) {
             el.textContent = data.total > 0
-                ? `Reviewed: ${data.reviewed}/${data.total}`
+                ? `Fixed: ${data.reviewed}/${data.total} issues`
                 : '';
         }
     } catch {}
 }
 
-// ---- Task reviewed count ----
+// ---- Task issue fixed count ----
 
-export function incrementTaskReviewedCount(taskId) {
+export function incrementTaskIssueFixedCount(taskId) {
     const s = getState();
     const tasks = s.tasks.map(t =>
-        t.task_id === taskId ? { ...t, reviewed_count: (t.reviewed_count || 0) + 1 } : t
+        t.task_id === taskId ? { ...t, issue_reviewed_count: (t.issue_reviewed_count || 0) + 1 } : t
     );
     setState({ tasks });
 }
