@@ -39,6 +39,7 @@ dependencies = [
     "uvicorn[standard]",
     "markdownify",
     "html2text>=2025.4.15",
+    "pillow>=11.3.0",
     "rebrowser-playwright>=1.52.0",
     "validators>=0.35.0",
     "python-multipart>=0.0.22",
