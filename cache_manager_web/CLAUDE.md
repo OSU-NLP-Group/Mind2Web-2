@@ -72,11 +72,15 @@ This project uses `uv`, not pip. Use `uv run`, `uv sync`, `uv add`.
 | POST | /api/capture/batch/captcha | CAPTCHA detected notification |
 | POST | /api/capture | Receive capture from extension |
 | POST | /api/flag/{id} | Flag URL as issue (replace text) |
+| GET | /api/review/{id} | Get review statuses for a task |
 | POST | /api/review/{id} | Set review status |
 | GET | /api/review-progress | Overall progress |
 | GET | /api/answers/{id} | Answer markdown files |
+| POST | /api/urls/{id} | Add URL to task |
+| POST | /api/urls/{id}/pdf | Add PDF URL to task |
 | DELETE | /api/urls/{id} | Delete URL |
 | POST | /api/upload-mhtml/{id} | Upload MHTML |
+| POST | /api/scan | Re-scan all tasks for issues |
 | GET | /api/events | SSE stream |
 
 ## State Store (store.js)
@@ -106,7 +110,9 @@ Key state fields:
 | `Ctrl+Enter` | Mark as reviewed |
 | `Ctrl+U` | Recapture live |
 | `Ctrl+O` | Open cache folder |
+| `Ctrl+Wheel` | Zoom screenshot |
 | `?` | Show shortcuts help |
+| `Escape` | Close shortcuts modal |
 
 ## Common Tasks for Contributors
 

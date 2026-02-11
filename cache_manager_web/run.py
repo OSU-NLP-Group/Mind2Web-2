@@ -12,7 +12,7 @@ import argparse
 import webbrowser
 from pathlib import Path
 
-# Ensure project root is on the path so we can import mind2web2 / cache_manager
+# Ensure project root is on the path so we can import mind2web2
 project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 

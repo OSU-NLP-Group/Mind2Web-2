@@ -696,7 +696,7 @@ async def add_pdf_url(task_id: str, req: AddPdfRequest, file: UploadFile = File(
 async def upload_mhtml(task_id: str, url: str = Query(...), file: UploadFile = File(...)):
     """Upload an MHTML file to update a URL's cached content.
 
-    Parses MHTML using Python's email module (no PySide6/Qt dependency).
+    Parses MHTML using Python's email module.
     Extracts text from the first HTML part; uses a placeholder screenshot.
     """
     _require_loaded()
