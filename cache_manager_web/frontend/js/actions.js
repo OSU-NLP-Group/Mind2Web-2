@@ -31,19 +31,37 @@ export async function selectUrl(taskId, url) {
     setState({ selectedUrl: url, currentText: null, currentIssues: null });
     // Set capture target for the extension
     api.setCaptureTarget(taskId, url).catch(() => {});
-    // Load text content
+    // Check if this is a PDF (no text content available)
+    const s = getState();
+    const urlData = s.urls.find(u => u.url === url);
+    const isPdf = urlData?.content_type === 'pdf';
+
+    if (isPdf) {
+        setState({ currentText: '', currentIssues: { has_issues: false } });
+        // Auto-mark PDF as reviewed when viewed
+        if (urlData && !['ok', 'fixed', 'skip'].includes(urlData.reviewed)) {
+            api.setReview(taskId, url, 'ok').catch(() => {});
+            const urls = s.urls.map(u => u.url === url ? { ...u, reviewed: 'ok' } : u);
+            setState({ urls, urlReviewedCount: (s.urlReviewedCount || 0) + 1 });
+            incrementTaskReviewedCount(taskId);
+            updateReviewProgress();
+        }
+        return;
+    }
+
+    // Load text content for web URLs
     try {
         const data = await api.getText(taskId, url);
         setState({ currentText: data.text, currentIssues: data.issues });
 
         // Auto-mark clean URLs as reviewed when viewed
         if (!data.issues?.has_issues) {
-            const s = getState();
-            const urlData = s.urls.find(u => u.url === url);
-            if (urlData && !['ok', 'fixed', 'skip'].includes(urlData.reviewed)) {
+            const fresh = getState();
+            const ud = fresh.urls.find(u => u.url === url);
+            if (ud && !['ok', 'fixed', 'skip'].includes(ud.reviewed)) {
                 api.setReview(taskId, url, 'ok').catch(() => {});
-                const urls = s.urls.map(u => u.url === url ? { ...u, reviewed: 'ok' } : u);
-                setState({ urls, urlReviewedCount: (s.urlReviewedCount || 0) + 1 });
+                const urls = fresh.urls.map(u => u.url === url ? { ...u, reviewed: 'ok' } : u);
+                setState({ urls, urlReviewedCount: (fresh.urlReviewedCount || 0) + 1 });
                 incrementTaskReviewedCount(taskId);
                 updateReviewProgress();
             }

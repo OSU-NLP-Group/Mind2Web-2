@@ -99,11 +99,8 @@ function renderScreenshot(s) {
     // Check content type
     const urlData = s.urls.find(u => u.url === s.selectedUrl);
     if (urlData?.content_type === 'pdf') {
-        const pdfLink = api.pdfUrl(s.selectedTaskId, s.selectedUrl);
-        container.innerHTML = `<div class="placeholder">
-            PDF content<br><br>
-            <a href="${pdfLink}" target="_blank" style="color:var(--c-primary); font-size:14px;">Open PDF in new tab</a>
-        </div>`;
+        const pdfSrc = api.pdfUrl(s.selectedTaskId, s.selectedUrl);
+        container.innerHTML = `<iframe src="${pdfSrc}" class="pdf-embed"></iframe>`;
         currentImgEl = null;
         currentImgSrc = '';
         return;
@@ -155,7 +152,10 @@ function renderScreenshot(s) {
 
 function renderText(s) {
     const pre = document.getElementById('text-content');
-    if (s.currentText != null) {
+    const urlData = s.urls.find(u => u.url === s.selectedUrl);
+    if (urlData?.content_type === 'pdf') {
+        pre.textContent = 'PDF content — no extracted text available.\nUse the Screenshot tab to view the PDF.';
+    } else if (s.currentText != null) {
         pre.textContent = s.currentText;
     } else if (s.selectedUrl) {
         pre.textContent = 'Loading text...';

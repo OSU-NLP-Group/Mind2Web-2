@@ -428,6 +428,12 @@ body {
     transition: max-width .15s;
 }
 .screenshot-container img.original-size { max-width: none; }
+.pdf-embed {
+    width: 100%;
+    height: 100%;
+    border: none;
+    min-height: 600px;
+}
 .screenshot-container .placeholder {
     color: var(--c-text-muted);
     font-size: 14px;
