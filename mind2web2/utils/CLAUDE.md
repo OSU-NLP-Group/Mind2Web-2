@@ -29,7 +29,7 @@ task_dir/
 4. Full variant expansion (`_get_url_variants`) — generates 100+ variants per URL by combining scheme swaps, encoding variants, www prefix, utm params, trailing slashes
 
 ### page_info_retrieval.py — Browser-Based Web Capture
-**`BatchBrowserManager`**: Manages a shared Chromium browser (via rebrowser-playwright) for concurrent page capture.
+**`BatchBrowserManager`**: Manages a shared Chromium browser (via patchright) for concurrent page capture.
 - `capture_page(url, logger)` → `(screenshot_b64, text_content)`
 - Uses CDP (Chrome DevTools Protocol) for efficient screenshot + HTML capture
 - Converts HTML to markdown via `html2text`

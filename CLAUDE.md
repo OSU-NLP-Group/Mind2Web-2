@@ -70,7 +70,7 @@ return evaluator.get_summary()
 
 ```bash
 uv sync                         # Install dependencies
-rebrowser_playwright install     # Install browsers
+patchright install               # Install browsers
 export OPENAI_API_KEY="..."     # Required for evaluation
 ```
 
@@ -85,7 +85,7 @@ uv run run_eval.py --agent_name example --task_id yu_lineage
 ```
 
 ## Key Dependencies
-- **rebrowser-playwright**: Stealth browser automation for webpage capture
+- **patchright**: Stealth browser automation for webpage capture (undetected Playwright fork)
 - **openai**: LLM API calls (OpenAI / Azure OpenAI)
 - **pydantic**: Structured output parsing from LLM responses
 - **PyMuPDF (fitz)**: PDF parsing and rendering
