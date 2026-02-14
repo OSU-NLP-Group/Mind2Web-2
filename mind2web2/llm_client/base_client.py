@@ -20,11 +20,11 @@ class LLMClient():
                 self.client = OpenAIClient()
         elif provider == 'bedrock_anthropic':
             if is_async:
-                from mind2web2.llm_client.bedrock_anthropic_client import AsyncBedrockAntrhopicClient
-                self.client = AsyncBedrockAntrhopicClient()
+                from mind2web2.llm_client.bedrock_anthropic_client import AsyncBedrockAnthropicClient
+                self.client = AsyncBedrockAnthropicClient()
             else:
-                from mind2web2.llm_client.bedrock_anthropic_client import BedrockAntrhopicClient
-                self.client = BedrockAntrhopicClient()
+                from mind2web2.llm_client.bedrock_anthropic_client import BedrockAnthropicClient
+                self.client = BedrockAnthropicClient()
         else:
             raise ValueError(f'Provider {provider} not supported')
     

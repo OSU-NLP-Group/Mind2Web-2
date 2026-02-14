@@ -1,11 +1,7 @@
 from __future__ import annotations
-import sys
 from enum import Enum
 from typing import List, Literal, Optional
-from pydantic import BaseModel, Field, validator
-from pydantic import field_validator
-from .utils.misc import extract_doc_description_from_frame
-from pydantic import PrivateAttr
+from pydantic import BaseModel, Field, field_validator, PrivateAttr
 
 class AggregationStrategy(str, Enum):
     """How a parent node combines its children."""
@@ -26,11 +22,6 @@ class VerificationNode(BaseModel):
     children: List["VerificationNode"] = Field(default_factory=list)
 
 
-    # Provenance (optional)
-    # func: Optional[str] = None
-    # line: Optional[int] = None
-    # doc: Optional[str] = None
-
     _cached_score: Optional[float] = PrivateAttr(default=None)
 
     # Backward compatibility
@@ -45,14 +36,16 @@ class VerificationNode(BaseModel):
         self.desc = value
 
     # Validators
-    @validator("score")
+    @field_validator("score")
+    @classmethod
     def _score_in_range(cls, v: float) -> float:
         assert 0.0 <= v <= 1.0, "Score must lie in [0.0, 1.0]"
         return v
 
-    @validator("status")
-    def _status_matches_score(cls, v: str, values):
-        score = values.get("score")
+    @field_validator("status")
+    @classmethod
+    def _status_matches_score(cls, v: str, info) -> str:
+        score = info.data.get("score")
         if score is None:
             return v
         if v == "passed":
@@ -62,16 +55,6 @@ class VerificationNode(BaseModel):
         elif v in ("failed", "skipped"):
             assert score == 0.0
         return v
-
-    def model_post_init(self, __context: Optional[dict] = None) -> None:
-        """Capture caller frame for provenance."""
-        try:
-            frame = sys._getframe(2)
-            # self.func = frame.f_code.co_name
-            # self.line = frame.f_lineno
-            # self.doc = extract_doc_description_from_frame(frame)
-        except Exception:
-            pass
 
     def _validate_critical_consistency(self, node: VerificationNode, parent: VerificationNode) -> None:
         """

@@ -55,7 +55,8 @@ class BaseEvaluator:
             global_semaphore: asyncio.Semaphore,
             logger: logging.Logger,
             model="o4-mini",
-            config: Optional[EvaluatorConfig] = None  # Added configuration parameter
+            config: Optional[EvaluatorConfig] = None,
+            browser_manager: Optional[BatchBrowserManager] = None,
     ) -> None:
         self.client = client
         self.task_description = task_description
@@ -65,8 +66,10 @@ class BaseEvaluator:
         self.logger = logger
         self.pdf_parser = tool_pdf.PDFParser()
         self.MODEL_NAME = model
-        self.config = config or EvaluatorConfig()  # Initialize configuration
-        self.browser_manager = BatchBrowserManager(headless=False, max_concurrent_pages=50,max_retries=1)
+        self.config = config or EvaluatorConfig()
+        self.browser_manager = browser_manager or BatchBrowserManager(
+            headless=False, max_concurrent_pages=50, max_retries=1
+        )
 
     async def call_llm_with_semaphore(self, **kwargs):
         if "o" not in kwargs["model"]:
@@ -93,6 +96,18 @@ class BaseEvaluator:
         else:
             return [{"type": "text", "text": prompt}]
 
+    async def _capture_and_cache(self, url: str) -> Tuple[Optional[str], Optional[str]]:
+        """Capture page via browser and store in cache. Uses webpage semaphore."""
+        webpage_semaphore = getattr(self.semaphore, 'webpage', self.semaphore)
+        async with webpage_semaphore:
+            await asyncio.sleep(0.2 * random.random())
+            screenshot_b64, page_text = await self.browser_manager.capture_page(
+                url, self.logger,
+            )
+            if screenshot_b64 and page_text:
+                self.cache.put_web(url, page_text, screenshot_b64)
+            return screenshot_b64, page_text
+
     async def get_page_info(self, url: str, cancellation_event: Optional[asyncio.Event] = None):
         """Return (screenshot_b64, page_text). Uses global cache + semaphore."""
 
@@ -102,56 +117,35 @@ class BaseEvaluator:
             self.logger.debug(f"Page info retrieval cancelled for {url}")
             return None, None
 
-        early_stop = False
+        screenshot_b64 = None
+        page_text = None
+
+        # Try cache first
         if self.cache.has(url):
             if self.cache.has_pdf(url):
                 pdf_bytes = self.cache.get_pdf(url)
                 screenshot_b64, page_text = await self.pdf_parser.extract(pdf_bytes)
-                early_stop = True
             else:
                 page_text, screenshot_bytes = self.cache.get_web(url)
                 screenshot_b64 = base64.b64encode(screenshot_bytes).decode()
-                early_stop = True
-        if not early_stop:
-            self.logger.info(f"⚠️⚠️⚠️ No Cache for {url}")
-            print(f"⚠️⚠️⚠️ No Cache for {url}")
+        else:
+            self.logger.warning(f"No cache for {url}, falling back to live capture")
             if await is_pdf(url):
-
                 try:
                     screenshot_b64, page_text = await self.pdf_parser.extract(url)
                 except Exception as e:
                     self.logger.info(f"Fail to extract PDF from {url}: {e}")
-                    self.logger.info(f"Lets try extract from webpage by playwright on {url}")
-                    # Use webpage semaphore if available, fallback to default semaphore
-                    webpage_semaphore = getattr(self.semaphore, 'webpage', self.semaphore)
-                    async with webpage_semaphore:
-                        screenshot_b64, page_text = await self.browser_manager.capture_page(
-                            url,
-                            self.logger,
-                        )
-                        self.cache.put_web(url, page_text,screenshot_b64)
+                    self.logger.info(f"Falling back to browser capture for {url}")
+                    screenshot_b64, page_text = await self._capture_and_cache(url)
+                # If PDF extraction returned None text, fall back to browser
                 if page_text is None:
-                    # Use webpage semaphore if available, fallback to default semaphore
-                    webpage_semaphore = getattr(self.semaphore, 'webpage', self.semaphore)
-                    async with webpage_semaphore:
-                        await asyncio.sleep(0.2 * random.random())
-                        screenshot_b64, page_text = await self.browser_manager.capture_page(
-                            url,
-                            self.logger,
-                        )
-                        self.cache.put_web(url, page_text,screenshot_b64)
-
-
+                    screenshot_b64, page_text = await self._capture_and_cache(url)
             else:
-                # Use webpage semaphore if available, fallback to default semaphore
-                webpage_semaphore = getattr(self.semaphore, 'webpage', self.semaphore)
-                async with webpage_semaphore:
-                    await asyncio.sleep(0.2 * random.random())
-                    screenshot_b64, page_text = await self.browser_manager.capture_page(
-                            url,
-                            self.logger,
-                        )
-                    self.cache.put_web(url, page_text,screenshot_b64)
+                screenshot_b64, page_text = await self._capture_and_cache(url)
+
+        if page_text is None:
+            self.logger.warning(f"Failed to retrieve any content for {url}")
+            return None, None
 
         if len(page_text) > self.config.max_text_chars:
             page_text = textwrap.shorten(
@@ -969,10 +963,17 @@ def create_evaluator(
         default_model: str = "o4-mini",
         extract_model: Optional[str] = None,
         verify_model: Optional[str] = None,
-        config: Optional[EvaluatorConfig] = None
+        config: Optional[EvaluatorConfig] = None,
+        browser_manager: Optional[BatchBrowserManager] = None,
 ) -> Tuple[Extractor, Verifier]:
     extract_model = extract_model or default_model
     verify_model = verify_model or default_model
+
+    # Share a single browser manager between Extractor and Verifier
+    # to avoid creating duplicate Chromium processes
+    shared_browser = browser_manager or BatchBrowserManager(
+        headless=False, max_concurrent_pages=50, max_retries=1
+    )
 
     common_kwargs = {
         "client": client,
@@ -982,6 +983,7 @@ def create_evaluator(
         "global_semaphore": global_semaphore,
         "logger": logger,
         "config": config,
+        "browser_manager": shared_browser,
     }
 
     extractor = Extractor(**common_kwargs, model=extract_model)

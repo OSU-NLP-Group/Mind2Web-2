@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import logging
 import os
 import json
 import hashlib
 import base64
 from typing import Literal, List, Dict, Any, Optional, Tuple
 from urllib.parse import urldefrag, quote, unquote, quote_plus
-from functools import lru_cache
 from PIL import Image
 import io
 from .url_tools import normalize_url_simple, remove_utm_parameters
@@ -38,7 +38,8 @@ class CacheFileSys:
         self.task_dir = os.path.abspath(task_dir)
         self.index_file = os.path.join(self.task_dir, "index.json")
         self.urls: Dict[str, ContentType] = {}  # url -> "web"/"pdf"
-        
+        self._variant_cache: Dict[str, List[str]] = {}  # url -> variants
+
         # Create task directory if it doesn't exist
         os.makedirs(self.task_dir, exist_ok=True)
         
@@ -58,11 +59,11 @@ class CacheFileSys:
             decoded = decoded[:-1]
         return decoded
 
-    @lru_cache(maxsize=1000)
     def _get_url_variants(self, url: str) -> List[str]:
         """Generate all possible variants of URL for matching."""
-        #TODO: remove UTM SOURCE, or add CHATGPT/OPENAI
-        #TODO: probably want to
+        if url in self._variant_cache:
+            return self._variant_cache[url]
+
         def swap_scheme(u: str):
             if u.startswith("http://"):
                 return "https://" + u[7:]
@@ -137,6 +138,8 @@ class CacheFileSys:
             if variant not in seen:
                 seen.add(variant)
                 unique_variants.append(variant)
+
+        self._variant_cache[url] = unique_variants
         return unique_variants
 
     def _load_index(self):
@@ -146,7 +149,7 @@ class CacheFileSys:
                 with open(self.index_file, 'r', encoding='utf-8') as f:
                     loaded_urls = json.load(f)  # Direct load: {url: type}
             except (IOError, json.JSONDecodeError) as e:
-                print(f"Warning: Failed to load index: {e}. Starting with empty index.")
+                logging.getLogger(__name__).warning(f"Failed to load index: {e}. Starting with empty index.")
                 loaded_urls = {}
         else:
             loaded_urls = {}
@@ -170,7 +173,7 @@ class CacheFileSys:
             if files_exist:
                 self.urls[url] = content_type
             else:
-                print(f"Warning: Missing files for URL {url}, removing from index")
+                logging.getLogger(__name__).warning(f"Missing files for URL {url}, removing from index")
 
     def _find_url(self, url: str) -> Optional[str]:
         """Find stored URL that matches input URL (handling variants)."""
@@ -230,7 +233,7 @@ class CacheFileSys:
             return jpg_buffer.getvalue()
             
         except Exception as e:
-            print(f"Error converting image to JPG: {e}")
+            logging.getLogger(__name__).warning(f"Error converting image to JPG: {e}")
             if isinstance(image_data, str):
                 if image_data.startswith('data:image/'):
                     image_data = image_data.split(',', 1)[1]
@@ -353,4 +356,4 @@ class CacheFileSys:
             os.makedirs(self.task_dir, exist_ok=True)
         
         self.urls.clear()
-        self._get_url_variants.cache_clear()
+        self._variant_cache.clear()

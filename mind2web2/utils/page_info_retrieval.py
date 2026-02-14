@@ -221,7 +221,7 @@ class BatchBrowserManager:
             Tuple of (screenshot_b64, text_content)
         """
 
-        print(f"Start collecting page {url}")
+        logger.info(f"Start collecting page {url}")
         # Use semaphore to limit concurrent pages
         async with self._page_semaphore:
             # Ensure browser is running

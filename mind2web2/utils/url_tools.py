@@ -1,19 +1,9 @@
+import re
+from typing import List
 from urllib.parse import urldefrag, unquote, urlparse, parse_qs, urlencode, urlunparse
 
-import argparse
-import asyncio
-import json
-import os
-import random
-import re
-from pathlib import Path
-from typing import Any, Dict, List, Tuple, Optional
-from urllib.parse import urlparse
-from urllib.parse import urldefrag, unquote
-from pydantic import BaseModel
-from tqdm import tqdm
 import validators
-from urllib.parse import urldefrag, unquote, urlparse, parse_qs, urlencode, urlunparse
+from pydantic import BaseModel
 
 class URLs(BaseModel):
     urls: List[str]
@@ -23,8 +13,6 @@ def _is_valid_url(u: str) -> bool:
 
 def remove_utm_parameters(url: str) -> str:
     """Remove all UTM tracking parameters from URL."""
-    from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
-
     parsed = urlparse(url)
 
     # If there are no query parameters, return original URL

@@ -8,7 +8,7 @@ Unified interface for making LLM API calls across different providers.
 `LLMClient` is a simple router that delegates to provider-specific clients:
 - `provider="openai"` → `OpenAIClient` / `AsyncOpenAIClient`
 - `provider="azure_openai"` → `AzureOpenAIClient` / `AsyncAzureOpenAIClient`
-- `provider="bedrock_anthropic"` → `BedrockAntrhopicClient` / `AsyncBedrockAntrhopicClient`
+- `provider="bedrock_anthropic"` → `BedrockAnthropicClient` / `AsyncBedrockAnthropicClient`
 
 Key methods:
 - `response(**kwargs)`: Synchronous call (raises if `is_async=True`)

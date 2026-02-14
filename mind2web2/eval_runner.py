@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
-import traceback
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -173,7 +173,7 @@ async def _eval_one_answer(
         if result is not None:
             _save_result_json(result, output_dir / agent_name / task_id, timestamp, is_self_debug)
     except Exception as e:
-        print(f"Failed to save result for {agent_name}/{answer_name}: {e}")
+        logging.getLogger(__name__).error(f"Failed to save result for {agent_name}/{answer_name}: {e}")
         return e
 
     return result
@@ -262,7 +262,7 @@ async def evaluate_task(
 
     # Check if answer directory exists
     if not answer_root.exists():
-        print(f"⚠️ No answers found for {agent_name}/{task_id} at {answer_root}")
+        logging.getLogger(__name__).warning(f"No answers found for {agent_name}/{task_id} at {answer_root}")
         return []
 
     # ------------------------------------------------------------------
@@ -308,8 +308,8 @@ async def evaluate_task(
                 "answer_paths": [p.name for p in answer_paths]
             }
         )
-        print(f"-->> Answer Root: {answer_root}")
-        print(f"-->> Answers to Eval: {[p.name for p in answer_paths]}")
+        main_logger.info(f"-->> Answer Root: {answer_root}")
+        main_logger.info(f"-->> Answers to Eval: {[p.name for p in answer_paths]}")
 
         if not answer_paths:
             main_logger.warning(f"No answer files found in {answer_root}")
@@ -345,7 +345,7 @@ async def evaluate_task(
                         "operation": "answer_start"
                     }
                 )
-                print(f"👉 Starting {agent_name} {answer_name}")
+                main_logger.info(f"👉 Starting {agent_name} {answer_name}")
 
                 # 5‑A. Copy original md to answer folder (if not copied yet)
                 answer_folder = output_root / agent_name / task_id / answer_base
@@ -368,7 +368,7 @@ async def evaluate_task(
                             "operation": "reuse_result"
                         }
                     )
-                    print(f"⚠️ Existing result -- {agent_name} {answer_name}")
+                    main_logger.info(f"⚠️ Existing result -- {agent_name} {answer_name}")
                     try:
                         result = json.loads(latest.read_text(encoding="utf-8"))
                         main_logger.debug(
@@ -391,7 +391,6 @@ async def evaluate_task(
                                 "operation": "existing_result_error"
                             }
                         )
-                        traceback.print_exception(type(exc), exc, exc.__traceback__)
 
                 # 5‑C. Real evaluation
                 try:
@@ -440,7 +439,6 @@ async def evaluate_task(
                             "operation": "answer_exception"
                         }
                     )
-                    traceback.print_exception(type(exc), exc, exc.__traceback__)
                     return exc
 
         # ------------------------------------------------------------------
@@ -571,12 +569,12 @@ def merge_all_results(output_dir: Union[str, Path]) -> Dict[str, Dict[str, List[
                         results = json.load(fp)
                         merged_results[task_id][agent_name] = results
                 except Exception as e:
-                    print(f"Failed to load summary from {summary_file}: {e}")
+                    logging.getLogger(__name__).error(f"Failed to load summary from {summary_file}: {e}")
 
     # Save merged results
     merged_file = output_root / "all_results.json"
     with merged_file.open("w", encoding="utf-8") as fp:
         json.dump(dict(merged_results), fp, ensure_ascii=False, indent=4)
 
-    print(f"📊 Merged results saved to {merged_file}")
+    logging.getLogger(__name__).info(f"Merged results saved to {merged_file}")
     return dict(merged_results)
