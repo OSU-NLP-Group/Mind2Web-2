@@ -1046,7 +1046,11 @@ tr:hover {
 }
 
 .agent-link:visited {
-    color: #3273dc; /* Keep same color for visited links */
+    color: #3273dc;
+}
+
+.agent-link-pending {
+    cursor: help;
 }
 
 .agent-link strong {

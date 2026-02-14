@@ -243,6 +243,12 @@ class LeaderboardTable {
                             ${info.name}
                         </a>
                     </span>`;
+                } else if (!isHuman) {
+                    agentNameHtml = `<span class="agent-name-wrapper" data-agent-name="${info.name}">
+                        <a href="javascript:void(0)" class="agent-link agent-link-pending" title="Model details coming soon">
+                            ${info.name}
+                        </a>
+                    </span>`;
                 } else {
                     agentNameHtml = `<span class="agent-name-wrapper" data-agent-name="${info.name}">
                         ${info.name}
