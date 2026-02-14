@@ -1099,5 +1099,105 @@ tr:hover {
 }
 
 
+/* ===== Agent Popover Card ===== */
 
+.agent-popover {
+    position: absolute;
+    z-index: 1000;
+    display: none;
+    width: 280px;
+    background: white;
+    border: 1px solid #e1e4e8;
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+    font-family: 'Noto Sans', sans-serif;
+    font-size: 13px;
+    opacity: 0;
+    transform: translateY(4px);
+    transition: opacity 0.15s ease, transform 0.15s ease;
+    pointer-events: none;
+}
 
+.agent-popover.is-visible {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+}
+
+.agent-popover-header {
+    padding: 12px 14px 8px;
+    border-bottom: 1px solid #eee;
+}
+
+.agent-popover-name {
+    display: block;
+    font-weight: 600;
+    font-size: 15px;
+    color: #24292e;
+    margin-bottom: 2px;
+}
+
+.agent-popover-org {
+    display: block;
+    font-size: 12px;
+    color: #586069;
+}
+
+.agent-popover-body {
+    padding: 10px 14px 12px;
+}
+
+.agent-popover-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: 3px 0;
+}
+
+.agent-popover-label {
+    color: #586069;
+    font-size: 12px;
+    font-weight: 500;
+    min-width: 80px;
+}
+
+.agent-popover-value {
+    color: #24292e;
+    font-weight: 500;
+    text-align: right;
+}
+
+.agent-popover-desc {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px solid #f0f0f0;
+    display: block;
+}
+
+.agent-popover-description {
+    color: #586069;
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+/* Agent name wrapper for hover trigger */
+.agent-name-wrapper {
+    display: inline-block;
+    cursor: default;
+    position: relative;
+}
+
+.agent-name-wrapper .agent-link {
+    cursor: pointer;
+}
+
+@media screen and (max-width: 768px) {
+    .agent-popover {
+        width: 240px;
+        font-size: 12px;
+    }
+
+    .agent-popover-name {
+        font-size: 14px;
+    }
+}

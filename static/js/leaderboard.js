@@ -2,13 +2,17 @@ class LeaderboardTable {
     constructor() {
         this.data = null;
         this.currentSet = 'eval_set';
-        this.sortColumn = 'partial_completion';  // 改为默认按 partial_completion 排序
+        this.sortColumn = 'partial_completion';  // Default sort by partial_completion
         this.sortDirection = 'desc';
+        this.popover = null;
+        this.popoverTimeout = null;
+        this.isPopoverVisible = false;
         this.init();
     }
 
     async init() {
         await this.loadData();
+        this.createPopover();
         this.createTable();
         this.setupTabs();
     }
@@ -22,6 +26,146 @@ class LeaderboardTable {
         } catch (error) {
             console.error('Error loading leaderboard data:', error);
         }
+    }
+
+    createPopover() {
+        const existing = document.querySelector('.agent-popover');
+        if (existing) existing.remove();
+
+        const popover = document.createElement('div');
+        popover.className = 'agent-popover';
+        popover.innerHTML = `
+            <div class="agent-popover-header">
+                <span class="agent-popover-name"></span>
+                <span class="agent-popover-org"></span>
+            </div>
+            <div class="agent-popover-body">
+                <div class="agent-popover-row">
+                    <span class="agent-popover-label">Base Model</span>
+                    <span class="agent-popover-value" data-field="base_model"></span>
+                </div>
+                <div class="agent-popover-row">
+                    <span class="agent-popover-label">Architecture</span>
+                    <span class="agent-popover-value" data-field="architecture"></span>
+                </div>
+                <div class="agent-popover-row agent-popover-contact-row">
+                    <span class="agent-popover-label">Contact</span>
+                    <span class="agent-popover-value" data-field="contact"></span>
+                </div>
+                <div class="agent-popover-desc">
+                    <span class="agent-popover-description"></span>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(popover);
+        this.popover = popover;
+
+        // Keep popover visible when hovering over it
+        this.popover.addEventListener('mouseenter', () => {
+            clearTimeout(this.popoverTimeout);
+        });
+        this.popover.addEventListener('mouseleave', () => {
+            this.popoverTimeout = setTimeout(() => {
+                this.hidePopover();
+            }, 200);
+        });
+    }
+
+    showPopover(agentData, triggerElement) {
+        const info = agentData.info;
+        const details = info.details || {};
+
+        // Populate content
+        this.popover.querySelector('.agent-popover-name').textContent = info.name;
+        this.popover.querySelector('.agent-popover-org').textContent = details.organization || '';
+
+        // Only show rows that have values
+        const fields = ['base_model', 'architecture', 'contact'];
+        fields.forEach(field => {
+            const row = this.popover.querySelector(`[data-field="${field}"]`).closest('.agent-popover-row');
+            if (details[field]) {
+                this.popover.querySelector(`[data-field="${field}"]`).textContent = details[field];
+                row.style.display = '';
+            } else {
+                row.style.display = 'none';
+            }
+        });
+
+        // Description (only show if present)
+        const descEl = this.popover.querySelector('.agent-popover-description');
+        if (details.description) {
+            descEl.textContent = details.description;
+            descEl.parentElement.style.display = '';
+        } else {
+            descEl.parentElement.style.display = 'none';
+        }
+
+        // Show off-screen for measurement
+        this.popover.style.visibility = 'hidden';
+        this.popover.style.display = 'block';
+        this.popover.classList.remove('is-visible');
+
+        // Calculate position
+        const triggerRect = triggerElement.getBoundingClientRect();
+        const popoverRect = this.popover.getBoundingClientRect();
+        const scrollY = window.scrollY;
+        const scrollX = window.scrollX;
+        const viewportWidth = window.innerWidth;
+        const viewportHeight = window.innerHeight;
+
+        // Default: below and left-aligned to trigger
+        let top = triggerRect.bottom + scrollY + 8;
+        let left = triggerRect.left + scrollX;
+
+        // Flip above if not enough room below
+        if (triggerRect.bottom + popoverRect.height + 8 > viewportHeight) {
+            top = triggerRect.top + scrollY - popoverRect.height - 8;
+        }
+
+        // Adjust horizontally if going off-screen
+        if (left + popoverRect.width > viewportWidth + scrollX) {
+            left = triggerRect.right + scrollX - popoverRect.width;
+        }
+        if (left < scrollX) {
+            left = scrollX + 8;
+        }
+
+        this.popover.style.top = `${top}px`;
+        this.popover.style.left = `${left}px`;
+        this.popover.style.visibility = 'visible';
+        this.popover.classList.add('is-visible');
+        this.isPopoverVisible = true;
+    }
+
+    hidePopover() {
+        this.popover.classList.remove('is-visible');
+        this.isPopoverVisible = false;
+        setTimeout(() => {
+            if (!this.isPopoverVisible) {
+                this.popover.style.display = 'none';
+            }
+        }, 200);
+    }
+
+    setupPopovers() {
+        const wrappers = document.querySelectorAll('.agent-name-wrapper');
+
+        wrappers.forEach(wrapper => {
+            wrapper.addEventListener('mouseenter', () => {
+                const agentName = wrapper.dataset.agentName;
+                const agentData = this.data.find(d => d.info.name === agentName);
+                if (!agentData || !agentData.info.details) return;
+
+                clearTimeout(this.popoverTimeout);
+                this.showPopover(agentData, wrapper);
+            });
+
+            wrapper.addEventListener('mouseleave', () => {
+                this.popoverTimeout = setTimeout(() => {
+                    this.hidePopover();
+                }, 200);
+            });
+        });
     }
 
     createTable() {
@@ -72,10 +216,15 @@ class LeaderboardTable {
 
     renderTable() {
         const tableContainer = document.querySelector('#m2w2-table');
-        
+
         if (!tableContainer) {
             console.error('Table container not found!');
             return;
+        }
+
+        // Hide popover if visible during re-render
+        if (this.isPopoverVisible) {
+            this.hidePopover();
         }
 
         // Create single table with sticky header
@@ -116,20 +265,21 @@ class LeaderboardTable {
             sortedData.forEach((model, index) => {
                 const info = model.info;
                 const results = model[this.currentSet];
-                const isHuman = info.name === 'Human';  // 检查是否是 Human 行
+                const isHuman = info.name === 'Human';
 
                 let agentNameHtml;
                 if (info.url && info.url.trim() !== "") {
-                    // Create clickable link that opens in new tab
-                    agentNameHtml = `<a href="${info.url}" target="_blank" class="agent-link" rel="noopener noreferrer">
-                        ${info.name}
-                    </a>`;
+                    agentNameHtml = `<span class="agent-name-wrapper" data-agent-name="${info.name}">
+                        <a href="${info.url}" target="_blank" class="agent-link" rel="noopener noreferrer">
+                            ${info.name}
+                        </a>
+                    </span>`;
                 } else {
-                    // No URL available, just show the name
-                    agentNameHtml = `${info.name}`;
+                    agentNameHtml = `<span class="agent-name-wrapper" data-agent-name="${info.name}">
+                        ${info.name}
+                    </span>`;
                 }
 
-                // 为 Human 行添加特殊的 class 和样式
                 const rowClass = isHuman ? 'model-row human-row' : 'model-row';
                 const rankDisplay = isHuman ? '<span class="human-reference-badge">Reference</span>' : `${index + 1}`;
 
@@ -142,9 +292,9 @@ class LeaderboardTable {
                             </div>
                         </td>
                         <td class="has-text-centered">${info.date}</td>
-                        <td class="has-text-centered metric-cell">${this.formatMetric(results.partial_completion, isHuman ? null : maxValues.partial_completion)}</td>
-                        <td class="has-text-centered metric-cell">${this.formatMetric(results.success_rate, isHuman ? null : maxValues.success_rate)}</td>
-                        <td class="has-text-centered metric-cell">${this.formatMetric(results.pass3, isHuman ? null : maxValues.pass3)}</td>
+                        <td class="has-text-centered metric-cell">${this.formatMetric(results.partial_completion, isHuman ? null : maxValues.partial_completion, 2)}</td>
+                        <td class="has-text-centered metric-cell">${this.formatMetric(results.success_rate, isHuman ? null : maxValues.success_rate, 2)}</td>
+                        <td class="has-text-centered metric-cell">${this.formatMetric(results.pass3, isHuman ? null : maxValues.pass3, 2)}</td>
                         <td class="has-text-centered metric-cell">${this.formatMetric(results.time)}</td>
                         <td class="has-text-centered metric-cell">${this.formatMetric(results.answer_length)}</td>
                     </tr>
@@ -165,23 +315,24 @@ class LeaderboardTable {
         // Replace table content
         tableContainer.innerHTML = tableHtml;
 
-        // Setup sorting
+        // Setup sorting and popovers
         this.setupSorting();
+        this.setupPopovers();
     }
 
     getSortIcon(column) {
         if (this.sortColumn === column) {
             const defaultOrder = document.querySelector(`[data-column="${column}"]`)?.dataset.sortOrder || 'desc';
-            
+
             // For columns where ascending is "better" (time, answer_length)
             if (defaultOrder === 'asc') {
-                return this.sortDirection === 'asc' ? 
-                    '<i class="fas fa-arrow-down"></i>' : 
+                return this.sortDirection === 'asc' ?
+                    '<i class="fas fa-arrow-down"></i>' :
                     '<i class="fas fa-arrow-up"></i>';
             } else {
                 // For columns where descending is "better" (scores, rates)
-                return this.sortDirection === 'asc' ? 
-                    '<i class="fas fa-arrow-up"</i>' : 
+                return this.sortDirection === 'asc' ?
+                    '<i class="fas fa-arrow-up"</i>' :
                     '<i class="fas fa-arrow-down"></i>';
             }
         }
@@ -196,25 +347,22 @@ class LeaderboardTable {
         };
 
         data.forEach(model => {
-            // 跳过 Human 数据
             if (model.info?.name === 'Human') {
                 return;
             }
-            
+
             const results = model[this.currentSet];
-            
-            // Check each metric
+
             ['partial_completion', 'success_rate', 'pass3'].forEach(metric => {
                 const value = results[metric];
                 if (value !== "-" && value !== null && value !== undefined) {
-                    // Parse the numeric value (handle strings with ± symbols)
                     let numValue;
                     if (typeof value === 'string') {
                         numValue = parseFloat(value.replace(/[,±]/g, '').split('±')[0]);
                     } else {
                         numValue = parseFloat(value);
                     }
-                    
+
                     if (!isNaN(numValue) && numValue > maxValues[metric]) {
                         maxValues[metric] = numValue;
                     }
@@ -225,31 +373,27 @@ class LeaderboardTable {
         return maxValues;
     }
 
-    // Helper method to parse values with special formats
     parseValueForSorting(value, column) {
         if (value === "-" || value === null || value === undefined) {
             return null;
         }
-        
+
         if (typeof value !== 'string') {
             return parseFloat(value);
         }
-        
-        // Handle specific column formats
+
         if (column === 'time') {
-            // Handle "<1", ">100", etc.
             if (value.startsWith('<')) {
-                return parseFloat(value.substring(1)) * 0.5; // Treat as half the value
+                return parseFloat(value.substring(1)) * 0.5;
             }
             if (value.startsWith('>')) {
-                return parseFloat(value.substring(1)) * 1.5; // Treat as 1.5x the value
+                return parseFloat(value.substring(1)) * 1.5;
             }
             if (value.startsWith('~')) {
-                return parseFloat(value.substring(1)); // Treat as approximate value
+                return parseFloat(value.substring(1));
             }
         }
-        
-        // Default parsing (handles ± symbols)
+
         return parseFloat(value.replace(/[,±]/g, '').split('±')[0]);
     }
 
@@ -260,101 +404,97 @@ class LeaderboardTable {
             return [];
         }
 
-        // 先分离出 Human 和其他条目
         const humanData = this.data.filter(item => item.info?.name === 'Human');
         const otherData = this.data.filter(item => item.info?.name !== 'Human');
-        
-        // 对非 Human 条目进行排序
+
         const sortedOtherData = otherData.sort((a, b) => {
             let aValue, bValue;
-            
+
             if (this.sortColumn === 'date') {
                 aValue = new Date(a.info?.date || 0);
                 bValue = new Date(b.info?.date || 0);
             } else {
                 const rawAValue = a[this.currentSet]?.[this.sortColumn];
                 const rawBValue = b[this.currentSet]?.[this.sortColumn];
-                
-                // Handle "-" values first
+
                 if (rawAValue === "-" && rawBValue === "-") return 0;
                 if (rawAValue === "-") return this.sortDirection === 'asc' ? 1 : -1;
                 if (rawBValue === "-") return this.sortDirection === 'asc' ? -1 : 1;
-                
-                // Parse values using the helper method
+
                 aValue = this.parseValueForSorting(rawAValue, this.sortColumn);
                 bValue = this.parseValueForSorting(rawBValue, this.sortColumn);
             }
-            
-            // Sort based on direction
+
             if (this.sortDirection === 'asc') {
                 return aValue < bValue ? -1 : aValue > bValue ? 1 : 0;
             } else {
                 return aValue > bValue ? -1 : aValue < bValue ? 1 : 0;
             }
         });
-        
-        // Human 总是在最前面
+
         return [...humanData, ...sortedOtherData];
     }
 
     setupSorting() {
         const sortableHeaders = document.querySelectorAll('.sortable-header');
-        
+
         sortableHeaders.forEach(header => {
             header.addEventListener('click', () => {
                 const column = header.dataset.column;
-                const defaultSortOrder = header.dataset.sortOrder || 'desc'; // Get the default sort order
-                
+                const defaultSortOrder = header.dataset.sortOrder || 'desc';
+
                 if (this.sortColumn === column) {
-                    // If clicking the same column, toggle direction
                     this.sortDirection = this.sortDirection === 'asc' ? 'desc' : 'asc';
                 } else {
-                    // If clicking a new column, use its default sort order
                     this.sortColumn = column;
                     this.sortDirection = defaultSortOrder;
                 }
-                
+
                 this.renderTable();
             });
         });
     }
 
-    formatMetric(value, maxValue = null) {
+    formatMetric(value, maxValue = null, decimals = null) {
         if (value === "-" || value === null || value === undefined) {
             return '<span class="has-text-grey">-</span>';
         }
 
-        // If maxValue is provided, check if this value should be bolded
+        // Parse the numeric value
+        let numValue;
+        if (typeof value === 'string') {
+            numValue = parseFloat(value.replace(/[,±]/g, '').split('±')[0]);
+        } else {
+            numValue = parseFloat(value);
+        }
+
+        // Format display value with specified decimal places
+        let displayValue = value;
+        if (decimals !== null && !isNaN(numValue)) {
+            displayValue = numValue.toFixed(decimals);
+        }
+
+        // Check if this is the max value (bold it)
         if (maxValue !== null) {
-            // Parse the numeric value for comparison
-            let numValue;
-            if (typeof value === 'string') {
-                numValue = parseFloat(value.replace(/[,±]/g, '').split('±')[0]);
-            } else {
-                numValue = parseFloat(value);
-            }
-
-            // Check if this is the maximum value (with small epsilon for floating point comparison)
             const isMaxValue = !isNaN(numValue) && Math.abs(numValue - maxValue) < 0.001;
-
             if (isMaxValue) {
-                return `<span class="metric-max"><strong>${value}</strong></span>`;
+                return `<span class="metric-max"><strong>${displayValue}</strong></span>`;
             }
         }
-        
-        return value;
+
+        return displayValue;
     }
 
     setupTabs() {
         const tabItems = document.querySelectorAll('.tab-item');
-        
+
         tabItems.forEach(tab => {
             tab.addEventListener('click', (e) => {
                 e.preventDefault();
-                
+
                 tabItems.forEach(t => t.classList.remove('is-active'));
                 tab.classList.add('is-active');
-                
+
                 this.currentSet = tab.dataset.set;
                 this.renderTable();
             });

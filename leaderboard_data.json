@@ -6,7 +6,12 @@
         "date": "2025-06-26",
         "type": "deep_research",
         "tags": ["proprietary", "openai"],
-        "url": "https://openai.com/index/introducing-deep-research/"
+        "url": "https://openai.com/index/introducing-deep-research/",
+        "details": {
+          "base_model": "",
+          "architecture": "Deep Research",
+          "organization": "OpenAI"
+        }
       },
       "eval_set": {
         "partial_completion": "0.54",
@@ -22,7 +27,12 @@
         "date": "2025-10-23",
         "type": "deep_research",
         "tags": ["proprietary", "tencent"],
-        "url": "https://open.youtu.qq.com/"
+        "url": "https://open.youtu.qq.com/",
+        "details": {
+          "base_model": "",
+          "architecture": "Deep Research",
+          "organization": "Tencent Youtu"
+        }
       },
       "eval_set": {
         "partial_completion": "0.60",
@@ -38,7 +48,12 @@
         "date": "2025-06-26",
         "type": "deep_research",
         "tags": ["proprietary", "google"],
-        "url": "https://gemini.google/overview/deep-research/"
+        "url": "https://gemini.google/overview/deep-research/",
+        "details": {
+          "base_model": "",
+          "architecture": "Deep Research",
+          "organization": "Google DeepMind"
+        }
       },
       "eval_set": {
         "partial_completion": "0.45",
@@ -54,7 +69,12 @@
         "date": "2025-06-26",
         "type": "deep_research",
         "tags": ["proprietary", "grok"],
-        "url": "https://x.ai/news/grok-3"
+        "url": "https://x.ai/news/grok-3",
+        "details": {
+          "base_model": "",
+          "architecture": "Deep Research",
+          "organization": "xAI"
+        }
       },
       "eval_set": {
         "partial_completion": "0.52",
@@ -70,7 +90,12 @@
         "date": "2025-06-26",
         "type": "deep_research",
         "tags": ["proprietary", "perplexity"],
-        "url": "https://www.perplexity.ai/hub/blog/introducing-perplexity-deep-research"
+        "url": "https://www.perplexity.ai/hub/blog/introducing-perplexity-deep-research",
+        "details": {
+          "base_model": "",
+          "architecture": "Deep Research",
+          "organization": "Perplexity AI"
+        }
       },
       "eval_set": {
         "partial_completion": "0.42",
@@ -86,7 +111,12 @@
         "date": "2025-06-26",
         "type": "deep_research",
         "tags": ["proprietary", "grok"],
-        "url": "https://x.ai/news/grok-3"
+        "url": "https://x.ai/news/grok-3",
+        "details": {
+          "base_model": "",
+          "architecture": "Deep Research",
+          "organization": "xAI"
+        }
       },
       "eval_set": {
         "partial_completion": "0.40",
@@ -102,7 +132,12 @@
         "date": "2025-06-26",
         "type": "deep_research",
         "tags": ["open_source", "huggingface"],
-        "url": "https://huggingface.co/blog/open-deep-research"
+        "url": "https://huggingface.co/blog/open-deep-research",
+        "details": {
+          "base_model": "o3",
+          "architecture": "Deep Research",
+          "organization": "Hugging Face"
+        }
       },
       "eval_set": {
         "partial_completion": "0.26",
@@ -118,7 +153,12 @@
         "date": "2025-06-26",
         "type": "search_llm",
         "tags": ["proprietary", "perplexity"],
-        "url": "https://www.perplexity.ai/hub/blog/pro-search-upgraded-for-more-advanced-problem-solving"
+        "url": "https://www.perplexity.ai/hub/blog/pro-search-upgraded-for-more-advanced-problem-solving",
+        "details": {
+          "base_model": "",
+          "architecture": "",
+          "organization": "Perplexity AI"
+        }
       },
       "eval_set": {
         "partial_completion": "0.28",
@@ -134,7 +174,12 @@
         "date": "2025-06-26",
         "type": "search_llm",
         "tags": ["proprietary", "openai"],
-        "url": "https://openai.com/index/introducing-chatgpt-search/"
+        "url": "https://openai.com/index/introducing-chatgpt-search/",
+        "details": {
+          "base_model": "GPT-4o",
+          "architecture": "Search-Augmented LLM",
+          "organization": "OpenAI"
+        }
       },
       "eval_set": {
         "partial_completion": "0.26",
@@ -150,7 +195,12 @@
         "date": "2025-06-26",
         "type": "interactive_agent",
         "tags": ["proprietary", "openai"],
-        "url": "https://openai.com/index/introducing-operator/"
+        "url": "https://openai.com/index/introducing-operator/",
+        "details": {
+          "base_model": "CUA",
+          "architecture": "Openai CUA",
+          "organization": "OpenAI"
+        }
       },
       "eval_set": {
         "partial_completion": "0.26",
@@ -166,7 +216,7 @@
         "date": "2025-06-26",
         "type": "human",
         "tags": [],
-        "url": ""
+        "url": "https://arxiv.org/pdf/2506.21506"
       },
       "eval_set": {
         "partial_completion": "0.79",
@@ -182,7 +232,12 @@
         "date": "2025-07-03",
         "type": "deep_research",
         "tags": ["proprietary", "anthropic"],
-        "url": "https://www.anthropic.com/news/research"
+        "url": "https://www.anthropic.com/news/research",
+        "details": {
+          "base_model": "",
+          "architecture": "Deep Research",
+          "organization": "Anthropic"
+        }
       },
       "eval_set": {
         "partial_completion": "0.32",
@@ -190,6 +245,29 @@
         "pass3": "0.19",
         "time": "7.39",
         "answer_length": "742"
+      }
+    },
+    {
+      "info": {
+        "name": "JudyAgent",
+        "date": "2026-02-11",
+        "type": "interactive_agent",
+        "tags": ["independent"],
+        "url": "",
+        "details": {
+          "base_model": "GPT-4.1",
+          "architecture": "Multi-Agent System",
+          "organization": "Independent Researcher",
+          "contact": "Kai Zhou (zhoukai83@outlook.com)",
+          "description": "Multi-agent system with planners and executors."
+        }
+      },
+      "eval_set": {
+        "partial_completion": "0.552",
+        "success_rate": "0.2646",
+        "pass3": "0.40",
+        "time": "-",
+        "answer_length": "220"
       }
     }
   ]
