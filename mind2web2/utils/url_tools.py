@@ -9,7 +9,7 @@ class URLs(BaseModel):
     urls: List[str]
 
 def _is_valid_url(u: str) -> bool:
-    return validators.url(u, public=True) is True
+    return validators.url(u) is True
 
 def remove_utm_parameters(url: str) -> str:
     """Remove all UTM tracking parameters from URL."""
