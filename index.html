@@ -597,16 +597,19 @@
     <section class="section" id="BibTeX">
       <div class="container is-max-desktop content">
         <h2 class="title is-3 has-text-centered">BibTeX</h2>
-        <pre><code>
-          @inproceedings{
-              gou2025mindweb,
-              title={Mind2Web 2: Evaluating Agentic Search with Agent-as-a-Judge},
-              author={Boyu Gou and Zanming Huang and Yuting Ning and Yu Gu and Michael Lin and Botao Yu and Andrei Kopanev and Weijian Qi and Yiheng Shu and Jiaman Wu and Chan Hee Song and Bernal Jimenez Gutierrez and Yifei Li and Zeyi Liao and Hanane Nour Moussa and TIANSHU ZHANG and Jian Xie and Tianci Xue and Shijie Chen and Boyuan Zheng and Kai Zhang and Zhaowei Cai and Viktor Rozgic and Morteza Ziyadi and Huan Sun and Yu Su},
-              booktitle={The Thirty-ninth Annual Conference on Neural Information Processing Systems Datasets and Benchmarks Track},
-              year={2025},
-              url={https://openreview.net/forum?id=AUaW6DS9si}
-          }
-    </code></pre>
+        <div class="bibtex-wrapper">
+          <button class="bibtex-copy-btn" onclick="copyBibtex()" title="Copy to clipboard">
+            <i class="fas fa-copy"></i> Copy
+          </button>
+          <pre><code id="bibtex-content">@inproceedings{
+    gou2025mind2web2,
+    title={Mind2Web 2: Evaluating Agentic Search with Agent-as-a-Judge},
+    author={Boyu Gou and Zanming Huang and Yuting Ning and Yu Gu and Michael Lin and Botao Yu and Andrei Kopanev and Weijian Qi and Yiheng Shu and Jiaman Wu and Chan Hee Song and Bernal Jimenez Gutierrez and Yifei Li and Zeyi Liao and Hanane Nour Moussa and TIANSHU ZHANG and Jian Xie and Tianci Xue and Shijie Chen and Boyuan Zheng and Kai Zhang and Zhaowei Cai and Viktor Rozgic and Morteza Ziyadi and Huan Sun and Yu Su},
+    booktitle={The Thirty-ninth Annual Conference on Neural Information Processing Systems Datasets and Benchmarks Track},
+    year={2025},
+    url={https://openreview.net/forum?id=AUaW6DS9si}
+}</code></pre>
+        </div>
       </div>
     </section>
 
@@ -626,7 +629,20 @@
   <script src="./static/js/task-explorer.js"></script>
   <script src="./static/js/rubric-tree-explorer.js"></script>
   <script src="./static/js/leaderboard.js"></script>
-  <script src="./static/js/index.js"></script>
+  <script>
+    function copyBibtex() {
+      const text = document.getElementById('bibtex-content').textContent;
+      navigator.clipboard.writeText(text).then(() => {
+        const btn = document.querySelector('.bibtex-copy-btn');
+        btn.innerHTML = '<i class="fas fa-check"></i> Copied';
+        btn.classList.add('copied');
+        setTimeout(() => {
+          btn.innerHTML = '<i class="fas fa-copy"></i> Copy';
+          btn.classList.remove('copied');
+        }, 2000);
+      });
+    }
+  </script>
 
 
   </body>

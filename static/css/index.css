@@ -1222,6 +1222,37 @@ tr:hover {
     color: #888;
 }
 
+/* ===== BibTeX Copy Button ===== */
+.bibtex-wrapper {
+    position: relative;
+}
+
+.bibtex-copy-btn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    background: #f5f5f5;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 4px 10px;
+    font-size: 12px;
+    color: #555;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    z-index: 1;
+}
+
+.bibtex-copy-btn:hover {
+    background: #e8e8e8;
+    color: #333;
+}
+
+.bibtex-copy-btn.copied {
+    background: #d4edda;
+    border-color: #c3e6cb;
+    color: #155724;
+}
+
 /* ===== Equal Contribution Note ===== */
 .equal-contribution {
     font-size: 15px;
