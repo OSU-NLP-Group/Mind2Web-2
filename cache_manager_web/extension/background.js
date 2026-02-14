@@ -146,6 +146,24 @@ async function capturePage(tab, opts = {}) {
             url = target.url;
         }
 
+        // Check if page is a PDF — handle differently
+        const isPdf = await detectPdfInTab(tab.id) || (tab.url && tab.url.toLowerCase().endsWith('.pdf'));
+        if (isPdf) {
+            const actual_url = tab.url && tab.url !== url ? tab.url : undefined;
+            const ok = await capturePdfAndUpload(task_id, url, actual_url);
+            if (!ok) {
+                setBadge('✗', '#dc2626', 3000);
+                return { success: false, error: 'Failed to download PDF' };
+            }
+            if (batchMode) {
+                setBadge('✓', '#22c55e', 1000);
+                return { success: true, batch: true };
+            }
+            setBadge('✓', '#22c55e', 2000);
+            await switchToCacheManager(tab.id);
+            return { success: true };
+        }
+
         // Extract text from the page
         const textResults = await chrome.scripting.executeScript({
             target: { tabId: tab.id },
@@ -396,6 +414,60 @@ function stopCaptchaPolling() {
 }
 
 // ---------------------------------------------------------------------------
+// PDF detection and download
+// ---------------------------------------------------------------------------
+
+/**
+ * Detect if the tab is showing Chrome's built-in PDF viewer.
+ * Returns true if the page is a PDF.
+ */
+async function detectPdfInTab(tabId) {
+    try {
+        const results = await chrome.scripting.executeScript({
+            target: { tabId },
+            func: () => {
+                // Chrome's PDF viewer uses an <embed type="application/pdf">
+                const embed = document.querySelector('embed[type="application/pdf"]');
+                if (embed) return true;
+                // Also check if the content type meta tag says PDF
+                const ct = document.contentType || '';
+                if (ct === 'application/pdf') return true;
+                return false;
+            },
+        });
+        return results?.[0]?.result || false;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Download PDF bytes from a URL and upload to the backend.
+ * Returns true on success.
+ */
+async function capturePdfAndUpload(taskId, url, actualUrl) {
+    const downloadUrl = actualUrl || url;
+    try {
+        const res = await fetch(downloadUrl);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const blob = await res.blob();
+
+        const form = new FormData();
+        form.append('file', blob, 'page.pdf');
+
+        const uploadRes = await fetch(
+            `${BACKEND}/api/upload-pdf/${encodeURIComponent(taskId)}?url=${encodeURIComponent(url)}`,
+            { method: 'POST', body: form }
+        );
+        if (!uploadRes.ok) throw new Error(`Upload failed: ${uploadRes.status}`);
+        return true;
+    } catch (err) {
+        console.warn('capturePdfAndUpload failed:', err);
+        return false;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Auto-capture helper
 // ---------------------------------------------------------------------------
 
@@ -411,6 +483,26 @@ async function autoCaptureAndAdvance(tabId, retryCount = 0) {
         }
 
         const tab = await chrome.tabs.get(tabId);
+
+        // Check if page is actually a PDF (e.g., URL was misrecorded as "web")
+        const isPdf = await detectPdfInTab(tabId);
+        if (isPdf || (tab.url && tab.url.toLowerCase().endsWith('.pdf'))) {
+            setBatchStatus('capturing');
+            batchLog(`PDF detected: ${truncUrl(status.current.url)}`, 'info');
+            const actual_url = tab.url && tab.url !== status.current.url ? tab.url : undefined;
+            const ok = await capturePdfAndUpload(status.current.task_id, status.current.url, actual_url);
+            if (ok) {
+                batchLog(`PDF saved OK`, 'success');
+                setBadge('✓', '#22c55e', 1000);
+            } else {
+                batchLog(`PDF download failed, skipping`, 'error');
+                await skipAndAdvance();
+                return;
+            }
+            await sleep(500);
+            await advanceBatch();
+            return;
+        }
 
         // Check if page body is too short (may need retry)
         if (retryCount < MAX_RETRIES) {

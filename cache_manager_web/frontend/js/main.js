@@ -41,7 +41,12 @@ function initToolbar() {
     $('#btn-next-issue').addEventListener('click', () => navigateIssue(1));
     $('#btn-mark-reviewed').addEventListener('click', onMarkReviewed);
     $('#btn-open-browser').addEventListener('click', onOpenInBrowser);
+    $('#btn-flag-issue').addEventListener('click', onFlagAsIssue);
+    $('#btn-reset-url').addEventListener('click', onResetUrl);
+    $('#btn-edit-url').addEventListener('click', onEditUrl);
+    $('#btn-add-url').addEventListener('click', onAddUrl);
     $('#btn-delete-url').addEventListener('click', onDeleteUrl);
+    $('#btn-upload-pdf').addEventListener('click', () => $('#pdf-picker').click());
     $('#btn-upload-mhtml').addEventListener('click', onUploadMhtml);
     $('#btn-recapture').addEventListener('click', onRecapture);
     $('#btn-batch').addEventListener('click', onBatchRecapture);
@@ -63,6 +68,25 @@ function initToolbar() {
         e.target.value = '';
     });
 
+    // PDF file picker callback
+    $('#pdf-picker').addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const s = getState();
+        if (!s.selectedTaskId || !s.selectedUrl) return;
+        try {
+            showStatus('Uploading PDF...', 'warning');
+            await api.uploadPdf(s.selectedTaskId, s.selectedUrl, file);
+            toast('PDF uploaded — content type switched to PDF', 'success');
+            setState({ contentVersion: s.contentVersion + 1 });
+            await reloadCurrentTask();
+            await updateReviewProgress();
+        } catch (err) {
+            toast('PDF upload failed: ' + err.message, 'error');
+        }
+        e.target.value = '';
+    });
+
     subscribe((s) => {
         $('#btn-refresh').disabled = !s.loaded;
         const hasIssues = s.issueIndex.length > 0;
@@ -77,9 +101,15 @@ function initToolbar() {
             ? `${s.agentName} | ${s.stats.total_tasks || 0} tasks | ${s.stats.total_urls || 0} URLs`
             : 'No cache loaded';
         const hasUrl = !!(s.selectedTaskId && s.selectedUrl);
+        const hasTask = !!s.selectedTaskId;
         $('#btn-mark-reviewed').disabled = !hasUrl;
         $('#btn-open-browser').disabled = !hasUrl;
+        $('#btn-flag-issue').disabled = !hasUrl;
+        $('#btn-reset-url').disabled = !hasUrl;
+        $('#btn-edit-url').disabled = !hasUrl;
+        $('#btn-add-url').disabled = !hasTask;
         $('#btn-delete-url').disabled = !hasUrl;
+        $('#btn-upload-pdf').disabled = !hasUrl;
         $('#btn-upload-mhtml').disabled = !hasUrl;
         $('#btn-recapture').disabled = !hasUrl;
         // Batch button: enabled when there are definite-severity issues
@@ -176,11 +206,18 @@ async function onFlagAsIssue() {
     if (!s.selectedTaskId || !s.selectedUrl) return;
     try {
         await api.flagUrl(s.selectedTaskId, s.selectedUrl);
+        const urlData = s.urls.find(u => u.url === s.selectedUrl);
+        const isPdf = urlData?.content_type === 'pdf';
         // Update local state: mark URL as having issues, clear review
         const urls = s.urls.map(u => u.url === s.selectedUrl
-            ? { ...u, issues: ['access denied'], severity: 'definite', reviewed: '' }
+            ? { ...u, issues: ['flagged'], severity: 'definite', reviewed: '' }
             : u);
-        setState({ urls, currentText: 'access denied', currentIssues: { has_issues: true, severity: 'definite', keywords: ['access denied'], patterns: [] } });
+        const updates = { urls };
+        if (!isPdf) {
+            updates.currentText = 'access denied';
+            updates.currentIssues = { has_issues: true, severity: 'definite', keywords: ['flagged'], patterns: [] };
+        }
+        setState(updates);
         toast('Flagged as issue (red)');
     } catch (err) {
         toast('Flag failed: ' + err.message, 'error');
@@ -198,7 +235,6 @@ async function onOpenInBrowser() {
 async function onDeleteUrl() {
     const s = getState();
     if (!s.selectedTaskId || !s.selectedUrl) return;
-    if (!confirm(`Delete ${s.selectedUrl}?`)) return;
     try {
         await api.deleteUrl(s.selectedTaskId, s.selectedUrl);
         setState({ selectedUrl: null, currentText: null, currentIssues: null });
@@ -206,6 +242,55 @@ async function onDeleteUrl() {
         toast('URL deleted');
     } catch (err) {
         toast('Delete failed: ' + err.message, 'error');
+    }
+}
+
+async function onResetUrl() {
+    const s = getState();
+    if (!s.selectedTaskId || !s.selectedUrl) return;
+    try {
+        showStatus('Resetting URL...', 'warning');
+        await api.resetUrl(s.selectedTaskId, s.selectedUrl);
+        toast('URL cache reset and flagged for recapture', 'success');
+        setState({ contentVersion: s.contentVersion + 1 });
+        await reloadCurrentTask();
+        await updateReviewProgress();
+    } catch (err) {
+        toast('Reset failed: ' + err.message, 'error');
+    }
+}
+
+async function onEditUrl() {
+    const s = getState();
+    if (!s.selectedTaskId || !s.selectedUrl) return;
+    const newUrl = prompt('Edit URL:', s.selectedUrl);
+    if (!newUrl || newUrl === s.selectedUrl) return;
+    try {
+        showStatus('Renaming URL...', 'warning');
+        await api.renameUrl(s.selectedTaskId, s.selectedUrl, newUrl.trim());
+        toast('URL renamed successfully', 'success');
+        setState({ selectedUrl: newUrl.trim(), contentVersion: s.contentVersion + 1 });
+        await reloadCurrentTask();
+    } catch (err) {
+        toast('Rename failed: ' + err.message, 'error');
+    }
+}
+
+async function onAddUrl() {
+    const s = getState();
+    if (!s.selectedTaskId) return;
+    const url = prompt('Enter a new URL to add:');
+    if (!url) return;
+    try {
+        showStatus('Adding URL...', 'warning');
+        await api.addUrl(s.selectedTaskId, url.trim());
+        toast('URL added and flagged for capture', 'success');
+        setState({ contentVersion: s.contentVersion + 1 });
+        await reloadCurrentTask();
+        await updateReviewProgress();
+        selectUrl(s.selectedTaskId, url.trim());
+    } catch (err) {
+        toast('Add URL failed: ' + err.message, 'error');
     }
 }
 
@@ -287,10 +372,21 @@ function initKeyboardShortcuts() {
         // Don't handle single-key shortcuts when typing in inputs
         if (inInput) return;
 
+        // Actions
         if (e.key === 'r') { e.preventDefault(); onMarkReviewed(); return; }
         if (e.key === 'f') { e.preventDefault(); onFlagAsIssue(); return; }
+        if (e.key === 'd' || e.key === 'Backspace') { e.preventDefault(); onDeleteUrl(); return; }
+        if (e.key === 'x') { e.preventDefault(); onResetUrl(); return; }
+        if (e.key === 'e') { e.preventDefault(); onEditUrl(); return; }
+        if (e.key === 'a') { e.preventDefault(); onAddUrl(); return; }
+        if (e.key === 'o') { e.preventDefault(); onOpenInBrowser(); return; }
+        if (e.key === 'u') { e.preventDefault(); onRecapture(); return; }
+
+        // Issue navigation
         if (e.key === 'n') { e.preventDefault(); navigateIssue(1); return; }
         if (e.key === 'N') { e.preventDefault(); navigateIssue(-1); return; }
+
+        // Preview modes
         if (e.key === '1') { setState({ previewMode: 'screenshot' }); return; }
         if (e.key === '2') { setState({ previewMode: 'text' }); return; }
         if (e.key === '3') { setState({ previewMode: 'answer' }); return; }
@@ -300,7 +396,8 @@ function initKeyboardShortcuts() {
             setState({ previewMode: s.previewMode === 'text' ? 'screenshot' : 'text' });
             return;
         }
-        // Arrow key navigation in URL list
+
+        // URL list navigation
         if (e.key === 'ArrowDown' || e.key === 'j') {
             e.preventDefault();
             navigateUrlList(1);
@@ -426,23 +523,34 @@ function initDragDrop() {
         preview.classList.remove('drop-target');
         const s = getState();
         if (!s.selectedTaskId || !s.selectedUrl) {
-            toast('Select a URL first, then drop MHTML', 'error');
+            toast('Select a URL first, then drop a file', 'error');
             return;
         }
-        const file = [...(e.dataTransfer?.files || [])].find(
-            f => f.name.toLowerCase().endsWith('.mhtml') || f.name.toLowerCase().endsWith('.mht')
-        );
-        if (!file) {
-            toast('Please drop an .mhtml or .mht file', 'error');
-            return;
-        }
-        try {
-            showStatus('Uploading MHTML...', 'warning');
-            await api.uploadMhtml(s.selectedTaskId, s.selectedUrl, file);
-            toast('MHTML uploaded successfully', 'success');
-            await reloadCurrentTask();
-        } catch (err) {
-            toast('MHTML upload failed: ' + err.message, 'error');
+        const files = [...(e.dataTransfer?.files || [])];
+        const mhtml = files.find(f => /\.(mhtml|mht)$/i.test(f.name));
+        const pdf = files.find(f => /\.pdf$/i.test(f.name));
+        if (pdf) {
+            try {
+                showStatus('Uploading PDF...', 'warning');
+                await api.uploadPdf(s.selectedTaskId, s.selectedUrl, pdf);
+                toast('PDF uploaded — content type switched to PDF', 'success');
+                setState({ contentVersion: s.contentVersion + 1 });
+                await reloadCurrentTask();
+                await updateReviewProgress();
+            } catch (err) {
+                toast('PDF upload failed: ' + err.message, 'error');
+            }
+        } else if (mhtml) {
+            try {
+                showStatus('Uploading MHTML...', 'warning');
+                await api.uploadMhtml(s.selectedTaskId, s.selectedUrl, mhtml);
+                toast('MHTML uploaded successfully', 'success');
+                await reloadCurrentTask();
+            } catch (err) {
+                toast('MHTML upload failed: ' + err.message, 'error');
+            }
+        } else {
+            toast('Please drop a .pdf, .mhtml, or .mht file', 'error');
         }
     });
 }

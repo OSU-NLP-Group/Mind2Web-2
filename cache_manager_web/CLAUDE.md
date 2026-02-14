@@ -45,7 +45,8 @@ cache_manager_web/
 ## Running
 
 ```bash
-uv run python3 cache_manager_web/run.py /path/to/agent/cache/folder
+uv run python3 cache_manager_web/run.py zhoukai              # Agent name
+uv run python3 cache_manager_web/run.py /path/to/cache/folder # Full path
 # Options: --port 8000  --host 127.0.0.1  --no-browser
 ```
 
@@ -71,15 +72,18 @@ This project uses `uv`, not pip. Use `uv run`, `uv sync`, `uv add`.
 | POST | /api/capture/batch/stop | Stop batch capture |
 | POST | /api/capture/batch/captcha | CAPTCHA detected notification |
 | POST | /api/capture | Receive capture from extension |
-| POST | /api/flag/{id} | Flag URL as issue (replace text) |
+| POST | /api/flag/{id} | Flag URL as issue (web: replace text; PDF: flags.json) |
+| POST | /api/reset/{id} | Reset URL cache (clear content + auto-flag) |
 | GET | /api/review/{id} | Get review statuses for a task |
 | POST | /api/review/{id} | Set review status |
 | GET | /api/review-progress | Overall progress |
 | GET | /api/answers/{id} | Answer markdown files |
-| POST | /api/urls/{id} | Add URL to task |
+| POST | /api/urls/{id} | Add URL to task (auto_flag, PDF suffix detection) |
+| POST | /api/urls/{id}/rename | Rename/edit URL link (moves content) |
 | POST | /api/urls/{id}/pdf | Add PDF URL to task |
 | DELETE | /api/urls/{id} | Delete URL |
 | POST | /api/upload-mhtml/{id} | Upload MHTML |
+| POST | /api/upload-pdf/{id} | Upload PDF (replaces content, switches type) |
 | POST | /api/scan | Re-scan all tasks for issues |
 | GET | /api/events | SSE stream |
 
@@ -103,12 +107,16 @@ Key state fields:
 | `k` / `↑` | Previous URL |
 | `n` | Next issue (cross-task) |
 | `N` | Previous issue (cross-task) |
-| `r` | Mark as reviewed |
+| `r` / `Ctrl+Enter` | Mark as reviewed |
 | `f` | Flag as issue (red) |
+| `d` / `Backspace` | Delete URL |
+| `x` | Reset URL cache & flag |
+| `e` | Edit URL link |
+| `a` | Add new URL |
+| `o` | Open in browser |
+| `u` / `Ctrl+U` | Recapture live |
 | `1` / `2` / `3` | Screenshot / Text / Answer view |
 | `Space` | Toggle Screenshot / Text |
-| `Ctrl+Enter` | Mark as reviewed |
-| `Ctrl+U` | Recapture live |
 | `Ctrl+O` | Open cache folder |
 | `Ctrl+Wheel` | Zoom screenshot |
 | `?` | Show shortcuts help |

@@ -90,6 +90,32 @@ export async function flagUrl(taskId, url) {
     return (await request('POST', `/api/flag/${encodeURIComponent(taskId)}`, { url })).json();
 }
 
+export async function resetUrl(taskId, url) {
+    return (await request('POST', `/api/reset/${encodeURIComponent(taskId)}`, { url })).json();
+}
+
+export async function renameUrl(taskId, oldUrl, newUrl) {
+    return (await request('POST', `/api/urls/${encodeURIComponent(taskId)}/rename`, { old_url: oldUrl, new_url: newUrl })).json();
+}
+
+export async function addUrl(taskId, url) {
+    return (await request('POST', `/api/urls/${encodeURIComponent(taskId)}`, { url, auto_flag: true })).json();
+}
+
+export async function uploadPdf(taskId, url, file) {
+    const form = new FormData();
+    form.append('file', file);
+    const res = await fetch(`/api/upload-pdf/${encodeURIComponent(taskId)}?url=${encodeURIComponent(url)}`, {
+        method: 'POST',
+        body: form,
+    });
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+    }
+    return res.json();
+}
+
 export async function uploadMhtml(taskId, url, file) {
     const form = new FormData();
     form.append('file', file);

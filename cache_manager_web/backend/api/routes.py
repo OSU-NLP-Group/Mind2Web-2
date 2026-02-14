@@ -92,12 +92,17 @@ class AddUrlRequest(BaseModel):
     url: str
     text: Optional[str] = None
     screenshot_base64: Optional[str] = None
+    auto_flag: bool = False
 
 class AddPdfRequest(BaseModel):
     url: str
 
 class FlagRequest(BaseModel):
     url: str
+
+class RenameUrlRequest(BaseModel):
+    old_url: str
+    new_url: str
 
 class BatchItem(BaseModel):
     task_id: str
@@ -177,15 +182,38 @@ async def load_cache(req: LoadRequest):
                     "keywords": det.matched_keywords[:5],
                 })
 
+        # Merge manually flagged URLs (from flags.json) into issue cache
+        for task_id in _cm.get_task_ids():
+            flagged = _cm.get_flagged_urls(task_id)
+            if flagged:
+                if task_id not in _url_issue_cache:
+                    _url_issue_cache[task_id] = {}
+                for url in flagged:
+                    if url not in _url_issue_cache[task_id]:
+                        _url_issue_cache[task_id][url] = {
+                            "issues": ["flagged"],
+                            "severity": "definite",
+                        }
+                        issue_index.append({
+                            "task_id": task_id,
+                            "url": url,
+                            "severity": "definite",
+                            "issue_count": 1,
+                            "keywords": ["flagged"],
+                        })
+
         # Build task issue summaries
         task_issues = {}
-        for task_id, results in issues_map.items():
+        for task_id in _cm.get_task_ids():
+            task_cache = _url_issue_cache.get(task_id, {})
+            if not task_cache:
+                continue
             worst = "possible"
-            for _, det in results:
-                if det.severity == "definite":
+            for url, info in task_cache.items():
+                if info.get("severity") == "definite":
                     worst = "definite"
                     break
-            task_issues[task_id] = {"count": len(results), "severity": worst}
+            task_issues[task_id] = {"count": len(task_cache), "severity": worst}
 
         return {
             "ok": True,
@@ -401,11 +429,14 @@ async def receive_capture(req: CaptureRequest):
     review_status = "recaptured" if _batch_active else "fixed"
     _cm.mark_url_reviewed(req.task_id, req.url, review_status)
 
-    # Invalidate issue cache for this URL (content changed)
+    # Invalidate issue cache and clear flags (content changed)
     if req.task_id in _url_issue_cache:
         _url_issue_cache[req.task_id].pop(req.url, None)
         if req.actual_url:
             _url_issue_cache[req.task_id].pop(req.actual_url, None)
+    _cm.unflag_url(req.task_id, req.url)
+    if req.actual_url:
+        _cm.unflag_url(req.task_id, req.actual_url)
 
     # Push SSE event to frontend
     await _push_event("capture_complete", {
@@ -442,21 +473,24 @@ async def set_review(task_id: str, req: ReviewRequest):
 async def flag_url(task_id: str, req: FlagRequest):
     """Flag a URL as having definite issues.
 
-    Replaces the text with 'access denied' to trigger definite keyword detection,
-    clears the review status, and updates the issue cache.
+    For web URLs: replaces text with 'access denied' to trigger detection.
+    For PDF URLs: stores flag in flags.json (doesn't corrupt the PDF).
     """
     _require_loaded()
     cache = _cm.get_task_cache(task_id)
     if not cache:
         raise HTTPException(404, f"Task not found: {task_id}")
 
-    # Replace text with keyword that triggers definite detection
-    flag_text = "access denied"
-    # Keep existing screenshot — only replace text
-    _, screenshot = _cm.get_url_content(task_id, req.url)
-    if screenshot is None:
-        screenshot = _placeholder_jpeg()
-    _cm.update_url_content(task_id, req.url, flag_text, screenshot)
+    content_type = cache.has(req.url)
+    if content_type == "web":
+        # Replace text with keyword that triggers definite detection
+        flag_text = "access denied"
+        _, screenshot = _cm.get_url_content(task_id, req.url)
+        if screenshot is None:
+            screenshot = _placeholder_jpeg()
+        _cm.update_url_content(task_id, req.url, flag_text, screenshot)
+    # For PDF (or any type): persist flag without touching content files
+    _cm.flag_url(task_id, req.url)
 
     # Clear review status
     _cm.mark_url_reviewed(task_id, req.url, "")
@@ -465,11 +499,47 @@ async def flag_url(task_id: str, req: FlagRequest):
     if task_id not in _url_issue_cache:
         _url_issue_cache[task_id] = {}
     _url_issue_cache[task_id][req.url] = {
-        "issues": ["access denied"],
+        "issues": ["flagged"],
         "severity": "definite",
     }
 
     return {"ok": True}
+
+
+@router.post("/reset/{task_id}")
+async def reset_url(task_id: str, req: FlagRequest):
+    """Reset a URL's cached content and flag it for recapture.
+
+    Clears content files but keeps the URL in the index.
+    Auto-flags so it shows as a definite issue for batch recapture.
+    """
+    _require_loaded()
+    cache = _cm.get_task_cache(task_id)
+    if not cache:
+        raise HTTPException(404, f"Task not found: {task_id}")
+
+    content_type = _cm.reset_url(task_id, req.url)
+    if content_type is None:
+        raise HTTPException(404, f"URL not found: {req.url}")
+
+    # Flag the URL
+    _cm.flag_url(task_id, req.url)
+
+    # Clear review status
+    _cm.mark_url_reviewed(task_id, req.url, "")
+
+    # Update issue cache
+    if task_id not in _url_issue_cache:
+        _url_issue_cache[task_id] = {}
+    _url_issue_cache[task_id][req.url] = {
+        "issues": ["flagged"],
+        "severity": "definite",
+    }
+
+    # Push SSE so frontend refreshes
+    await _push_event("capture_complete", {"task_id": task_id, "url": req.url})
+
+    return {"ok": True, "content_type": content_type}
 
 
 @router.get("/review-progress")
@@ -535,9 +605,12 @@ async def batch_start(req: BatchStartRequest):
     _require_loaded()
     global _batch_queue, _batch_active, _batch_total, _batch_completed, _capture_target
 
-    # Filter: only definite-severity, unreviewed URLs
+    # Filter: only definite-severity, unreviewed, web-only URLs (extension can't capture PDFs)
     queue = []
     for item in req.items:
+        cache = _cm.get_task_cache(item.task_id)
+        if cache and cache.has(item.url) == "pdf":
+            continue
         issue_cache = _url_issue_cache.get(item.task_id, {})
         issue_info = issue_cache.get(item.url)
         if not issue_info or issue_info.get("severity") != "definite":
@@ -621,8 +694,9 @@ async def list_answers(task_id: str):
     if not _cm.agent_path:
         return {"files": []}
 
-    # Look for answers in answers/<agent_name>/<task_id>/
-    answers_dir = _cm.agent_path.parent / "answers" / _cm.agent_name / task_id
+    # Look for answers in <project_root>/answers/<agent_name>/<task_id>/
+    project_root = _cm.agent_path.parent.parent
+    answers_dir = project_root / "answers" / _cm.agent_name / task_id
     if not answers_dir.is_dir():
         return {"files": []}
 
@@ -652,6 +726,68 @@ async def delete_url(task_id: str, url: str = Query(...)):
     raise HTTPException(500, "Failed to delete URL")
 
 
+@router.post("/urls/{task_id}/rename")
+async def rename_url(task_id: str, req: RenameUrlRequest):
+    """Rename/edit a URL's link. Moves content from old URL to new URL."""
+    _require_loaded()
+    cache = _cm.get_task_cache(task_id)
+    if not cache:
+        raise HTTPException(404, f"Task not found: {task_id}")
+
+    old_url = req.old_url
+    new_url = req.new_url
+
+    if not cache.has(old_url):
+        raise HTTPException(404, f"Old URL not found: {old_url}")
+    if cache.has(new_url):
+        raise HTTPException(409, f"New URL already exists: {new_url}")
+
+    content_type = cache.has(old_url)
+
+    # Read old content
+    if content_type == "web":
+        text, screenshot = _cm.get_url_content(task_id, old_url)
+        if text is None:
+            text = ""
+        if screenshot is None:
+            screenshot = _placeholder_jpeg()
+        # Add new URL with old content
+        success = _cm.add_url_to_task(task_id, new_url, text=text, screenshot=screenshot)
+    elif content_type == "pdf":
+        _, pdf_bytes = _cm.get_url_content(task_id, old_url)
+        if pdf_bytes is None:
+            raise HTTPException(500, "Failed to read PDF content")
+        success = _cm.add_url_to_task(task_id, new_url, pdf_bytes=pdf_bytes)
+    else:
+        raise HTTPException(400, f"Unknown content type: {content_type}")
+
+    if not success:
+        raise HTTPException(500, "Failed to create new URL")
+
+    # Transfer review status
+    reviewed = _cm.load_reviewed(task_id)
+    old_status = reviewed.get(old_url, "")
+    if old_status:
+        _cm.mark_url_reviewed(task_id, new_url, old_status)
+
+    # Transfer flags
+    if _cm.is_flagged(task_id, old_url):
+        _cm.flag_url(task_id, new_url)
+
+    # Transfer issue cache
+    if task_id in _url_issue_cache and old_url in _url_issue_cache[task_id]:
+        _url_issue_cache[task_id][new_url] = _url_issue_cache[task_id][old_url]
+
+    # Delete old URL
+    _cm.delete_url(task_id, old_url)
+    _cm.unflag_url(task_id, old_url)
+    _cm.mark_url_reviewed(task_id, old_url, "")
+    if task_id in _url_issue_cache:
+        _url_issue_cache[task_id].pop(old_url, None)
+
+    return {"ok": True, "content_type": content_type}
+
+
 @router.post("/urls/{task_id}")
 async def add_url(task_id: str, req: AddUrlRequest):
     _require_loaded()
@@ -661,18 +797,40 @@ async def add_url(task_id: str, req: AddUrlRequest):
     if cache.has(req.url):
         raise HTTPException(409, "URL already exists in this task")
 
-    text = req.text or f"Placeholder content for {req.url}"
-    screenshot = None
-    if req.screenshot_base64:
-        screenshot = base64.b64decode(req.screenshot_base64)
-    else:
-        # Create minimal placeholder JPEG
-        screenshot = _placeholder_jpeg()
+    # Detect PDF by URL suffix
+    parsed_path = urlparse(req.url).path.lower()
+    is_pdf = parsed_path.endswith('.pdf')
 
-    success = _cm.add_url_to_task(task_id, req.url, text=text, screenshot=screenshot)
+    if is_pdf:
+        # Create as PDF type with placeholder
+        pdf_bytes = _cm._placeholder_pdf_bytes()
+        success = _cm.add_url_to_task(task_id, req.url, pdf_bytes=pdf_bytes)
+        content_type = "pdf"
+    else:
+        text = req.text or ("access denied" if req.auto_flag else f"Placeholder content for {req.url}")
+        screenshot = None
+        if req.screenshot_base64:
+            screenshot = base64.b64decode(req.screenshot_base64)
+        else:
+            screenshot = _placeholder_jpeg()
+        success = _cm.add_url_to_task(task_id, req.url, text=text, screenshot=screenshot)
+        content_type = "web"
+
     if not success:
         raise HTTPException(500, "Failed to add URL")
-    return {"ok": True}
+
+    # Auto-flag if requested
+    if req.auto_flag:
+        _cm.flag_url(task_id, req.url)
+        _cm.mark_url_reviewed(task_id, req.url, "")
+        if task_id not in _url_issue_cache:
+            _url_issue_cache[task_id] = {}
+        _url_issue_cache[task_id][req.url] = {
+            "issues": ["flagged"],
+            "severity": "definite",
+        }
+
+    return {"ok": True, "content_type": content_type}
 
 
 @router.post("/urls/{task_id}/pdf")
@@ -712,8 +870,67 @@ async def upload_mhtml(task_id: str, url: str = Query(...), file: UploadFile = F
         if not _cm.add_url_to_task(task_id, url, text=text, screenshot=screenshot):
             raise HTTPException(500, "Failed to save MHTML content")
 
-    _cm.mark_url_reviewed(task_id, url, "fixed")
+    # Clear issue cache and unflag
+    if task_id in _url_issue_cache:
+        _url_issue_cache[task_id].pop(url, None)
+    _cm.unflag_url(task_id, url)
+
+    review_status = "recaptured" if _batch_active else "fixed"
+    _cm.mark_url_reviewed(task_id, url, review_status)
+
+    await _push_event("capture_complete", {"task_id": task_id, "url": url})
+
+    if _batch_active:
+        await _advance_batch()
+
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# PDF upload (replace existing content with PDF)
+# ---------------------------------------------------------------------------
+
+@router.post("/upload-pdf/{task_id}")
+async def upload_pdf(task_id: str, url: str = Query(...), file: UploadFile = File(...)):
+    """Upload a PDF to replace existing content for a URL.
+
+    Handles content type switching (web -> pdf) with proper file cleanup.
+    Removes any flags and marks the URL as fixed.
+    """
+    _require_loaded()
+    cache = _cm.get_task_cache(task_id)
+    if not cache:
+        raise HTTPException(404, f"Task not found: {task_id}")
+
+    pdf_bytes = await file.read()
+    if not pdf_bytes:
+        raise HTTPException(400, "Empty PDF file")
+
+    if cache.has(url):
+        success = _cm.replace_with_pdf(task_id, url, pdf_bytes)
+    else:
+        success = _cm.add_url_to_task(task_id, url, pdf_bytes=pdf_bytes)
+
+    if not success:
+        raise HTTPException(500, "Failed to save PDF")
+
+    # Clear issue cache and mark as fixed
+    if task_id in _url_issue_cache:
+        _url_issue_cache[task_id].pop(url, None)
+    _cm.unflag_url(task_id, url)
+
+    # Use "recaptured" in batch mode (needs human review), "fixed" otherwise
+    review_status = "recaptured" if _batch_active else "fixed"
+    _cm.mark_url_reviewed(task_id, url, review_status)
+
+    # Push SSE event so frontend updates immediately
+    await _push_event("capture_complete", {"task_id": task_id, "url": url})
+
+    # Advance batch queue if active
+    if _batch_active:
+        await _advance_batch()
+
+    return {"ok": True, "content_type": "pdf"}
 
 
 # ---------------------------------------------------------------------------
@@ -724,9 +941,18 @@ async def upload_mhtml(task_id: str, url: str = Query(...), file: UploadFile = F
 async def scan_all():
     _require_loaded()
     issues_map = _kd.scan_all_text_content(_cm)
+
+    # Rebuild issue cache
+    global _url_issue_cache
+    _url_issue_cache = {}
     issue_index = []
     for task_id in sorted(issues_map.keys()):
+        _url_issue_cache[task_id] = {}
         for url, det in issues_map[task_id]:
+            _url_issue_cache[task_id][url] = {
+                "issues": det.matched_keywords + det.matched_patterns,
+                "severity": det.severity,
+            }
             issue_index.append({
                 "task_id": task_id,
                 "url": url,
@@ -734,6 +960,26 @@ async def scan_all():
                 "issue_count": det.issue_count,
                 "keywords": det.matched_keywords[:5],
             })
+
+    # Merge flags
+    for task_id in _cm.get_task_ids():
+        flagged = _cm.get_flagged_urls(task_id)
+        for url in flagged:
+            if task_id not in _url_issue_cache:
+                _url_issue_cache[task_id] = {}
+            if url not in _url_issue_cache[task_id]:
+                _url_issue_cache[task_id][url] = {
+                    "issues": ["flagged"],
+                    "severity": "definite",
+                }
+                issue_index.append({
+                    "task_id": task_id,
+                    "url": url,
+                    "severity": "definite",
+                    "issue_count": 1,
+                    "keywords": ["flagged"],
+                })
+
     return {"issue_count": len(issue_index), "issues": issue_index}
 
 

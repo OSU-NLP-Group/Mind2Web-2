@@ -154,7 +154,10 @@ function renderText(s) {
     const pre = document.getElementById('text-content');
     const urlData = s.urls.find(u => u.url === s.selectedUrl);
     if (urlData?.content_type === 'pdf') {
-        pre.textContent = 'PDF content — no extracted text available.\nUse the Screenshot tab to view the PDF.';
+        const flagged = urlData.severity === 'definite';
+        pre.textContent = flagged
+            ? 'PDF content — flagged as having issues.\nUse the Screenshot tab to view, or Upload PDF to replace.'
+            : 'PDF content — use the Screenshot tab to view.\nYou can also drag & drop a .pdf file onto the preview to replace it.';
     } else if (s.currentText != null) {
         pre.textContent = s.currentText;
     } else if (s.selectedUrl) {
@@ -189,18 +192,18 @@ function renderAnswerPanel(s) {
 }
 
 function renderAnswer(s) {
-    const pre = document.getElementById('answer-content');
+    const el = document.getElementById('answer-content');
     const select = document.getElementById('answer-file-select');
     const idx = parseInt(select.value, 10);
     if (s.answers.length > 0 && idx >= 0 && idx < s.answers.length) {
         let text = s.answers[idx].content;
         // Highlight current URL if present
         if (s.selectedUrl && text.includes(s.selectedUrl)) {
-            text = text.replaceAll(s.selectedUrl, `>>> ${s.selectedUrl} <<<`);
+            text = text.replaceAll(s.selectedUrl, `**>>> ${s.selectedUrl} <<<**`);
         }
-        pre.textContent = text;
+        el.innerHTML = typeof marked !== 'undefined' ? marked.parse(text) : `<pre>${text}</pre>`;
     } else {
-        pre.textContent = s.answers.length === 0
+        el.textContent = s.answers.length === 0
             ? (s.selectedTaskId ? 'No answer files found for this task.' : 'Select a task to view answers.')
             : '';
     }

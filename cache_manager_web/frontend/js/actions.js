@@ -28,7 +28,11 @@ export async function selectTask(taskId) {
 }
 
 export async function selectUrl(taskId, url) {
-    setState({ selectedUrl: url, currentText: null, currentIssues: null });
+    // Auto-switch from answer view to screenshot when selecting a URL
+    const mode = getState().previewMode;
+    const updates = { selectedUrl: url, currentText: null, currentIssues: null };
+    if (mode === 'answer') updates.previewMode = 'screenshot';
+    setState(updates);
     // Set capture target for the extension
     api.setCaptureTarget(taskId, url).catch(() => {});
     // Check if this is a PDF (no text content available)
@@ -38,11 +42,18 @@ export async function selectUrl(taskId, url) {
 
     if (isPdf) {
         setState({ currentText: '', currentIssues: { has_issues: false } });
-        // Auto-mark PDF as reviewed when viewed (no issue progress impact)
+        // Auto-mark unflagged PDF as reviewed when viewed
         if (urlData && !['ok', 'fixed', 'skip'].includes(urlData.reviewed)) {
-            api.setReview(taskId, url, 'ok').catch(() => {});
-            const urls = s.urls.map(u => u.url === url ? { ...u, reviewed: 'ok' } : u);
-            setState({ urls });
+            // Only auto-review if no definite issues (i.e., not flagged)
+            if (urlData.severity !== 'definite') {
+                api.setReview(taskId, url, 'ok').catch(() => {});
+                const urls = s.urls.map(u => u.url === url ? { ...u, reviewed: 'ok' } : u);
+                setState({ urls });
+                if (urlData.issues?.length > 0) {
+                    incrementTaskIssueFixedCount(taskId);
+                    updateReviewProgress();
+                }
+            }
         }
         return;
     }
