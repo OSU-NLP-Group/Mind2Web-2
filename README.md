@@ -15,7 +15,7 @@ Mind2Web 2 is a benchmark for agentic search systems, featuring Agent-as-a-Judge
 - [😊 Dataset (Tasks) and Evaluation Scripts (Judge Agents)](https://huggingface.co/datasets/osunlp/Mind2Web-2)
 
 ## 🆕 Updates
-- **2025/10/23**: To improve accessibility and adoption of Mind2Web 2, we release all the evaluation scripts are released for both public dev set and test set. Check out the [Run Evaluation Locally Yourself](#-run-evaluation-locally-yourself) section for instructions.
+- **2025/10/23**: To improve accessibility and adoption of Mind2Web 2, all evaluation scripts are released for both public dev set and test set. Check out the [Run Evaluation Locally Yourself](#-run-evaluation-locally-yourself) section for instructions.
 - **2025/07/17**: Check out our [submission guideline](#-submission-guideline). We welcome all submissions and look forward to your participation!
 - **2025/07/14**: The scripts of the public development set are released. Give them a try!
 - **2025/06/26**: The GitHub repo is live. The manuscript is now on arXiv.
@@ -27,18 +27,18 @@ To get answers for tasks of Mind2Web 2:
 - If you are developing and testing a base model and have no agent framework at hand, you may start from go-to frameworks such as [Hugging Face's Open Deep Research](https://huggingface.co/blog/open-deep-research). You may want to do some zero-shot or few-shot prompting to let the agent better understand how to provide citations, to pass our attribution verifications in the task evaluations.
 - If you have your own agent, still notice that we expect the agent to also provide **URL sources** to the critical facts included in the answers. You may also refer to the evaluation script to understand how the evaluation is conducted.
 
-To evaluate answers from an agent system, there are mainly three steps involved:
+To evaluate answers from an agent system, there are mainly four steps involved:
 1. Collecting answers from your agent on our [test set](https://huggingface.co/datasets/osunlp/Mind2Web-2/viewer/default/private_test_set)
 2. Cache the webpages mentioned in the answers (to ensure consistency and reproducibility), where we provide the script in [Precache Webpage](#3-precache-webpages-optional-but-recommended)
 3. Run the evaluation.
-4. (Optionally) We also encourage submitting the avg. time and answer lengths to better understand how the agent works.
+4. (Optional) Submit the avg. time and answers to better understand how the agent works.
 
 For the submission, you can either:
-- (Recommended) submit your agent's answers as well as providing the webpage cache to us. This ensures the best consistency between the inference and evaluation. We will handle the evaluation cost for you.
-- (Recommended) run the whole evaluation by following the instructions in the next section and submit the evaluation results to us.
-- Only provide your agent answers and let us handle the webpage caching and evaluation for you
+- **(Recommended)** Submit your agent's answers along with the webpage cache to us. This ensures the best consistency between inference and evaluation. We will handle the evaluation cost for you.
+- **(Also Recommended)** Run the whole evaluation yourself by following the instructions in the [next section](#-run-evaluation-locally-yourself) and submit the evaluation results to us.
+- Only provide your agent's answers and let us handle the webpage caching and evaluation for you.
 
-If you choose to submit your agent's answer, please arrange your agent's responses in the following directory structure (see [answers/examples](https://github.com/OSU-NLP-Group/Mind2Web-2/tree/main/answers/example) for reference):
+If you choose to submit your agent's answer, please arrange your agent's responses in the following directory structure (see [answers/example](https://github.com/OSU-NLP-Group/Mind2Web-2/tree/main/answers/example) for reference):
 
    ```
    <agent_name>
@@ -49,9 +49,9 @@ If you choose to submit your agent's answer, please arrange your agent's respons
    └── ...
    ```
 
-Similarly, the according cache structure should be cache/<agent_name>/<task_id>/
+Similarly, the corresponding cache structure should be `cache/<agent_name>/` (generated automatically by the precaching script).
 
-Compress the directories and send it to us via email: m2w2-leaderboard@googlegroups.com.
+Compress the directories and send them to us via email: m2w2-leaderboard@googlegroups.com.
 
 > **Note:**
 
@@ -88,7 +88,6 @@ conda activate mind2web2
 pip install -e .
 
 # Install browsers for Playwright
-#playwright install
 rebrowser_playwright install
 ```
 
