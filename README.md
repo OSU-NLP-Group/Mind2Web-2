@@ -141,7 +141,11 @@ Some pages may fail to cache automatically due to CAPTCHAs, anti-bot protection,
 uv run python3 cache_manager_web/run.py <your_agent_name>
 ```
 
-See [`cache_manager_web/CLAUDE.md`](cache_manager_web/CLAUDE.md) for full documentation and Chrome Extension setup.
+<div align="center">
+  <img src="./assets/cache_manager_ui.png" alt="Cache Manager Web UI" width="900"/>
+</div>
+
+See the [Cache Manager README](cache_manager_web/README.md) for full documentation and Chrome Extension setup.
 
 ### 4. Run Evaluation
 
