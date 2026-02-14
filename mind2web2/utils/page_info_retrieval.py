@@ -11,7 +11,7 @@ from typing import Optional, Tuple, Union
 
 # Third-party imports
 from PIL import Image
-from rebrowser_playwright.async_api import (
+from patchright.async_api import (
     Browser,
     BrowserContext,
     Page,
