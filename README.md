@@ -128,32 +128,20 @@ export GOOGLE_MAPS_API_KEY="YOUR_GOOGLE_MAPS_API_KEY"
 
 *Note: This step is not required but highly recommended for reducing evaluation latency, as fetching webpages on-the-fly during evaluation can be very slow.*
 
-Before running evaluation, you may want to precache the webpages to improve performance:
+Before running evaluation, please precache the webpages:
 
 ```bash
 ./cache_all_answers.sh <your_agent_name>
 ```
 
-Some pages may fail to cache automatically due to CAPTCHAs, anti-bot protection, or login walls. We provide a **Cache Manager** web tool to review and **batch-fix** these issues efficiently:
+Some pages may fail to cache automatically due to CAPTCHAs, anti-bot protection, or login walls. We provide a **[Cache Manager](cache_manager_web/)** web tool to review and **batch-fix** these issues — it auto-detects problematic pages and lets you recapture all flagged URLs in one click using a Chrome Extension.
 
 ```bash
 # Start the Cache Manager web UI (auto-opens in browser)
 uv run python3 cache_manager_web/run.py <your_agent_name>
-
-# Or specify a full path
-uv run python3 cache_manager_web/run.py cache/<your_agent_name>
 ```
 
-The Cache Manager is a browser-based UI paired with a Chrome Extension that lets you:
-- **Auto-detect issues** — scans all cached pages and flags problems (CAPTCHA walls, access denied, empty pages, etc.)
-- **Preview cached content** — side-by-side screenshot and extracted text for each URL
-- **Batch recapture (one-click fix)** — queue all flagged URLs for automatic recapture using the Chrome Extension. The extension opens each page in a real browser session, waits for it to load, auto-retries short pages, detects CAPTCHAs (Cloudflare, reCAPTCHA, hCaptcha) and pauses for you to solve them, then captures and advances — **fixing hundreds of broken pages with minimal manual effort**
-- **Single-page recapture** — for stubborn pages (anti-bot, login-required), open in browser, solve manually, then capture with one click
-- **URL management** — flag, reset, edit, add, or delete URLs; upload PDF/MHTML files directly
-- **Keyboard-driven workflow** — `j`/`k` navigate URLs, `n`/`N` jump between issues across tasks, `r` mark reviewed, `f` flag, `?` for full shortcut list
-- **Progress tracking** — review status per URL with overall completion tracking across all tasks
-
-> **Quick start:** Install the Chrome Extension from `cache_manager_web/extension/` (Developer mode → Load unpacked), then click **Batch Recapture** in the toolbar to fix all flagged URLs automatically. Press `?` in the web UI for the full usage guide.
+See [`cache_manager_web/CLAUDE.md`](cache_manager_web/CLAUDE.md) for full documentation and Chrome Extension setup.
 
 ### 4. Run Evaluation
 
