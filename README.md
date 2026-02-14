@@ -27,7 +27,7 @@ To get answers for tasks of Mind2Web 2:
 - If you are developing and testing a base model and have no agent framework at hand, you may start from go-to frameworks such as [Hugging Face's Open Deep Research](). You may want to do some zero-shot or few-shot prompting to let the agent better understand how to provide citations, to pass our attribution verifications in the task evaluations.
 - If you have your own agent, still notice that we expect the agent to also provide **URL sources** to the critical facts included in the answers. You may also refer to the evaluation script to understand how the evaluation is conducted.
 
-To evaluate answers from an agent system, there are mainly three steps involved: 
+To evaluate answers from an agent system, there are mainly three steps involved:
 1. Collecting answers from your agent on our [test set](https://huggingface.co/datasets/osunlp/Mind2Web-2/viewer/default/private_test_set)
 2. Cache the webpages mentioned in the answers (to ensure consistency and reproducibility), where we provide the script in [Precache Webpage](#3-precache-webpages-optional-but-recommended)
 3. Run the evaluation.
@@ -43,9 +43,9 @@ If you choose to submit your agent's answer, please arrange your agent's respons
    ```
    <agent_name>
    ├── <task_id>
-   │   ├── answer_1.md
-   │   ├── answer_2.md
-   │   └── ...
+   │   ├── answer_1.md
+   │   ├── answer_2.md
+   │   └── ...
    └── ...
    ```
 
@@ -134,27 +134,26 @@ Before running evaluation, you may want to precache the webpages to improve perf
 ./cache_all_answers.sh <your_agent_name>
 ```
 
-We also provide a lightweight app to fix errors in precached webpages (e.g., pages blocked by human verification):
+Some pages may fail to cache automatically due to CAPTCHAs, anti-bot protection, or login walls. We provide a **Cache Manager** web tool to review and **batch-fix** these issues efficiently:
 
 ```bash
-# Start the Cache Manager GUI
-python run_cache_manager.py
+# Start the Cache Manager web UI (auto-opens in browser)
+uv run python3 cache_manager_web/run.py <your_agent_name>
 
-# Optionally load a cache folder on startup (recommended)
-python run_cache_manager.py cache/<your_agent_name>
-
-# Debug:
-python run_cache_manager.py --log-level DEBUG
-
+# Or specify a full path
+uv run python3 cache_manager_web/run.py cache/<your_agent_name>
 ```
 
-Notes:
-- The Cache Manager is a PySide6 (Qt) desktop app located under `cache_manager/`.
-- It helps you inspect, fix, and update cached URLs for each task:
-  - Open a cache folder via File → “Open Cache Folder…” and select `cache/<agent_name>`.
-  - Select a task (left), then a URL to preview its cached text/screenshot.
-  - Use "Live" view to reload the page, and click “Update Cache” to capture fresh content and overwrite the cache.
-  - Use "Upload MHTML" to manually upload a saved MHTML file for the selected URL.
+The Cache Manager is a browser-based UI paired with a Chrome Extension that lets you:
+- **Auto-detect issues** — scans all cached pages and flags problems (CAPTCHA walls, access denied, empty pages, etc.)
+- **Preview cached content** — side-by-side screenshot and extracted text for each URL
+- **Batch recapture (one-click fix)** — queue all flagged URLs for automatic recapture using the Chrome Extension. The extension opens each page in a real browser session, waits for it to load, auto-retries short pages, detects CAPTCHAs (Cloudflare, reCAPTCHA, hCaptcha) and pauses for you to solve them, then captures and advances — **fixing hundreds of broken pages with minimal manual effort**
+- **Single-page recapture** — for stubborn pages (anti-bot, login-required), open in browser, solve manually, then capture with one click
+- **URL management** — flag, reset, edit, add, or delete URLs; upload PDF/MHTML files directly
+- **Keyboard-driven workflow** — `j`/`k` navigate URLs, `n`/`N` jump between issues across tasks, `r` mark reviewed, `f` flag, `?` for full shortcut list
+- **Progress tracking** — review status per URL with overall completion tracking across all tasks
+
+> **Quick start:** Install the Chrome Extension from `cache_manager_web/extension/` (Developer mode → Load unpacked), then click **Batch Recapture** in the toolbar to fix all flagged URLs automatically. Press `?` in the web UI for the full usage guide.
 
 ### 4. Run Evaluation
 
