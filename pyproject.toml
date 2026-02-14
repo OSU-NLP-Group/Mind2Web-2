@@ -28,7 +28,6 @@ dependencies = [
     "httpx",
     "dill",
     "python-json-logger",
-    #    "pyside6",
     "beautifulsoup4",
     "PyMuPDF",
     "google-auth",
@@ -40,9 +39,9 @@ dependencies = [
     "uvicorn[standard]",
     "markdownify",
     "html2text>=2025.4.15",
-    "pyside6>=6.9.2",
     "pillow>=11.3.0",
     "validators>=0.35.0",
+    "python-multipart>=0.0.22",
 ]
 
 # ── Optional: Code generation dependencies ─────────────────────────────

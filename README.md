@@ -27,7 +27,7 @@ To get answers for tasks of Mind2Web 2:
 - If you are developing and testing a base model and have no agent framework at hand, you may start from go-to frameworks such as [Hugging Face's Open Deep Research](). You may want to do some zero-shot or few-shot prompting to let the agent better understand how to provide citations, to pass our attribution verifications in the task evaluations.
 - If you have your own agent, still notice that we expect the agent to also provide **URL sources** to the critical facts included in the answers. You may also refer to the evaluation script to understand how the evaluation is conducted.
 
-To evaluate answers from an agent system, there are mainly three steps involved: 
+To evaluate answers from an agent system, there are mainly three steps involved:
 1. Collecting answers from your agent on our [test set](https://huggingface.co/datasets/osunlp/Mind2Web-2/viewer/default/private_test_set)
 2. Cache the webpages mentioned in the answers (to ensure consistency and reproducibility), where we provide the script in [Precache Webpage](#3-precache-webpages-optional-but-recommended)
 3. Run the evaluation.
@@ -43,9 +43,9 @@ If you choose to submit your agent's answer, please arrange your agent's respons
    ```
    <agent_name>
    ├── <task_id>
-   │   ├── answer_1.md
-   │   ├── answer_2.md
-   │   └── ...
+   │   ├── answer_1.md
+   │   ├── answer_2.md
+   │   └── ...
    └── ...
    ```
 
@@ -127,33 +127,24 @@ export GOOGLE_MAPS_API_KEY="YOUR_GOOGLE_MAPS_API_KEY"
 
 *Note: This step is not required but highly recommended for reducing evaluation latency, as fetching webpages on-the-fly during evaluation can be very slow.*
 
-Before running evaluation, you may want to precache the webpages to improve performance:
+Before running evaluation, please precache the webpages:
 
 ```bash
 ./cache_all_answers.sh <your_agent_name>
 ```
 
-We also provide a lightweight app to fix errors in precached webpages (e.g., pages blocked by human verification):
+Some pages may fail to cache automatically due to CAPTCHAs, anti-bot protection, or login walls. We provide a **[Cache Manager](cache_manager_web/)** web tool to review and **batch-fix** these issues — it auto-detects problematic pages and lets you recapture all flagged URLs in one click using a Chrome Extension.
 
 ```bash
-# Start the Cache Manager GUI
-python run_cache_manager.py
-
-# Optionally load a cache folder on startup (recommended)
-python run_cache_manager.py cache/<your_agent_name>
-
-# Debug:
-python run_cache_manager.py --log-level DEBUG
-
+# Start the Cache Manager web UI (auto-opens in browser)
+uv run python3 cache_manager_web/run.py <your_agent_name>
 ```
 
-Notes:
-- The Cache Manager is a PySide6 (Qt) desktop app located under `cache_manager/`.
-- It helps you inspect, fix, and update cached URLs for each task:
-  - Open a cache folder via File → “Open Cache Folder…” and select `cache/<agent_name>`.
-  - Select a task (left), then a URL to preview its cached text/screenshot.
-  - Use "Live" view to reload the page, and click “Update Cache” to capture fresh content and overwrite the cache.
-  - Use "Upload MHTML" to manually upload a saved MHTML file for the selected URL.
+<div align="center">
+  <img src="./assets/cache_manager_ui.png" alt="Cache Manager Web UI" width="900"/>
+</div>
+
+See the [Cache Manager README](cache_manager_web/README.md) for full documentation and Chrome Extension setup.
 
 ### 4. Run Evaluation
 
