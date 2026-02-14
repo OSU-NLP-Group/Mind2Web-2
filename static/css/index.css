@@ -23,6 +23,25 @@ body {
   font-weight: bold;
 }
 
+/* Venue badge */
+.publication-venue {
+  margin: 0.4rem 0 1rem;
+  text-align: center;
+}
+
+.publication-venue a {
+  color: #b5232a;
+  font-size: 17px;
+  font-weight: 600;
+  font-family: 'Google Sans', sans-serif;
+  text-decoration: none;
+  letter-spacing: 0.2px;
+}
+
+.publication-venue a:hover {
+  text-decoration: underline;
+}
+
 .human_expert {
   background-color: rgba(255, 208, 80, 0.15);
 }
@@ -118,25 +137,14 @@ body {
   object-fit: contain;
 }
 
-.publication-header .hero-body {
-}
+/* Publication header (override as needed) */
 
 .publication-title,
 .publication-authors {
   font-family: 'Google Sans', sans-serif;
 }
 
-.publication-venue {
-  color: #555;
-  width: fit-content;
-  font-weight: bold;
-}
-
-.publication-awards {
-  color: #ff3860;
-  width: fit-content;
-  font-weight: bolder;
-}
+/* .publication-awards - unused, kept for template reference */
 
 .publication-authors a {
   color: hsl(204, 86%, 53%) !important;
@@ -150,8 +158,7 @@ body {
   display: inline-block;
 }
 
-.publication-banner img {
-}
+/* Publication banner image (override as needed) */
 
 .publication-video {
   position: relative;
@@ -170,8 +177,7 @@ body {
   height: 100%;
 }
 
-.publication-body img {
-}
+/* Publication body image (override as needed) */
 
 .results-carousel {
   overflow: hidden;
@@ -293,10 +299,6 @@ th {
   border-bottom: 2px solid #ddd;
 }
 
-/* td:hover {
-  background-color: #ffffff;
-} */
-
 tr:hover {
   background-color: #0000000a !important;
 }
@@ -402,12 +404,6 @@ tr:hover {
 
 
 /* Chart styling */
-/* .plotly-chart {
-  width: 100% !important;
-  height: 600px !important;
-  min-height: 400px;
-} */
-
 .chart-container {
     width: 100%;
     height: 400px; /* Set a fixed height or use min-height */
@@ -496,13 +492,6 @@ tr:hover {
   margin-bottom: 1rem;
   line-height: 1.6;
 }
-
-/* .task-description-container.empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-} */
 
 /* When content is loaded, align to top-left */
 .task-description-container.loaded {
@@ -811,9 +800,8 @@ tr:hover {
 
 .tabs.is-centered {
     width: 100% !important;
-    margin: 10 !important;
+    margin: 0 !important;
     box-sizing: border-box !important;
-    margin-bottom: 0 !important; /* Specifically remove bottom margin */
 }
 
 .tabs.is-centered ul {
@@ -823,17 +811,16 @@ tr:hover {
 
 
 .leaderboard-table-wrapper {
-  max-height: 600px; /* Set your desired maximum height here */
-  overflow-y: auto;   /* Enable vertical scrolling for entire container */
+  max-height: none;
+  overflow-y: visible;
   overflow-x: auto; /* Enable horizontal scrolling */
   border: 2px solid #ddd;
   border-radius: 8px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
   background: white;
-  /* 创建新的堆叠上下文来解决重合问题 */
+  /* Create new stacking context */
   position: relative;
   z-index: 1;
-  /* 确保滚动时背景不透明 */
   background-clip: padding-box;
 }
 
@@ -847,11 +834,7 @@ tr:hover {
   margin: 0;
 }
 
-/* Sticky header that stays at top while scrolling */
 #m2w2-table thead {
-  position: sticky;
-  top: 0;
-  z-index: 10;
   background: white;
 }
 
@@ -863,10 +846,7 @@ tr:hover {
   text-align: center;
   white-space: nowrap;
   border-right: none;
-  position: sticky;
-  top: 0;
-  z-index: 15;  /* 确保表头在Human行之上 */
-  background-clip: padding-box;
+  z-index: 15;
 }
 
 
@@ -952,7 +932,7 @@ tr:hover {
   width: 8px;
 }
 
-.leaderboard-able-wrapper::-webkit-scrollbar-track {
+.leaderboard-table-wrapper::-webkit-scrollbar-track {
   background: #f1f1f1;
   border-radius: 4px;
 }
@@ -983,7 +963,7 @@ tr:hover {
 .leaderboard-info-box {
     background-color: #f8f9fa;
     border: 1px solid #dee2e6;
-    border-radius: 0 0 0px 0px;
+    border-radius: 0;
     padding: 15px 20px;
     margin: 0;
     font-size: 14px;
@@ -1050,51 +1030,43 @@ tr:hover {
 
 /* Human row special styling */
 .human-row {
-    background-color: #f8f9fa !important;  /* 更柔和的灰色背景 */
-    border-top: 1px solid #dee2e6 !important;  /* 更细的灰色边框 */
+    background-color: #f8f9fa !important;
+    border-top: 1px solid #dee2e6 !important;
     border-bottom: 1px solid #dee2e6 !important;
     font-style: italic;
-    opacity: 0.85;  /* 稍微提高不透明度 */
-    position: sticky;
-    top: 41px; /* Position below the header */
-    z-index: 9; /* Below header but above other content */
-    box-shadow: 0 1px 2px rgba(0,0,0,0.05);  /* 更轻微的阴影 */
-    /* 确保在水平滚动时也能正确显示 */
-    background-clip: padding-box;
-    isolation: isolate;
+    opacity: 0.85;
 }
 
 .human-row td {
-    font-weight: 450;  /* 稍微加重字体 */
-    color: #495057;  /* 更深的灰色文字 */
-    background-color: #f8f9fa !important;  /* 确保每个td都有背景色 */
-    /* 防止背景透明导致重合 */
+    font-weight: 450;
+    color: #495057;
+    background-color: #f8f9fa !important;
     background-clip: padding-box;
     position: relative;
     z-index: 1;
 }
 
 .human-row:hover {
-    background-color: #e9ecef !important;  /* hover时更柔和的灰色 */
+    background-color: #e9ecef !important;
 }
 
 .human-row:hover td {
-    background-color: #e9ecef !important;  /* hover时td也要变色 */
+    background-color: #e9ecef !important;
 }
 
 .human-indicator {
-    color: #495057;  /* 更深的灰色图标 */
+    color: #495057;
     margin-left: 8px;
-    font-size: 0.8em;  /* 更小的图标 */
+    font-size: 0.8em;
 }
 
 .human-reference-badge {
-    background-color: #495057;  /* 更深的灰色背景 */
+    background-color: #495057;
     color: white;
-    padding: 2px 6px;  /* 更小的padding */
-    border-radius: 3px;  /* 更小的圆角 */
-    font-size: 0.7em;  /* 更小的字体 */
-    font-weight: normal;  /* 普通字体重量 */
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 0.7em;
+    font-weight: normal;
     font-style: normal;
 }
 
@@ -1200,4 +1172,30 @@ tr:hover {
     .agent-popover-name {
         font-size: 14px;
     }
+}
+
+
+/* ===== Section Spacing ===== */
+/* Use between sibling content blocks instead of <br><br> */
+.section-gap {
+    margin-top: 3rem;
+}
+
+/* ===== Footer ===== */
+.footer {
+    padding: 2rem 1.5rem;
+    background-color: #fafafa;
+    border-top: 1px solid #eee;
+}
+
+.footer .content p {
+    font-size: 0.85rem;
+    color: #888;
+}
+
+/* ===== Equal Contribution Note ===== */
+.equal-contribution {
+    font-size: 15px;
+    font-style: italic;
+    color: #666;
 }

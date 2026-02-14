@@ -20,8 +20,6 @@
   <!-- Icon libraries -->
   <script src="https://kit.fontawesome.com/f8ddf9854a.js" crossorigin="anonymous"></script>  <!-- Font Awesome icons (kit 1) -->
   <script src="https://kit.fontawesome.com/fff5b27ec1.js" crossorigin="anonymous"></script>  <!-- Font Awesome icons (kit 2) -->
-  <!-- <script src="https://kit.fontawesome.com/eaf1856e6f.js" crossorigin="anonymous"></script> --> <!-- Font Awesome backup kit -->
-
   <!-- CSS frameworks and styling -->
   <link rel="stylesheet" href="./static/css/bulma.min.css">                    <!-- Bulma CSS framework -->
   <link rel="stylesheet" href="./static/css/bulma-carousel.min.css">           <!-- Bulma carousel component -->
@@ -93,12 +91,16 @@
           <div class="columns is-centered">
             <div class="column has-text-centered">
               <h1 class="title is-1 publication-title is-bold">
-                <!-- <img src="./static/images/mmmu_icon2.png" style="width:1em;vertical-align: middle" alt="Logo"/> -->
                 <span class="m2w2" style="vertical-align: middle">Mind2Web 2</span>
               </h1>
               <h2 class="subtitle is-3 publication-subtitle">
                 Evaluating Agentic Search with Agent-as-a-Judge
               </h2>
+              <div class="publication-venue">
+                <a href="https://openreview.net/forum?id=AUaW6DS9si" target="_blank" rel="noopener noreferrer">
+                  NeurIPS 2025 &middot; Datasets &amp; Benchmarks Track
+                </a>
+              </div>
               <div class="is-size-5 publication-authors">
               <span class="author-block">
                 <a href="https://boyugou.github.io/">Boyu Gou</a><sup>1*</sup>,</span> &nbsp;
@@ -159,18 +161,10 @@
               <span class="author-block"><sup>2</sup>Amazon AGI</span>
             </div>
 
-            <i style="font-size: 15px !important;">*Equal Contribution.</i>
+            <span class="equal-contribution">*Equal Contribution.</span>
 
             <div class="column has-text-centered">
               <div class="publication-links">
-                <!--<span class="link-block">
-                  <a href="https://arxiv.org/pdf/" class="external-link button is-normal is-rounded is-dark">
-                    <span class="icon">
-                      <i class="fas fa-file-pdf"></i>
-                    </span>
-                    <span>Paper</span>
-                  </a>
-                </span>-->
                 <span class="link-block">
                   <a href="https://arxiv.org/abs/2506.21506" class="external-link button is-normal is-rounded is-dark">
                     <span class="icon">
@@ -179,14 +173,6 @@
                     <span>arXiv</span>
                   </a>
                 </span>
-                <!--<span class="link-block">
-                  <a href="https://www.youtube.com/" class="external-link button is-normal is-rounded is-dark">
-                    <span class="icon">
-                      <i class="fab fa-youtube"></i>
-                    </span>
-                    <span>Video</span>
-                  </a>
-                </span>-->
                 <span class="link-block">
                   <a href="https://github.com/osu-nlp-group/mind2web2"
                     class="external-link button is-normal is-rounded is-dark">
@@ -242,16 +228,10 @@
     </section>
 
     <section class="section">
-      <div class="container" style="margin-bottom: 2vh;">
-        <!-- Abstract. -->
+      <div class="container">
+        <!-- Abstract -->
         <div class="columns is-centered has-text-centered">
           <div class="column is-four-fifths">
-            <!-- <h2 class="title is-3">News</h2>
-            <div class="content has-text-justified">
-              <md-block>
-              </md-block>
-            </div> -->
-
             <h2 class="title is-3">Overview</h2>
             <div class="content has-text-justified">
               <md-block>
@@ -267,31 +247,10 @@
               </md-block>
             </div>
 
-                    <!-- **ADD THIS SUBTLE NEWS SECTION HERE** -->
-        <div class="content has-text-justified" style="margin-top: 1.5rem;">
-          <p style="font-style: italic; color: #666; font-size: 0.95em;">
-            <strong>Updates</strong>
-          </p>
-          <ul style="font-size: 0.9em; color: #666; margin-left: 1rem;">
-            <li><strong>2025/09/18:</strong> Mind2Web 2 has been accepted to <strong>NeurIPS 2025 Datasets and Benchmarks Track</strong>!</li>
-          </ul>
-        </div>
-
-
           </div>
         </div>
-        <!--/ Abstract. -->
-    </div>
-    </section>
-
-    <!-- DATASET SECTION -->
-    <!-- <section class="hero is-light is-small">
-      <div class="hero-body has-text-centered">
-        <h1 class="title is-1 m2w2">
-          <span class="m2w2">Mind2Web 2 Benchmark</span>
-        </h1>
       </div>
-    </section> -->
+    </section>
 
     <hr class="section-divider">
 
@@ -312,18 +271,7 @@
                 - `Time (min)`: The average time taken by the system to complete the tasks, measured in minutes.
                 - `Answer Length`: The average length of the answers generated by the system, measured in word count.
 
-                <!-- The results of the leaderboard are evaluated using a *Private Test Set* of 120 tasks. We provide a separate *Public Development Set*, consisting of 10 tasks with evaluation scripts publicly available. [[Code Coming Soon](https://github.com/osu-nlp-group/mind2web2)] -->
               </md-block>
-
-              <!-- <br>
-              <md-block>
-                Please follow the codebase provided in our [repo](https://github.com/osu-nlp-group/mind2web2) to test your agent on Mind2Web 2.
-
-                For leaderboard submission, [contact us](mailto:m2w2-leaderboard@googlegroups.com) with your organization name and agent's name. 
-                Submit both the agent responses on the *Private Test Set* and the corresponding cached web content to ensure evaluation consistency. We encourage the submission to also include the time taken to complete each task.
-
-                **Note**: The cached web content can be large, so we recommend using a cloud storage service to store the content and provide a link in your submission.
-              </md-block> -->
             </div>
 
             <div class="leaderboard-container">
@@ -332,24 +280,17 @@
               </div>
             </div>
 
-            <br>
-            <div class="content has-text-justified">
+            <div class="content has-text-justified" style="margin-top: 1.5rem;">
               <md-block>
                 📥 **Submission:** Check out our <a href="https://github.com/OSU-NLP-Group/Mind2Web-2#-submission-guideline">submission guideline</a> for more details. We are actively maintaining the leaderboard and welcome all submissions and look forward to your participation!
               </md-block>
             </div>
-
-
-
           </div>
         </div>
 
 
-        <br>
-        <br>
-
         <!-- Dataset Comparison Section-->
-        <div class="columns is-centered has-text-centered">
+        <div class="columns is-centered has-text-centered section-gap">
           <div class="column is-four-fifths">
             <h2 class="title is-3">Comparisons with Existing Benchmarks</h2>
             <div class="content has-text-justified">
@@ -487,11 +428,8 @@
         </div>
 
 
-        <br>
-        <br>
-
         <!-- Task Collection Section -->
-        <div class="columns is-centered has-text-centered">
+        <div class="columns is-centered has-text-centered section-gap">
           <div class="column is-four-fifths">
             <h2 class="title is-3" id="task_collection">Tasks</h2>
 
@@ -556,11 +494,8 @@
         </div>
 
 
-        <br>
-        <br>
-
         <!-- Evaluation Section -->
-        <div class="columns is-centered has-text-centered">
+        <div class="columns is-centered has-text-centered section-gap">
           <div class="column is-four-fifths">
             <h2 class="title is-3" id="evaluation">Agent-as-a-Judge Evaluation</h2>
             <div class="content has-text-justified">
@@ -577,20 +512,6 @@
                 At the operational level, a rubric tree breaks down the evaluation into hierarchical evaluation nodes, where each leaf node conforms to a binary judgment and the internal nodes aggregate and propagate the results toward the root node.
               </md-block>
             </div>
-
-
-            <!-- <div class="content has-text-centered interpolation-panel">
-              <h4 class="title is-5">Rubric Tree Structure</h4>
-              <div class="chart-container">
-                <div id="rubricTree"></div>
-              </div>
-              <md-block>
-                Interactive tree showing our hierarchical evaluation rubric.
-                *Click on nodes to expand/collapse branches*
-              </md-block>
-            </div> -->
-
-            <!-- Replace the existing rubric tree section with this two-column layout -->
 
 
             <div class="content has-text-centered interpolation-panel">
@@ -652,17 +573,7 @@
       </div>
     </section>
 
-    <!-- RESULTS SECTION -->
-    <!-- <section class="hero is-light is-small">
-      <div class="hero-body has-text-centered">
-        <h1 class="title is-1 mmmu">Experiment Results</h1>
-      </div>
-    </section> -->
-
-    <!-- <hr class="section-divider"> -->
-
-
-    <!-- acknowledgement -->
+    <!-- Acknowledgements -->
     <section class="acknowledgements" id="acknowledgements">
       <div class="container">
         <div class="columns is-centered has-text-centered">
@@ -701,15 +612,11 @@
     </section>
 
     <footer class="footer">
-      <div class="columns is-centered">
-        <div class="column is-8">
-          <div class="content">
-            <p>
-              This website is website adapted from <a href="https://nerfies.github.io/">Nerfies</a> and <a href="https://mathvista.github.io/">MathVista</a>, licensed under a <a rel="license"
-                                                  href="http://creativecommons.org/licenses/by-sa/4.0/">Creative
-              Commons Attribution-ShareAlike 4.0 International License</a>.
-            </p>
-          </div>
+      <div class="container">
+        <div class="content has-text-centered">
+          <p>
+            This website is adapted from <a href="https://nerfies.github.io/">Nerfies</a> and <a href="https://mathvista.github.io/">MathVista</a>, licensed under a <a rel="license" href="http://creativecommons.org/licenses/by-sa/4.0/">Creative Commons Attribution-ShareAlike 4.0 International License</a>.
+          </p>
         </div>
       </div>
     </footer>

@@ -22,7 +22,6 @@ class LeaderboardTable {
             const response = await fetch('./leaderboard_data.json');
             const jsonData = await response.json();
             this.data = jsonData.leaderboardData;
-            console.log('Leaderboard data loaded:', this.data);
         } catch (error) {
             console.error('Error loading leaderboard data:', error);
         }
@@ -175,37 +174,7 @@ class LeaderboardTable {
             return;
         }
 
-        // Create tabs
-        // const tabsHtml = `
-        //     <div class="tabs is-centered">
-        //         <ul>
-        //             <li class="tab-item ${this.currentSet === 'public_set' ? 'is-active' : ''}" data-set="public_set">
-        //                 <a>
-        //                     <span class="icon is-small"><i class="fas fa-users" aria-hidden="true"></i></span>
-        //                     <span>Public Set</span>
-        //                 </a>
-        //             </li>
-        //             <li class="tab-item ${this.currentSet === 'eval_set' ? 'is-active' : ''}" data-set="eval_set">
-        //                 <a>
-        //                     <span class="icon is-small"><i class="fas fa-vial" aria-hidden="true"></i></span>
-        //                     <span>Full Set</span>
-        //                 </a>
-        //             </li>
-        //         </ul>
-        //     </div>
-        //     <div class="leaderboard-info-box">
-        //         <div class="content has-text-justified">
-        //         <md-block>
-        //             **Public Set** is a subset of tasks with evaluation rubrics released for public access. [[Code Coming Soon](https://github.com/osu-nlp-group/mind2web2)]
-
-        //             **Full Set** is the complete set of tasks with evaluation rubrics withheld.
-        //         </md-block>
-        //         </div>
-        //     </div>
-        // `;
-
-        const tabsHtml = `
-        `; // Placeholder for tabs HTML if needed
+        const tabsHtml = '';
 
         // Insert tabs before the table wrapper
         const tableWrapper = tableContainer.parentElement;
@@ -400,7 +369,6 @@ class LeaderboardTable {
 
     getSortedData() {
         if (!this.data || this.data.length === 0) {
-            console.warn('No data available for sorting');
             return [];
         }
 

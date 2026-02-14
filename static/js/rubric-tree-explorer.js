@@ -26,10 +26,7 @@ function populateRubricTaskDropdown() {
         return taskData.rubric_path !== null && taskData.rubric_path !== undefined;
     });
     
-    console.log('Tasks with rubrics:', tasksWithRubrics.map(([id]) => id));
-    
     if (tasksWithRubrics.length === 0) {
-        console.warn('No tasks with rubric paths found');
         clearRubricTree();
         return;
     }
@@ -58,8 +55,7 @@ function populateRubricTaskDropdown() {
         handleTaskSelection(this.value);
     });
 
-    // **TRIGGER DEFAULT SELECTION**
-    console.log(`Loading default task with rubric: ${default_task}`);
+    // Trigger default selection
     selector.value = default_task;
     handleTaskSelection(default_task);
 }
@@ -81,7 +77,6 @@ function handleTaskSelection(taskId) {
 
     // **CHECK IF RUBRIC PATH EXISTS**
     if (!taskData.rubric_path) {
-        console.warn(`Task ${taskId} has no rubric path`);
         clearRubricTree();
         document.getElementById('rubricTaskDescription').innerHTML = 
             '<p class="has-text-warning">This task has no evaluation rubric available.</p>';
@@ -122,7 +117,6 @@ function displayRubricTaskDescription(taskId) {
 // Load and display rubric from JSON file
 async function loadAndDisplayRubric(rubricPath) {
     try {
-        console.log('Loading rubric from:', rubricPath);
         const response = await fetch(rubricPath);
         
         if (!response.ok) {
@@ -163,8 +157,6 @@ function formatTaskDescription(description) {
 
 // Create dynamic rubric tree from JSON data
 function createDynamicRubricTree(rubricData, containerId = 'rubricTree') {
-    console.log('Creating dynamic rubric tree');
-    
     // Check if container exists
     const container = document.getElementById(containerId);
     if (!container) {
@@ -313,15 +305,6 @@ function createDynamicRubricTree(rubricData, containerId = 'rubricTree') {
     root.x0 = height / 2;
     root.y0 = 0;
 
-    // Collapse nodes after depth 2
-    // if (root.children) {
-    //     root.children.forEach(function(d) {
-    //         if (d.children) {
-    //             d.children.forEach(collapse);
-    //         }
-    //     });
-    // }
-
     function expandAll(d) {
         if (d._children) {
             d.children = d._children;
@@ -356,14 +339,6 @@ function createDynamicRubricTree(rubricData, containerId = 'rubricTree') {
                 const containerWidth = svgWidth;
                 const containerHeight = svgHeight;
                 
-                console.log('Centering with dimensions:', { 
-                    containerWidth, 
-                    containerHeight, 
-                    boundsWidth: bounds.width, 
-                    boundsHeight: bounds.height,
-                    maxNodesAtLevel 
-                });
-                
                 // Calculate scale to fit the entire tree with padding
                 const padding = 40; // Increased padding
                 const availableWidth = containerWidth - padding * 2;
@@ -374,31 +349,12 @@ function createDynamicRubricTree(rubricData, containerId = 'rubricTree') {
                 const scale = Math.min(scaleX, scaleY, 0.9); // Max 90% to ensure buffer
 
 
-                console.log('Calculated scale:', {
-                    scaleX, 
-                    scaleY, 
-                    scale, 
-                    availableWidth, 
-                    availableHeight
-                });
-                
                 // Calculate translation to center the scaled tree
                 const scaledWidth = bounds.width * scale;
                 const scaledHeight = bounds.height * scale;
                 
                 const translateX = (containerWidth - scaledWidth) / 2 - bounds.x * scale;
                 const translateY = (containerHeight - scaledHeight) / 2 - bounds.y * scale;
-                
-                console.log('Centering calculation:', { 
-                    bounds, 
-                    scale, 
-                    translateX, 
-                    translateY,
-                    availableWidth,
-                    availableHeight,
-                    scaleX,
-                    scaleY
-                });
                 
                 svg.transition()
                     .duration(750)
@@ -455,15 +411,6 @@ function createDynamicRubricTree(rubricData, containerId = 'rubricTree') {
             .style('font-family', 'inherit')
             .style('cursor', 'pointer')
             .style('pointer-events', 'none'); // Prevent text from blocking click events
-
-        // Add tooltips with detailed information
-        // nodeEnter.append('title')
-        //     .text(d => {
-        //         const data = d.data;
-        //         // return `${data.desc}\nStatus: ${data.status || 'N/A'}\nScore: ${data.score || 'N/A'}\nStrategy: ${data.strategy || 'N/A'}`;
-        //         return `${data.desc}\nCritical: ${data.critical ? 'Yes' : 'No'}`;
-        //     });
-
 
         nodeEnter.on("mouseover", function(event, d) {
                 const data = d.data;
@@ -626,8 +573,6 @@ let nodeIdCounter = 0; // Counter for node IDs
 
 // Initialize when the page loads
 document.addEventListener('DOMContentLoaded', function() {
-    console.log('DOM loaded, initializing rubric task explorer');
-    
     setTimeout(() => {
         loadTaskRubricData();
     }, 500);
