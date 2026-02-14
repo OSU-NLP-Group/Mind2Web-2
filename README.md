@@ -24,7 +24,7 @@ Mind2Web 2 is a benchmark for agentic search systems, featuring Agent-as-a-Judge
 ## 📥 Submission Guideline
 
 To get answers for tasks of Mind2Web 2:
-- If you are developing and testing a base model and have no agent framework at hand, you may start from go-to frameworks such as [Hugging Face's Open Deep Research](). You may want to do some zero-shot or few-shot prompting to let the agent better understand how to provide citations, to pass our attribution verifications in the task evaluations.
+- If you are developing and testing a base model and have no agent framework at hand, you may start from go-to frameworks such as [Hugging Face's Open Deep Research](https://huggingface.co/blog/open-deep-research). You may want to do some zero-shot or few-shot prompting to let the agent better understand how to provide citations, to pass our attribution verifications in the task evaluations.
 - If you have your own agent, still notice that we expect the agent to also provide **URL sources** to the critical facts included in the answers. You may also refer to the evaluation script to understand how the evaluation is conducted.
 
 To evaluate answers from an agent system, there are mainly three steps involved:
