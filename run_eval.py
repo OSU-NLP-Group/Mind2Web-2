@@ -8,7 +8,7 @@ from typing import List, Dict, Any
 
 from tqdm import tqdm
 
-from mind2web2.eval_runner import evaluate_task, merge_all_results
+from mind2web2.eval_runner import evaluate_task, merge_all_results, generate_result_summary
 from mind2web2.llm_client.base_client import LLMClient
 from mind2web2.utils.path_config import PathConfig
 
@@ -302,12 +302,18 @@ def main() -> None:
             else:
                 logging.info(f"  - {task_id}: No results")
 
-    # Merge all results if evaluating all tasks
-    if not args.task_id and results:
+    # Generate agent-level summary
+    if results:
         logging.info("=" * 60)
-        logging.info("Merging all results...")
-        merge_all_results(paths.eval_results_root)
-        logging.info("✅ Results merged successfully")
+        logging.info("Generating agent summary...")
+        summary = generate_result_summary(paths.eval_results_root, args.agent_name)
+        if summary:
+            num_runs = summary["num_runs"]
+            pass_key = f"pass_at_{num_runs}"
+            logging.info(f"  Partial Completion: {summary['avg_score']:.4f} ± {summary['avg_score_std']:.4f}")
+            logging.info(f"  Success Rate:       {summary['success_rate']:.4f} ± {summary['success_rate_std']:.4f}")
+            logging.info(f"  Pass@{num_runs}:             {summary[pass_key]:.4f}")
+            logging.info(f"  Avg Word Count:     {summary['avg_answer_word_count']:.1f} ± {summary['avg_answer_word_count_std']:.1f}")
 
     logging.info("=" * 60)
     logging.info("🎉 Evaluation completed!")
