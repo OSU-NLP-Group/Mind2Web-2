@@ -25,7 +25,7 @@ __all__ = [
     "Evaluator",
     "VerificationNode", 
     "AggregationStrategy",
-    "CacheClass",
+    "CacheFileSys",
     "create_evaluator",
     "Extractor",
     "Verifier",

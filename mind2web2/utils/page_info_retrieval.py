@@ -11,7 +11,7 @@ from typing import Optional, Tuple, Union
 
 # Third-party imports
 from PIL import Image
-from rebrowser_playwright.async_api import (
+from patchright.async_api import (
     Browser,
     BrowserContext,
     Page,
@@ -221,7 +221,7 @@ class BatchBrowserManager:
             Tuple of (screenshot_b64, text_content)
         """
 
-        print(f"Start collecting page {url}")
+        logger.info(f"Start collecting page {url}")
         # Use semaphore to limit concurrent pages
         async with self._page_semaphore:
             # Ensure browser is running

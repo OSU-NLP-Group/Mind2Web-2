@@ -10,7 +10,7 @@ async def acompletion_with_backoff(client, **kwargs):
     return await client.messages.create(**kwargs)
 
 
-class BedrockAntrhopicClient():
+class BedrockAnthropicClient():
     def __init__(self):
         self.client = AnthropicBedrock(
             aws_access_key=os.getenv("AWS_ACCESS_KEY"), 
@@ -30,7 +30,7 @@ class BedrockAntrhopicClient():
             return response.content[0].text
 
 
-class AsyncBedrockAntrhopicClient():
+class AsyncBedrockAnthropicClient():
     def __init__(self):
         self.client = AsyncAnthropicBedrock(
             aws_access_key=os.getenv("AWS_ACCESS_KEY"), 

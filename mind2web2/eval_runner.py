@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
-import traceback
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -173,7 +173,7 @@ async def _eval_one_answer(
         if result is not None:
             _save_result_json(result, output_dir / agent_name / task_id, timestamp, is_self_debug)
     except Exception as e:
-        print(f"Failed to save result for {agent_name}/{answer_name}: {e}")
+        logging.getLogger(__name__).error(f"Failed to save result for {agent_name}/{answer_name}: {e}")
         return e
 
     return result
@@ -262,7 +262,7 @@ async def evaluate_task(
 
     # Check if answer directory exists
     if not answer_root.exists():
-        print(f"⚠️ No answers found for {agent_name}/{task_id} at {answer_root}")
+        logging.getLogger(__name__).warning(f"No answers found for {agent_name}/{task_id} at {answer_root}")
         return []
 
     # ------------------------------------------------------------------
@@ -308,8 +308,8 @@ async def evaluate_task(
                 "answer_paths": [p.name for p in answer_paths]
             }
         )
-        print(f"-->> Answer Root: {answer_root}")
-        print(f"-->> Answers to Eval: {[p.name for p in answer_paths]}")
+        main_logger.info(f"-->> Answer Root: {answer_root}")
+        main_logger.info(f"-->> Answers to Eval: {[p.name for p in answer_paths]}")
 
         if not answer_paths:
             main_logger.warning(f"No answer files found in {answer_root}")
@@ -345,7 +345,7 @@ async def evaluate_task(
                         "operation": "answer_start"
                     }
                 )
-                print(f"👉 Starting {agent_name} {answer_name}")
+                main_logger.info(f"👉 Starting {agent_name} {answer_name}")
 
                 # 5‑A. Copy original md to answer folder (if not copied yet)
                 answer_folder = output_root / agent_name / task_id / answer_base
@@ -368,7 +368,7 @@ async def evaluate_task(
                             "operation": "reuse_result"
                         }
                     )
-                    print(f"⚠️ Existing result -- {agent_name} {answer_name}")
+                    main_logger.info(f"⚠️ Existing result -- {agent_name} {answer_name}")
                     try:
                         result = json.loads(latest.read_text(encoding="utf-8"))
                         main_logger.debug(
@@ -391,7 +391,6 @@ async def evaluate_task(
                                 "operation": "existing_result_error"
                             }
                         )
-                        traceback.print_exception(type(exc), exc, exc.__traceback__)
 
                 # 5‑C. Real evaluation
                 try:
@@ -440,7 +439,6 @@ async def evaluate_task(
                             "operation": "answer_exception"
                         }
                     )
-                    traceback.print_exception(type(exc), exc, exc.__traceback__)
                     return exc
 
         # ------------------------------------------------------------------
@@ -543,6 +541,185 @@ def _save_agent_task_summary(agent_task_dir: Path, results: List[Dict]):
         json.dump(summary, fp, ensure_ascii=False, indent=4)
 
 
+def generate_result_summary(output_dir: Union[str, Path], agent_name: str) -> Optional[Dict]:
+    """Generate an agent-level summary from per-task evaluation results.
+
+    Metrics computed:
+    - partial_completion: avg score per run → avg across runs (with std)
+    - success_rate: avg binary success per run → avg across runs (with std)
+    - pass_at_k: task passes if ANY run succeeded
+    - word_count: avg word count per run → avg across runs (with std)
+
+    Parameters
+    ----------
+    output_dir : Union[str, Path]
+        Base eval results directory (e.g. ``eval_results/``)
+    agent_name : str
+        Agent folder name
+
+    Returns
+    -------
+    dict or None
+        Summary dict (also saved to ``<output_dir>/<agent_name>/summary.json``)
+    """
+    import numpy as np
+
+    agent_dir = Path(output_dir) / agent_name
+    if not agent_dir.is_dir():
+        logging.getLogger(__name__).error(f"Agent directory not found: {agent_dir}")
+        return None
+
+    # ------------------------------------------------------------------ #
+    # 1. Collect per-task, per-answer data
+    # ------------------------------------------------------------------ #
+    # tasks_data[task_id] = [{"answer_name", "score", "success", "word_count"}, ...]
+    tasks_data: Dict[str, List[Dict]] = {}
+
+    for task_dir in sorted(agent_dir.iterdir()):
+        if not task_dir.is_dir():
+            continue
+        task_id = task_dir.name
+
+        # Skip non-task directories (e.g. main_logs)
+        summary_file = task_dir / "summary.json"
+        if not summary_file.exists():
+            continue
+
+        try:
+            with summary_file.open("r", encoding="utf-8") as fp:
+                task_summary = json.load(fp)
+        except Exception as e:
+            logging.getLogger(__name__).warning(f"Failed to load {summary_file}: {e}")
+            continue
+
+        answers = []
+        for entry in task_summary:
+            answer_name = entry["answer_name"]
+            answer_base = answer_name.rsplit(".", 1)[0]  # answer_1.md → answer_1
+
+            # Word count from the copied .md file
+            md_path = task_dir / answer_base / answer_name
+            word_count = 0
+            if md_path.exists():
+                try:
+                    word_count = len(md_path.read_text(encoding="utf-8").split())
+                except Exception:
+                    pass
+
+            answers.append({
+                "answer_name": answer_name,
+                "score": float(entry.get("score", 0)),
+                "success": bool(entry.get("success", False)),
+                "word_count": word_count,
+            })
+
+        if answers:
+            tasks_data[task_id] = answers
+
+    if not tasks_data:
+        logging.getLogger(__name__).warning(f"No task results found for {agent_name}")
+        return None
+
+    # ------------------------------------------------------------------ #
+    # 2. Group by run (answer_k.md)
+    # ------------------------------------------------------------------ #
+    # run_metrics[answer_name] = {"scores": [...], "successes": [...], "word_counts": [...]}
+    run_metrics: Dict[str, Dict[str, list]] = defaultdict(lambda: {"scores": [], "successes": [], "word_counts": []})
+
+    for task_id, answers in tasks_data.items():
+        for ans in answers:
+            name = ans["answer_name"]
+            run_metrics[name]["scores"].append(ans["score"])
+            run_metrics[name]["successes"].append(float(ans["success"]))
+            run_metrics[name]["word_counts"].append(ans["word_count"])
+
+    # ------------------------------------------------------------------ #
+    # 3. Per-run aggregates (avg across tasks within each run)
+    # ------------------------------------------------------------------ #
+    per_run = {}
+    run_avg_scores = []
+    run_avg_successes = []
+    run_avg_word_counts = []
+
+    for run_name in sorted(run_metrics.keys()):
+        m = run_metrics[run_name]
+        avg_score = float(np.mean(m["scores"]))
+        avg_success = float(np.mean(m["successes"]))
+        avg_wc = float(np.mean(m["word_counts"]))
+
+        per_run[run_name] = {
+            "num_tasks": len(m["scores"]),
+            "avg_score": round(avg_score, 4),
+            "success_rate": round(avg_success, 4),
+            "avg_word_count": round(avg_wc, 1),
+        }
+
+        run_avg_scores.append(avg_score)
+        run_avg_successes.append(avg_success)
+        run_avg_word_counts.append(avg_wc)
+
+    num_runs = len(per_run)
+
+    # ------------------------------------------------------------------ #
+    # 4. Across-run aggregates (avg & std of per-run values)
+    # ------------------------------------------------------------------ #
+    avg_score = float(np.mean(run_avg_scores))
+    avg_success = float(np.mean(run_avg_successes))
+    avg_word_count = float(np.mean(run_avg_word_counts))
+
+    std_score = float(np.std(run_avg_scores, ddof=0)) if num_runs > 1 else 0.0
+    std_success = float(np.std(run_avg_successes, ddof=0)) if num_runs > 1 else 0.0
+    std_word_count = float(np.std(run_avg_word_counts, ddof=0)) if num_runs > 1 else 0.0
+
+    # ------------------------------------------------------------------ #
+    # 5. Pass@k — task passes if any run succeeded
+    # ------------------------------------------------------------------ #
+    num_pass = sum(
+        1 for answers in tasks_data.values()
+        if any(a["success"] for a in answers)
+    )
+    pass_at_k = num_pass / len(tasks_data) if tasks_data else 0.0
+
+    # ------------------------------------------------------------------ #
+    # 6. Per-task detail
+    # ------------------------------------------------------------------ #
+    tasks_detail: Dict[str, Dict] = {}
+    for task_id in sorted(tasks_data.keys()):
+        answers = tasks_data[task_id]
+        scores = [a["score"] for a in answers]
+        tasks_detail[task_id] = {
+            "answers": answers,
+            "best_score": max(scores),
+            "avg_score": round(float(np.mean(scores)), 6),
+            "pass": any(a["success"] for a in answers),
+        }
+
+    # ------------------------------------------------------------------ #
+    # 7. Build & save summary
+    # ------------------------------------------------------------------ #
+    summary = {
+        "agent_name": agent_name,
+        "num_tasks": len(tasks_data),
+        "num_runs": num_runs,
+        "avg_score": round(avg_score, 4),
+        "avg_score_std": round(std_score, 4),
+        "success_rate": round(avg_success, 4),
+        "success_rate_std": round(std_success, 4),
+        f"pass_at_{num_runs}": round(pass_at_k, 4),
+        "avg_answer_word_count": round(avg_word_count, 1),
+        "avg_answer_word_count_std": round(std_word_count, 1),
+        "per_run": per_run,
+        "tasks": tasks_detail,
+    }
+
+    summary_path = agent_dir / "summary.json"
+    with summary_path.open("w", encoding="utf-8") as fp:
+        json.dump(summary, fp, ensure_ascii=False, indent=4)
+
+    logging.getLogger(__name__).info(f"Agent summary saved to {summary_path}")
+    return summary
+
+
 def merge_all_results(output_dir: Union[str, Path]) -> Dict[str, Dict[str, List[Dict]]]:
     """Merge all evaluation results across tasks and agents.
     
@@ -571,12 +748,12 @@ def merge_all_results(output_dir: Union[str, Path]) -> Dict[str, Dict[str, List[
                         results = json.load(fp)
                         merged_results[task_id][agent_name] = results
                 except Exception as e:
-                    print(f"Failed to load summary from {summary_file}: {e}")
+                    logging.getLogger(__name__).error(f"Failed to load summary from {summary_file}: {e}")
 
     # Save merged results
     merged_file = output_root / "all_results.json"
     with merged_file.open("w", encoding="utf-8") as fp:
         json.dump(dict(merged_results), fp, ensure_ascii=False, indent=4)
 
-    print(f"📊 Merged results saved to {merged_file}")
+    logging.getLogger(__name__).info(f"Merged results saved to {merged_file}")
     return dict(merged_results)

@@ -73,8 +73,8 @@ uv sync
 # Activate the virtual environment
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
-# Install browsers for Playwright (we use rebrowser playwright for better webpage fetching)
-rebrowser_playwright install
+# Install browsers for Playwright (we use patchright for better stealth browsing)
+patchright install
 ```
 
 #### Option 2: Using conda + pip
@@ -88,7 +88,7 @@ conda activate mind2web2
 pip install -e .
 
 # Install browsers for Playwright
-rebrowser_playwright install
+patchright install
 ```
 
 ### 1. Prepare Your Data

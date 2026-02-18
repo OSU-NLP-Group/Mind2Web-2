@@ -9,7 +9,6 @@ from pydantic import BaseModel
 
 from .eval_toolkit import create_evaluator, Extractor, Verifier
 from .verification_tree import VerificationNode, AggregationStrategy
-import threading
 
 class SourceKind(Enum):
     NONE = auto()
@@ -61,11 +60,15 @@ class Evaluator:
         self._ground_truth_info: List[dict] = []
         self._custom_info: List[dict] = []
 
-        # ID uniqueness tracking
+        # ID uniqueness tracking (safe without lock: asyncio is single-threaded
+        # and _generate_unique_id is synchronous, so no interleaving is possible)
         self._used_node_ids: set = set()
-
-        self._id_lock = threading.Lock()  # Protect thread safety of ID generation
         self._parent_child_map: dict[str, str] = {}  # Optimize parent-child relationship lookup
+
+    async def close(self):
+        """Clean up resources (browser manager). Call when evaluation is done."""
+        if self.extractor and self.extractor.browser_manager:
+            await self.extractor.browser_manager.stop()
 
     def initialize(
             self,
@@ -188,19 +191,18 @@ class Evaluator:
 
 
     def _generate_unique_id(self, base_id: str) -> str:
-        """Generate unique ID based on base_id"""
-        with self._id_lock:
-            if base_id not in self._used_node_ids:
-                self._used_node_ids.add(base_id)
-                return base_id
+        """Generate unique ID based on base_id."""
+        if base_id not in self._used_node_ids:
+            self._used_node_ids.add(base_id)
+            return base_id
 
-            counter = 1
-            while f"{base_id}_{counter}" in self._used_node_ids:
-                counter += 1
+        counter = 1
+        while f"{base_id}_{counter}" in self._used_node_ids:
+            counter += 1
 
-            unique_id = f"{base_id}_{counter}"
-            self._used_node_ids.add(unique_id)
-            return unique_id
+        unique_id = f"{base_id}_{counter}"
+        self._used_node_ids.add(unique_id)
+        return unique_id
 
 
     def add_parallel(

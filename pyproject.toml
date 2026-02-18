@@ -21,7 +21,7 @@ dependencies = [
     "pydantic>=1.10", # If already migrated to v2, change to pydantic>=2
     "tqdm",
     "pandas>=1.4",
-    "playwright~=1.42",
+    "patchright>=1.58.0",
     "arxiv",
     "googlemaps",
     "aiohttp",
@@ -40,7 +40,6 @@ dependencies = [
     "markdownify",
     "html2text>=2025.4.15",
     "pillow>=11.3.0",
-    "rebrowser-playwright>=1.52.0",
     "validators>=0.35.0",
     "python-multipart>=0.0.22",
 ]
