@@ -263,11 +263,11 @@
         }
       },
       "eval_set": {
-        "partial_completion": "0.552",
-        "success_rate": "0.2646",
-        "pass3": "0.40",
+        "partial_completion": "0.5274",
+        "success_rate": "0.2501",
+        "pass3": "0.3782",
         "time": "-",
-        "answer_length": "220"
+        "answer_length": "217"
       }
     }
   ]
