@@ -252,7 +252,7 @@
         "name": "TongAgents",
         "date": "2026-02-11",
         "type": "interactive_agent",
-        "tags": ["bigai"],
+        "tags": ["BIGAI"],
         "url": "https://tongagents.mybigai.ac.cn/docs/Tong-Agent/",
         "details": {
           "base_model": "",
