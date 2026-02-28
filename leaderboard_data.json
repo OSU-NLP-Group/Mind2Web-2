@@ -249,17 +249,16 @@
     },
     {
       "info": {
-        "name": "JudyAgent",
+        "name": "TongAgents",
         "date": "2026-02-11",
         "type": "interactive_agent",
-        "tags": ["independent"],
-        "url": "",
+        "tags": ["BIGAI"],
+        "url": "https://tongagents.mybigai.ac.cn/docs/Tong-Agent/",
         "details": {
-          "base_model": "GPT-4.1",
-          "architecture": "Multi-Agent System",
-          "organization": "Independent Researcher",
-          "contact": "Kai Zhou (zhoukai83@outlook.com)",
-          "description": "Multi-agent system with planners and executors."
+          "base_model": "",
+          "architecture": "",
+          "organization": "BIGAI",
+          "contact": "Kai Zhou (zhoukai@bigai.ai)"
         }
       },
       "eval_set": {
