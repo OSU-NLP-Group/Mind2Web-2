@@ -268,6 +268,27 @@
         "time": "-",
         "answer_length": "217"
       }
+    },
+    {
+      "info": {
+        "name": "QUEST-35B",
+        "date": "2026-05-17",
+        "type": "deep_research",
+        "tags": ["open_source", "osu_nlp"],
+        "url": "https://osu-nlp-group.github.io/QUEST/",
+        "details": {
+          "base_model": "",
+          "architecture": "Deep Research",
+          "organization": "OSU NLP"
+        }
+      },
+      "eval_set": {
+        "partial_completion": "0.548",
+        "success_rate": "0.305",
+        "pass3": "0.454",
+        "time": "-",
+        "answer_length": "968"
+      }
     }
   ]
 }
