@@ -2,7 +2,7 @@ class LeaderboardTable {
     constructor() {
         this.data = null;
         this.currentSet = 'eval_set';
-        this.sortColumn = 'partial_completion';  // Default sort by partial_completion
+        this.sortColumn = 'success_rate';  // Default sort by success_rate
         this.sortDirection = 'desc';
         this.popover = null;
         this.popoverTimeout = null;
