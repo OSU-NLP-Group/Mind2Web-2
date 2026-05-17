@@ -279,7 +279,7 @@
         "details": {
           "base_model": "",
           "architecture": "Deep Research",
-          "organization": "OSU NLP"
+          "organization": "OSU NLP Group"
         }
       },
       "eval_set": {
