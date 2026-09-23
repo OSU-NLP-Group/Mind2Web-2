@@ -247,7 +247,7 @@ class CacheFileSys:
 
     def failure_url(self, url: str) -> Optional[str]:
         """The URL of the record :meth:`failure` returns for ``url``, as :meth:`failures` lists it, or ``None``."""
-        key = self._failure_key(url)
+        key = self._failure_key(url, self._failures)
         if key is None or self._is_stored(_address(key)):
             return None
         return _address(key)

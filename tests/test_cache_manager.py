@@ -15,7 +15,7 @@ from starlette.routing import Route
 from cache_manager_web import run as run_script
 from cache_manager_web.backend.api import routes
 from cache_manager_web.backend.app import LocalRequestGuard, _host_name, app
-from cache_manager_web.backend.models.cache_manager import CacheManager
+from cache_manager_web.backend.models.cache_manager import CacheManager, ReviewStateError
 from cache_manager_web.backend.models.keyword_detector import KeywordDetector
 from mind2web2.utils.cache_filesys import CacheFileSys, storage_key
 
@@ -119,6 +119,60 @@ def test_a_task_with_only_pending_urls_is_loaded_and_bare_flags_are_ignored(tmp_
     assert [(info.url, info.content_type) for info in manager.get_task_urls("task")] == [
         (A, "pending"), ("not a url", "pending")]
     assert manager.url_state("task", B) is None
+
+
+def test_review_state_changes_by_two_managers_of_one_folder_are_all_kept(tmp_path):
+    # While /api/load builds a new manager, the one it replaces keeps serving edits to the same files
+    task_dir = tmp_path / "agent" / "task"
+    cache = CacheFileSys(str(task_dir))
+    cache.put_web(A, "page a", png_bytes())
+    cache.put_web(B, "page b", png_bytes())
+    p, q = "https://example.com/p", "https://example.com/q"
+    (task_dir / "pending.json").write_text(json.dumps([p]))
+    serving, loading = CacheManager(), CacheManager()
+    serving.load_agent_cache(tmp_path / "agent")
+    loading.load_agent_cache(tmp_path / "agent")
+
+    serving.flag_url("task", A)
+    serving.store_page("task", p, text="captured during the load", screenshot=png_bytes())
+    serving.mark_url_reviewed("task", A, "skip")
+    loading.flag_url("task", B)
+    loading.add_pending_url("task", q)
+    loading.mark_url_reviewed("task", B, "ok")
+
+    assert (flags(tmp_path), pending(tmp_path)) == ([A, B], [q])
+    assert url_file(tmp_path, "reviewed.json") == {A: "skip", B: "ok"}
+    assert loading.is_flagged("task", A)  # a change re-reads the file it changes
+
+
+def test_a_review_state_file_that_cannot_be_read_is_never_overwritten(tmp_path):
+    task_dir = tmp_path / "agent" / "task"
+    CacheFileSys(str(task_dir)).put_web(A, "page a", png_bytes())
+    manager = CacheManager()
+    assert manager.load_agent_cache(tmp_path / "agent") == (1, 1)
+    cut_short = '["https://example.com/a", '
+    for name in ("flags.json", "pending.json", "reviewed.json"):
+        (task_dir / name).write_text(cut_short)
+
+    with pytest.raises(ReviewStateError, match="flags.json"):
+        manager.flag_url("task", A)
+    with pytest.raises(ReviewStateError, match="pending.json"):
+        manager.add_pending_url("task", B)
+    with pytest.raises(ReviewStateError, match="reviewed.json"):
+        manager.mark_url_reviewed("task", A, "ok")
+    assert [(task_dir / name).read_text() for name in ("flags.json", "pending.json", "reviewed.json")] == [
+        cut_short] * 3
+    assert CacheManager().load_agent_cache(tmp_path / "agent") == (0, 1)  # not loaded, so no edit can reach it
+
+    with client() as c:
+        (task_dir / "pending.json").unlink()
+        (task_dir / "reviewed.json").unlink()
+        (task_dir / "flags.json").write_text("[]")
+        c.post("/api/load", json={"path": str(tmp_path / "agent")})
+        (task_dir / "flags.json").write_text(cut_short)
+        response = c.post("/api/flag/task", json={"url": A})
+        assert response.status_code == 500 and "flags.json" in response.json()["detail"]
+    assert (task_dir / "flags.json").read_text() == cut_short
 
 
 # ------------------------------------------------------------------ the API
@@ -263,6 +317,47 @@ def test_edits_name_a_page_by_any_of_its_spellings(tmp_path):
         assert {i["url"] for i in c.get("/api/issues").json()["issue_index"]} == {"https://example.com/moved"}
 
 
+def test_pending_urls_whose_page_another_process_stored_are_dropped_on_load(tmp_path):
+    task_dir = tmp_path / "agent" / "task"
+    CacheFileSys(str(task_dir)).put_web(A, "page a", png_bytes())
+    (task_dir / "pending.json").write_text(json.dumps(["https://example.com/new/"]))  # added in the Cache Manager
+    stored = "http://www.example.com/new"  # evaluation captured it live, under the answer's spelling
+    CacheFileSys(str(task_dir)).put_web(stored, "captured live by evaluation", png_bytes())
+
+    with client() as c:
+        c.post("/api/load", json={"path": str(tmp_path / "agent")})
+        assert c.post("/api/reset/task", json={"url": stored}).json()["ok"]
+        assert url_states(c) == {A: ("web", [], ""), stored: ("pending", ["not captured yet"], "definite")}
+        assert c.delete("/api/urls/task", params={"url": stored}).json() == {"ok": True}
+        assert set(url_states(c)) == {A}
+        assert pending(tmp_path) == [] and c.get("/api/issues").json()["issue_index"] == []
+
+
+def test_deleting_a_pending_url_deletes_its_other_spellings(tmp_path):
+    task_dir = tmp_path / "agent" / "task"
+    CacheFileSys(str(task_dir)).put_web(A, "page a", png_bytes())
+    (task_dir / "pending.json").write_text(json.dumps(["https://example.com/new", "http://www.example.com/new/"]))
+
+    with client() as c:
+        c.post("/api/load", json={"path": str(tmp_path / "agent")})
+        assert c.delete("/api/urls/task", params={"url": "https://example.com/new"}).json() == {"ok": True}
+        assert set(url_states(c)) == {A} and pending(tmp_path) == []
+
+
+def test_pending_urls_another_manager_added_get_issue_entries_once_listed(tmp_path):
+    task_dir = tmp_path / "agent" / "task"
+    CacheFileSys(str(task_dir)).put_web(A, "page a", png_bytes())
+    c_url = "https://example.com/c"
+
+    with client() as c:
+        c.post("/api/load", json={"path": str(tmp_path / "agent")})
+        (task_dir / "pending.json").write_text(json.dumps([B]))  # by the manager a load is replacing
+        assert c.post("/api/urls/task", json={"url": c_url}).json()["ok"]
+        assert pending(tmp_path) == [B, c_url]
+        assert url_states(c) == {A: ("web", [], ""), B: ("pending", ["not captured yet"], "definite"),
+                                 c_url: ("pending", ["not captured yet"], "definite")}
+
+
 def test_uploads_store_only_captured_content(tmp_path):
     task_dir = tmp_path / "agent" / "task"
     CacheFileSys(str(task_dir)).put_web(A, "page a", png_bytes())
@@ -288,16 +383,45 @@ def test_uploads_store_only_captured_content(tmp_path):
         assert CacheFileSys(str(task_dir)).has(B + "/moved") is None
 
 
-def test_loading_a_cache_stops_the_batch_and_clears_the_capture_target(tmp_path):
-    cache = CacheFileSys(str(tmp_path / "agent" / "task"))
-    cache.record_failure(A, "HTTP 503")
+def test_loading_another_folder_stops_the_batch_and_clears_the_capture_target(tmp_path):
+    CacheFileSys(str(tmp_path / "agent" / "task")).record_failure(A, "HTTP 503")
+    CacheFileSys(str(tmp_path / "other" / "task")).record_failure(B, "HTTP 503")
     with client() as c:
         c.post("/api/load", json={"path": str(tmp_path / "agent")})
         assert c.post("/api/capture/batch/start", json={"items": [{"task_id": "task", "url": A}]}).json()["total"] == 1
-        assert c.get("/api/capture/target").json()["active"]
-        c.post("/api/load", json={"path": str(tmp_path / "agent")})
+        # Opening the UI and Refresh load the loaded folder again, which keeps the batch
+        c.post("/api/load", json={"path": str(tmp_path / "other" / ".." / "agent")})
+        assert c.get("/api/capture/batch/status").json()["current"] == {"task_id": "task", "url": A}
+        assert c.get("/api/capture/target").json()["url"] == A
+        c.post("/api/load", json={"path": str(tmp_path / "other")})
         assert c.get("/api/capture/batch/status").json() == {"active": False}
         assert c.get("/api/capture/target").json() == {"active": False}
+
+
+def test_edits_served_while_a_load_reads_the_folder_are_kept_and_listed(tmp_path, monkeypatch):
+    task_dir = tmp_path / "agent" / "task"
+    cache = CacheFileSys(str(task_dir))
+    cache.put_web(A, "page a", png_bytes())
+    cache.put_web(B, "page b", png_bytes())
+    p, q = "https://example.com/p", "https://example.com/q"
+    (task_dir / "pending.json").write_text(json.dumps([p]))
+
+    class EditedWhileLoading(CacheManager):
+        def load_agent_cache(self, agent_path):
+            loaded = super().load_agent_cache(agent_path)
+            routes._cm.flag_url("task", A)  # the manager being replaced still serves requests
+            routes._cm.store_page("task", p, text="captured during the load", screenshot=png_bytes())
+            return loaded
+
+    with client() as c:
+        c.post("/api/load", json={"path": str(tmp_path / "agent")})
+        monkeypatch.setattr(routes, "CacheManager", EditedWhileLoading)
+        c.post("/api/load", json={"path": str(tmp_path / "agent")})
+        c.post("/api/flag/task", json={"url": B})
+        c.post("/api/urls/task", json={"url": q})
+        assert (flags(tmp_path), pending(tmp_path)) == ([A, B], [q])
+        assert url_states(c) == {A: ("web", ["flagged"], "definite"), B: ("web", ["flagged"], "definite"),
+                                 p: ("web", [], ""), q: ("pending", ["not captured yet"], "definite")}
 
 
 def test_a_failed_load_keeps_the_loaded_cache(tmp_path, monkeypatch):

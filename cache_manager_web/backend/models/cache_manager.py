@@ -7,7 +7,9 @@ review state next to them, which evaluation never reads:
 
 - ``pending.json``: URLs to capture that have neither a stored page nor a
   failure record: URLs the reviewer added, and URLs whose page or failure
-  record was reset.  A URL stops being pending once a page is stored for it.
+  record was reset.  A URL stops being pending once a page is stored for it,
+  and loading a task drops the pending URLs for which another process, such
+  as an evaluation run, stored a page or recorded a failure.
 - ``flags.json``: URLs whose stored page looks wrong and needs a recapture.
   A capture or upload clears the flag.  A flag on a URL that has neither a
   stored page nor a failure record has no effect.
@@ -19,16 +21,28 @@ spelling, such as the URL a capture was redirected to or a URL typed with a
 trailing slash, updates the same entry.  Flags and review statuses never
 change what evaluation sees; only captures, uploads, deletions, and resets
 change the stored pages.
+
+A manager reads ``pending.json`` and ``flags.json`` when it loads a task and
+answers lookups from that copy; ``reviewed.json`` is read on every lookup.
+Every change re-reads the file it changes, applies the change, and replaces
+the file atomically, under a lock that all managers of the process share, and
+the manager's copy becomes what the file then holds.  Two managers of one
+folder, such as the one serving requests and the one a reload is building,
+therefore keep each other's changes.  A review-state file that cannot be
+read is never overwritten: a task with such a file is not loaded, and a
+change to such a file raises :class:`ReviewStateError`.
 """
 
 from __future__ import annotations
 import json
+import threading
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Set
+from typing import Any, Callable, Dict, List, Optional, Tuple, Set
 from dataclasses import dataclass
 import logging
 
-from mind2web2.utils.cache_filesys import CacheFileSys, storage_key
+# _write_atomic: the cache's atomic, fsynced file replacement, used for the review-state files too
+from mind2web2.utils.cache_filesys import CacheFileSys, _write_atomic, storage_key
 from mind2web2.utils.url_tools import normalize_url_simple
 
 logger = logging.getLogger(__name__)
@@ -36,6 +50,24 @@ logger = logging.getLogger(__name__)
 PENDING_FILE = "pending.json"
 FLAGS_FILE = "flags.json"
 REVIEWED_FILE = "reviewed.json"
+_RECORDS = {PENDING_FILE: "pending URLs", FLAGS_FILE: "flags", REVIEWED_FILE: "review statuses"}
+
+_review_state_lock = threading.Lock()
+"""Held while a review-state file is read, changed, and written back, by every manager of the process."""
+
+
+class ReviewStateError(RuntimeError):
+    """A task's ``pending.json``, ``flags.json``, or ``reviewed.json`` exists but cannot be read.
+
+    The Cache Manager does not overwrite such a file, which would drop what
+    it records: a task with such a file is not loaded, and a change to such a
+    file fails.  Restore the file, or delete it to have the Cache Manager
+    forget what it records.
+    """
+
+    def __init__(self, path: Path, reason: str):
+        super().__init__(f"Cannot read {path} ({reason}); restore it, or delete it to have the Cache Manager "
+                         f"forget the task's {_RECORDS.get(path.name, 'review state')}")
 
 
 @dataclass
@@ -77,12 +109,16 @@ class CacheManager:
         self._url_index: Dict[str, List[URLInfo]] = {}  # url -> [URLInfo]
         self._flags: Dict[str, Set[str]] = {}  # task_id -> flagged URLs
         self._pending: Dict[str, Set[str]] = {}  # task_id -> pending URLs
+        self.revision = 0  # the number of changes this manager has made, see tasks_changed_since()
+        self._task_revisions: Dict[str, int] = {}  # task_id -> the revision of this manager's latest change to it
 
     def load_agent_cache(self, agent_path: str | Path) -> Tuple[int, int]:
         """Load the task caches under ``agent_path``; returns ``(loaded tasks, task directories)``.
 
         A task is loaded when it has a stored page, a failure record, or a
-        pending URL.
+        pending URL, and all its files can be read.  Loading a task drops
+        from ``pending.json`` the pending URLs that have a stored page or a
+        failure record, which another process stored or recorded.
         """
         self.agent_path = Path(agent_path)
         self.agent_name = self.agent_path.name
@@ -104,17 +140,9 @@ class CacheManager:
         for task_dir in task_dirs:
             task_id = task_dir.name
             try:
-                cache = CacheFileSys(str(task_dir))
-                pending = _load_url_set(task_dir / PENDING_FILE)
-                if self._has_content(cache) or pending:
-                    self.task_caches[task_id] = cache
-                    self._flags[task_id] = _load_url_set(task_dir / FLAGS_FILE)
-                    self._pending[task_id] = pending
-                    summary = self._create_task_summary(task_id, cache)
-                    self.task_summaries[task_id] = summary
-                    self._index_task_urls(task_id, cache)
+                if self._load_task(task_id):
                     successful_tasks += 1
-                    logger.debug(f"Loaded task {task_id} with {summary.total_urls} URLs")
+                    logger.debug(f"Loaded task {task_id} with {self.task_summaries[task_id].total_urls} URLs")
                 else:
                     logger.debug(f"Skipped empty task {task_id}")
 
@@ -123,6 +151,56 @@ class CacheManager:
 
         logger.info(f"Loaded {successful_tasks}/{len(task_dirs)} tasks from {self.agent_name}")
         return successful_tasks, len(task_dirs)
+
+    def reload_task(self, task_id: str) -> bool:
+        """Read a task directory of the loaded folder again; returns whether the task is loaded.
+
+        This brings the task up to date after another manager of the folder
+        changed it.  The task is read as :meth:`load_agent_cache` reads it, so
+        it is dropped if it no longer has a stored page, a failure record, or
+        a pending URL.  If one of its files cannot be read, the task keeps
+        what was read before, and a warning is logged.
+        """
+        try:
+            return self._load_task(task_id)
+        except Exception as e:
+            logger.warning(f"Failed to reload task {task_id}: {e}")
+            return task_id in self.task_caches
+
+    def _load_task(self, task_id: str) -> bool:
+        """Read the directory of task ``task_id`` into this manager; returns whether the task is loaded.
+
+        Pending URLs that have a stored page or a failure record are dropped
+        from ``pending.json`` first.  Raises ``CacheIndexError`` or
+        :class:`ReviewStateError`, leaving the manager as it was, if one of
+        the task's files cannot be read.
+        """
+        task_dir = self.agent_path / task_id
+        cache = CacheFileSys(str(task_dir))
+        pending = _read_url_set(task_dir / PENDING_FILE)
+        flags = _read_url_set(task_dir / FLAGS_FILE)
+        _read_review_file(task_dir / REVIEWED_FILE, dict)
+        if any(_stored_state(cache, url) is not None for url in pending):
+            pending = _update_url_file(task_dir / PENDING_FILE, lambda urls: _still_pending(cache, urls))[1]
+        loaded = self._has_content(cache) or bool(pending)
+        if loaded:
+            self.task_caches[task_id] = cache
+            self._flags[task_id], self._pending[task_id] = flags, pending
+        else:
+            for per_task in (self.task_caches, self._flags, self._pending):
+                per_task.pop(task_id, None)
+        self._reindex_task(task_id)
+        return loaded
+
+    def tasks_changed_since(self, revision: int) -> List[str]:
+        """The tasks this manager has changed since its :attr:`revision` was ``revision``, sorted.
+
+        A change is a page or failure record this manager stored or deleted,
+        or a change it made to a task's pending URLs or flags.  Changes to
+        review statuses are not counted, since ``reviewed.json`` is read on
+        every lookup.
+        """
+        return sorted(task_id for task_id, changed in self._task_revisions.items() if changed > revision)
 
     def _has_content(self, cache: CacheFileSys) -> bool:
         """Whether the task has any stored page or failed URL."""
@@ -151,18 +229,27 @@ class CacheManager:
         return sorted(url for url in self._pending.get(task_id, ()) if _stored_state(cache, url) is None)
 
     def _task_changed(self, task_id: str):
-        """Bring the task's summary and URL index up to date after its cache or review state changed."""
+        """Record a change this manager made to a task (see :meth:`tasks_changed_since`) and reindex the task."""
+        self._note_change(task_id)
+        self._reindex_task(task_id)
+
+    def _note_change(self, task_id: str):
+        self.revision += 1
+        self._task_revisions[task_id] = self.revision
+
+    def _reindex_task(self, task_id: str):
+        """Bring the task's summary and URL index up to date; a task that is not loaded has neither."""
+        if self.task_summaries.pop(task_id, None) is not None:  # the task was indexed: drop its entries
+            for url in list(self._url_index):
+                infos = [info for info in self._url_index[url] if info.task_id != task_id]
+                if infos:
+                    self._url_index[url] = infos
+                else:
+                    del self._url_index[url]
         cache = self.get_task_cache(task_id)
-        if not cache:
-            return
-        self.task_summaries[task_id] = self._create_task_summary(task_id, cache)
-        for url in list(self._url_index):
-            infos = [info for info in self._url_index[url] if info.task_id != task_id]
-            if infos:
-                self._url_index[url] = infos
-            else:
-                del self._url_index[url]
-        self._index_task_urls(task_id, cache)
+        if cache:
+            self.task_summaries[task_id] = self._create_task_summary(task_id, cache)
+            self._index_task_urls(task_id, cache)
 
     def _index_task_urls(self, task_id: str, cache: CacheFileSys):
         """Index all URLs in a task for efficient lookup."""
@@ -269,7 +356,9 @@ class CacheManager:
         the cache stores it (see :meth:`move_review_state`), and pending URLs
         that now refer to a stored page stop being pending.  Returns the
         stored page's URL, as the task lists it, or ``None`` if the task is
-        unknown, no content is given, or storing failed.
+        unknown, no content is given, or storing failed.  Raises
+        :class:`ReviewStateError`, after storing the page, if a review-state
+        file cannot be read.
         """
         cache = self.get_task_cache(task_id)
         if not cache or (not pdf_bytes and (text is None or screenshot is None)):
@@ -284,11 +373,7 @@ class CacheManager:
             logger.error(f"Failed to store a page for {url} in task {task_id}: {e}")
             return None
         self.move_review_state(task_id, listed, stored)
-        pending = self._pending.get(task_id, set())
-        resolved = {p for p in pending if _stored_state(cache, p) is not None}
-        if resolved:
-            pending -= resolved
-            self._save_url_set(task_id, PENDING_FILE, pending)
+        self._update_url_set(task_id, PENDING_FILE, lambda urls: _still_pending(cache, urls))
         self._task_changed(task_id)
         logger.info(f"Stored a {'PDF' if pdf_bytes else 'web page'} for {stored} in task {task_id}")
         return stored
@@ -308,15 +393,17 @@ class CacheManager:
         """Add ``url`` to a task as pending, with nothing stored; ``False`` if the task already has its page."""
         if self.get_task_cache(task_id) is None or self.url_state(task_id, url) is not None:
             return False
-        self._pending.setdefault(task_id, set()).add(url)
-        self._save_url_set(task_id, PENDING_FILE, self._pending[task_id])
+        self._update_url_set(task_id, PENDING_FILE, lambda urls: urls | {url})
         self._task_changed(task_id)
         return True
 
     def delete_url(self, task_id: str, url: str) -> bool:
-        """Delete a URL from a task: its stored page, its failure record, its pending entry, and its flag.
+        """Delete a URL from a task: its stored page, its failure record, its pending entries, and its flag.
 
-        Returns ``False`` if the task had none of them.
+        The pending entries deleted are every spelling of the URL's page that
+        ``pending.json`` lists (the URLs with the same :func:`_page_form`).
+        Returns ``False`` if the task had none of these.  Raises
+        :class:`ReviewStateError` if a review-state file cannot be read.
         """
         cache = self.get_task_cache(task_id)
         if not cache:
@@ -326,14 +413,17 @@ class CacheManager:
             target = self.canonical_url(task_id, url)
             removed = cache.remove(target)
             cleared = cache.clear_failure(target)
-            flagged = self._discard(task_id, FLAGS_FILE, self._flags, target)
-            pending = self._discard(task_id, PENDING_FILE, self._pending, target)
-            if removed is None and not cleared and not flagged and not pending:
+            flags_before, _ = self._update_url_set(task_id, FLAGS_FILE, lambda urls: urls - {target})
+            pending_before, pending_after = self._update_url_set(
+                task_id, PENDING_FILE, lambda urls: _other_pages(urls, target))
+            if removed is None and not cleared and target not in flags_before and pending_before == pending_after:
                 logger.warning(f"Cannot delete {url} from task {task_id}: the task does not have it")
                 return False
             self._task_changed(task_id)
             logger.info(f"Deleted {target} from task {task_id}")
             return True
+        except ReviewStateError:
+            raise
         except Exception as e:
             logger.error(f"Failed to delete URL {url}: {e}")
             return False
@@ -342,11 +432,14 @@ class CacheManager:
         """Delete what the cache holds for a URL, so that the URL is pending until captured again.
 
         What is deleted is the URL's stored page and its failure record; its
-        flag, which was about the deleted page, is cleared.  Returns ``"web"``
-        or ``"pdf"`` if a page was deleted, ``"failed"`` if only a failure
-        record was, or ``None`` if the task had neither (then nothing
-        changes).  Evaluation treats a pending URL like any URL that is not
-        cached: it captures the page live.
+        flag, which was about the deleted page, is cleared.  The URL becomes
+        the only pending entry of its page: other spellings of the page that
+        ``pending.json`` lists (the URLs with the same :func:`_page_form`)
+        are dropped.  Returns ``"web"`` or ``"pdf"`` if a page was deleted,
+        ``"failed"`` if only a failure record was, or ``None`` if the task had
+        neither (then nothing changes).  Raises :class:`ReviewStateError` if a
+        review-state file cannot be read.  Evaluation treats a pending URL
+        like any URL that is not cached: it captures the page live.
         """
         cache = self.get_task_cache(task_id)
         if not cache:
@@ -357,12 +450,13 @@ class CacheManager:
             content_type = cache.remove(target)
             if not cache.clear_failure(target) and content_type is None:
                 return None
-            self._discard(task_id, FLAGS_FILE, self._flags, target)
-            self._pending.setdefault(task_id, set()).add(target)
-            self._save_url_set(task_id, PENDING_FILE, self._pending[task_id])
+            self._update_url_set(task_id, FLAGS_FILE, lambda urls: urls - {target})
+            self._update_url_set(task_id, PENDING_FILE, lambda urls: _other_pages(urls, target) | {target})
             self._task_changed(task_id)
             logger.info(f"Reset {target} ({content_type or 'failed'}) in task {task_id}")
             return content_type or "failed"
+        except ReviewStateError:
+            raise
         except Exception as e:
             logger.error(f"Failed to reset URL {url}: {e}")
             return None
@@ -374,53 +468,45 @@ class CacheManager:
     # --- Reviewed status persistence ---
 
     def load_reviewed(self, task_id: str) -> Dict[str, str]:
-        """The review status ("ok", "fixed", "skip", or "recaptured") of each reviewed URL of a task."""
-        path = self._task_file(task_id, REVIEWED_FILE)
-        if path and path.exists():
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if isinstance(data, dict):
-                    return data
-            except Exception as e:
-                logger.warning(f"Failed to load reviewed.json for {task_id}: {e}")
-        return {}
+        """The review status ("ok", "fixed", "skip", or "recaptured") of each reviewed URL of a task.
 
-    def save_reviewed(self, task_id: str, reviewed_map: Dict[str, str]):
-        """Save reviewed statuses for a task."""
+        Read from ``reviewed.json`` on every call.  If the file cannot be
+        read, a warning is logged and the map is empty; changing a status then
+        raises :class:`ReviewStateError`.
+        """
         path = self._task_file(task_id, REVIEWED_FILE)
-        if not path:
-            return
+        if path is None:
+            return {}
         try:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(reviewed_map, f, indent=2, ensure_ascii=False)
-        except Exception as e:
-            logger.error(f"Failed to save reviewed.json for {task_id}: {e}")
+            return _read_review_file(path, dict)
+        except ReviewStateError as e:
+            logger.warning(str(e))
+            return {}
 
     def mark_url_reviewed(self, task_id: str, url: str, status: str):
         """Set (or, with an empty ``status``, clear) the review status of a URL, recorded under its listed URL."""
         url = self.canonical_url(task_id, url)
-        reviewed = self.load_reviewed(task_id)
-        if status:
-            reviewed[url] = status
-        elif url not in reviewed:
-            return
-        else:
-            del reviewed[url]
-        self.save_reviewed(task_id, reviewed)
+
+        def mark(reviewed: Dict[str, str]):
+            if status:
+                reviewed[url] = status
+            else:
+                reviewed.pop(url, None)
+
+        self._update_reviewed(task_id, mark)
 
     def move_review_state(self, task_id: str, old_url: str, new_url: str):
         """Move the flag and the review status recorded for ``old_url`` to ``new_url``, whose own are kept if it has them."""
         if old_url == new_url:
             return
-        if self._discard(task_id, FLAGS_FILE, self._flags, old_url):
-            self._flags.setdefault(task_id, set()).add(new_url)
-            self._save_url_set(task_id, FLAGS_FILE, self._flags[task_id])
-        reviewed = self.load_reviewed(task_id)
-        if old_url in reviewed:
-            status = reviewed.pop(old_url)
-            reviewed.setdefault(new_url, status)
-            self.save_reviewed(task_id, reviewed)
+        self._update_url_set(task_id, FLAGS_FILE,
+                             lambda urls: (urls - {old_url}) | {new_url} if old_url in urls else urls)
+
+        def move(reviewed: Dict[str, str]):
+            if old_url in reviewed:
+                reviewed.setdefault(new_url, reviewed.pop(old_url))
+
+        self._update_reviewed(task_id, move)
 
     def get_statistics(self) -> Dict[str, int]:
         """Get overall statistics."""
@@ -448,12 +534,13 @@ class CacheManager:
 
     def flag_url(self, task_id: str, url: str):
         """Flag a URL's stored page as needing a recapture (persisted in flags.json); the page is kept."""
-        self._flags.setdefault(task_id, set()).add(self.canonical_url(task_id, url))
-        self._save_url_set(task_id, FLAGS_FILE, self._flags[task_id])
+        listed = self.canonical_url(task_id, url)
+        self._update_url_set(task_id, FLAGS_FILE, lambda urls: urls | {listed})
 
     def unflag_url(self, task_id: str, url: str):
         """Remove the flag of a URL."""
-        self._discard(task_id, FLAGS_FILE, self._flags, self.canonical_url(task_id, url))
+        listed = self.canonical_url(task_id, url)
+        self._update_url_set(task_id, FLAGS_FILE, lambda urls: urls - {listed})
 
     def is_flagged(self, task_id: str, url: str) -> bool:
         return self.canonical_url(task_id, url) in self._flags.get(task_id, set())
@@ -465,41 +552,103 @@ class CacheManager:
         cache = self.task_caches.get(task_id)
         return Path(cache.task_dir) / name if cache else None
 
-    def _discard(self, task_id: str, name: str, sets: Dict[str, Set[str]], url: str) -> bool:
-        """Remove ``url`` from a task's set in ``sets``, saved as file ``name``; returns whether it was there."""
-        urls = sets.get(task_id)
-        if not urls or url not in urls:
-            return False
-        urls.discard(url)
-        self._save_url_set(task_id, name, urls)
-        return True
+    def _update_url_set(self, task_id: str, name: str,
+                        update: Callable[[Set[str]], Set[str]]) -> Tuple[Set[str], Set[str]]:
+        """Replace the URLs in the task's ``pending.json`` or ``flags.json`` (``name``) with ``update(urls)``.
 
-    def _save_url_set(self, task_id: str, name: str, urls: Set[str]):
-        """Write ``urls`` to the task's file ``name`` as a sorted JSON list, or delete the file when empty."""
+        ``urls`` is what the file holds when the change is made (see
+        :func:`_update_url_file`), and this manager's copy of the set becomes
+        the result.  Returns the set before and after the change, both empty
+        if the task is not loaded.  Raises :class:`ReviewStateError` if the
+        file cannot be read.
+        """
         path = self._task_file(task_id, name)
-        if not path:
+        if path is None:
+            return set(), set()
+        before, after = _update_url_file(path, update)
+        (self._pending if name == PENDING_FILE else self._flags)[task_id] = after
+        if after != before:
+            self._note_change(task_id)
+        return before, after
+
+    def _update_reviewed(self, task_id: str, update: Callable[[Dict[str, str]], None]):
+        """Apply ``update`` to the review statuses in the task's ``reviewed.json``, as the file holds them when the change is made.
+
+        The file is read, changed, and written back under the lock that all
+        managers of the process share, and written only if ``update`` changed
+        the statuses (atomically; deleted when none is left).  Raises
+        :class:`ReviewStateError` if the file cannot be read.
+        """
+        path = self._task_file(task_id, REVIEWED_FILE)
+        if path is None:
             return
-        try:
-            if urls:
-                with open(path, "w", encoding="utf-8") as f:
-                    json.dump(sorted(urls), f, indent=2, ensure_ascii=False)
-            elif path.exists():
-                path.unlink()
-        except Exception as e:
-            logger.error(f"Failed to save {name} for {task_id}: {e}")
+        with _review_state_lock:
+            reviewed = _read_review_file(path, dict)
+            before = dict(reviewed)
+            update(reviewed)
+            if reviewed != before:
+                _write_review_file(path, reviewed)
 
 
-def _load_url_set(path: Path) -> Set[str]:
-    """The URLs listed in a JSON file, or an empty set if it is missing or not a JSON list."""
-    if path.exists():
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, list):
-                return {url for url in data if isinstance(url, str)}
-        except Exception as e:
-            logger.warning(f"Failed to load {path}: {e}")
-    return set()
+def _update_url_file(path: Path, update: Callable[[Set[str]], Set[str]]) -> Tuple[Set[str], Set[str]]:
+    """Replace the URLs listed in ``path`` with ``update(urls)``; returns the set before and after.
+
+    The file is read, changed, and written back under the lock that all
+    managers of the process share, so ``urls`` includes every change made
+    before, and it is written only if the set changes (atomically, as a
+    sorted JSON list; deleted when the set is empty).  Raises
+    :class:`ReviewStateError` if the file cannot be read.
+    """
+    with _review_state_lock:
+        before = _read_url_set(path)
+        after = update(set(before))
+        if after != before:
+            _write_review_file(path, sorted(after))
+    return before, after
+
+
+def _read_url_set(path: Path) -> Set[str]:
+    """The strings in the JSON list in ``path``, or an empty set if the file does not exist.
+
+    Raises :class:`ReviewStateError` if the file cannot be read or does not hold a JSON list.
+    """
+    return {url for url in _read_review_file(path, list) if isinstance(url, str)}
+
+
+def _read_review_file(path: Path, kind: type) -> Any:
+    """The JSON value, a list or a dict (``kind``), in the review-state file ``path``; empty if the file does not exist.
+
+    Raises :class:`ReviewStateError` if the file cannot be read or holds another JSON value.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return kind()
+    except (OSError, ValueError) as e:  # ValueError: not UTF-8, or not JSON
+        raise ReviewStateError(path, str(e)) from e
+    if not isinstance(data, kind):
+        raise ReviewStateError(path, "not a JSON list" if kind is list else "not a JSON object")
+    return data
+
+
+def _write_review_file(path: Path, value: list | dict) -> None:
+    """Replace the review-state file ``path`` with ``value`` as JSON, atomically, or delete it when ``value`` is empty."""
+    if value:
+        _write_atomic(str(path), json.dumps(value, indent=2, ensure_ascii=False).encode("utf-8"))
+    else:
+        path.unlink(missing_ok=True)
+
+
+def _still_pending(cache: CacheFileSys, urls: Set[str]) -> Set[str]:
+    """The URLs of ``urls`` for which ``cache`` has neither a stored page nor a failure record."""
+    return {url for url in urls if _stored_state(cache, url) is None}
+
+
+def _other_pages(urls: Set[str], url: str) -> Set[str]:
+    """The URLs of ``urls`` that name another page than ``url`` does (another :func:`_page_form`)."""
+    form = _page_form(url)
+    return {other for other in urls if _page_form(other) != form}
 
 
 def _page_form(url: str) -> str:

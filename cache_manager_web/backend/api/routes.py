@@ -46,6 +46,9 @@ _batch_completed: int = 0
 # SSE subscribers — each is an asyncio.Queue
 _sse_queues: list[asyncio.Queue] = []
 
+# Held by /api/load, so that loads run one at a time
+_load_lock = asyncio.Lock()
+
 
 def set_app_state(cm: CacheManager, kd: KeywordDetector):
     global _cm, _kd
@@ -152,24 +155,39 @@ async def load_cache(req: LoadRequest):
     The folder is read and scanned in a worker thread into a new
     ``CacheManager``, which replaces the current one only when complete, so
     the server keeps answering (the extension polls it) and a failed load
-    leaves the loaded cache in place.  A successful load stops a running
-    batch capture and clears the capture target, which name URLs of the
-    cache that was loaded before.
+    leaves the loaded cache in place.  Loads run one at a time.
+
+    The UI loads the loaded folder again whenever it is opened and on
+    Refresh.  Such a reload keeps a running batch capture and the capture
+    target, and the edits the current manager served while the folder was
+    read, such as the batch's captures, are on disk (see ``CacheManager``);
+    the tasks they changed are read and scanned again before the new manager
+    replaces the current one, so that it lists them.  Loading another folder
+    stops a running batch capture and clears the capture target, which name
+    URLs of the folder loaded before.
     """
     global _cm, _url_issue_cache, _capture_target
     p = Path(req.path).resolve()
     if not p.is_dir():
         raise HTTPException(400, f"Not a directory: {req.path}")
-    cm = CacheManager()
-    try:
-        ok, total = await asyncio.to_thread(cm.load_agent_cache, str(p))
-        issue_cache = await asyncio.to_thread(_scan_issues, cm)
-    except Exception as e:
-        raise HTTPException(500, str(e))
-    _cm, _url_issue_cache = cm, issue_cache
-    _capture_target = {}
-    if _batch_active:
-        await batch_stop()
+    async with _load_lock:
+        current = _cm if _cm is not None and _cm.agent_path is not None and _cm.agent_path.resolve() == p else None
+        since = current.revision if current is not None else 0
+        cm = CacheManager()
+        try:
+            ok, total = await asyncio.to_thread(cm.load_agent_cache, str(p))
+            issue_cache = await asyncio.to_thread(_scan_issues, cm)
+        except Exception as e:
+            raise HTTPException(500, str(e))
+        if current is not None:
+            for task_id in current.tasks_changed_since(since):
+                cm.reload_task(task_id)
+                issue_cache[task_id] = _scan_task(cm, task_id)
+        else:
+            _capture_target = {}
+            if _batch_active:
+                await batch_stop()
+        _cm, _url_issue_cache = cm, issue_cache
     return {
         "ok": True,
         "agent_name": _cm.agent_name,
@@ -428,11 +446,11 @@ async def flag_url(task_id: str, req: FlagRequest):
 
 @router.post("/reset/{task_id}")
 async def reset_url(task_id: str, req: FlagRequest):
-    """Delete a URL's stored page or failure record and flag the URL, which leaves it pending.
+    """Delete a URL's stored page or failure record, which leaves the URL pending (a definite issue).
 
-    Until the URL is captured again, evaluation treats it as not cached and
-    captures it live.  Returns what was deleted: ``"web"``, ``"pdf"``, or
-    ``"failed"``.
+    The URL's flag and review status are cleared.  Until the URL is captured
+    again, evaluation treats it as not cached and captures it live.  Returns
+    what was deleted: ``"web"``, ``"pdf"``, or ``"failed"``.
     """
     _require_loaded()
     url = _listed_url(task_id, req.url)
@@ -840,13 +858,17 @@ def _scan_issues(cm: CacheManager) -> dict:
 
     Reads the text of every stored web page, so it runs in a worker thread.
     """
-    issue_cache = {}
-    for task_id in cm.get_task_ids():
-        for info in cm.get_task_urls(task_id):
-            entry = _issue_entry(cm, task_id, info.url, info.content_type)
-            if entry is not None:
-                issue_cache.setdefault(task_id, {})[info.url] = entry
-    return issue_cache
+    return {task_id: entries for task_id in cm.get_task_ids() if (entries := _scan_task(cm, task_id))}
+
+
+def _scan_task(cm: CacheManager, task_id: str) -> dict:
+    """The issue-cache entries of the URLs of one task with issues, by URL; reads the text of its web pages."""
+    entries = {}
+    for info in cm.get_task_urls(task_id):
+        entry = _issue_entry(cm, task_id, info.url, info.content_type)
+        if entry is not None:
+            entries[info.url] = entry
+    return entries
 
 
 def _issue_index(issue_cache: dict) -> list[dict]:
@@ -865,16 +887,22 @@ def _task_issues(issue_cache: dict) -> dict:
 
 
 def _refresh_issues(task_id: str, *urls: str) -> None:
-    """Recompute the issue-cache entries of ``urls`` after an edit, and drop those of URLs the task no longer lists.
+    """Bring the task's issue-cache entries up to date after an edit that changed ``urls``.
 
-    An edit can end the listing of URLs other than the one it names, such as
-    other spellings of a pending URL once its page is stored.
+    The entries of ``urls`` are recomputed, those of URLs the task no longer
+    lists are dropped, and listed pending and failed URLs without an entry,
+    which are always definite issues, get one.  An edit can change the
+    listing of URLs other than the ones it names: storing a page ends the
+    listing of other spellings of a pending URL, and a change re-reads
+    ``pending.json``, which can list URLs that another manager of the folder
+    added.
     """
     listed = {info.url: info.content_type for info in _cm.get_task_urls(task_id)}
     task_cache = _url_issue_cache.setdefault(task_id, {})
     for url in [url for url in task_cache if url not in listed]:
         del task_cache[url]
-    for url in urls:
+    unscanned = [url for url, state in listed.items() if state in ("pending", "failed") and url not in task_cache]
+    for url in dict.fromkeys([*urls, *unscanned]):
         entry = _issue_entry(_cm, task_id, url, listed.get(url))
         if entry is None:
             task_cache.pop(url, None)

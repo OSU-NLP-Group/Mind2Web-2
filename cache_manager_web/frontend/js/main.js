@@ -176,6 +176,15 @@ async function refreshAfterLoad(result) {
     } catch (err) {
         console.error('Failed to load tasks:', err);
     }
+    // A batch capture keeps running when the loaded folder is loaded again (page open, Refresh)
+    try {
+        const batch = await api.getBatchStatus();
+        setState(batch.active
+            ? { batchActive: true, batchTotal: batch.total, batchCompleted: batch.completed }
+            : { batchActive: false, batchTotal: 0, batchCompleted: 0 });
+    } catch (err) {
+        console.error('Failed to get the batch status:', err);
+    }
     await updateReviewProgress();
     showStatus('Ready');
 }
@@ -216,10 +225,25 @@ async function onFlagAsIssue() {
 
 async function onOpenInBrowser() {
     const s = getState();
-    if (!s.selectedUrl) return;
+    if (!s.selectedUrl || !isOpenable(s.selectedUrl)) return;
     await api.setCaptureTarget(s.selectedTaskId, s.selectedUrl).catch(() => {});
-    window.open(s.selectedUrl, '_blank');
+    window.open(s.selectedUrl, '_blank', 'noopener');  // without window.opener, the page cannot navigate this tab
     toast('Opened in browser. Use the extension to capture.');
+}
+
+/**
+ * Whether `url` may be opened in a browser tab, which only http(s) URLs may.
+ *
+ * Listed URLs come from the answers under review, and a `javascript:` URL
+ * would run in the Cache Manager's origin.  Shows an error toast for any
+ * other URL.
+ */
+function isOpenable(url) {
+    let protocol = '';
+    try { protocol = new URL(url).protocol; } catch {}
+    if (protocol === 'http:' || protocol === 'https:') return true;
+    toast(`Not opened: only http(s) URLs can be opened (${url.substring(0, 60)})`, 'error');
+    return false;
 }
 
 /** What the cache holds for the selected URL: "the stored page", "the failure record", or null (a pending URL). */
@@ -302,9 +326,9 @@ function onUploadMhtml() {
 
 async function onRecapture() {
     const s = getState();
-    if (!s.selectedUrl) return;
+    if (!s.selectedUrl || !isOpenable(s.selectedUrl)) return;
     await api.setCaptureTarget(s.selectedTaskId, s.selectedUrl).catch(() => {});
-    window.open(s.selectedUrl, '_blank');
+    window.open(s.selectedUrl, '_blank', 'noopener');
     toast('Page opened. Pass any verification, then use the extension to capture.', 'success');
 }
 
@@ -483,7 +507,7 @@ function initSSE() {
             updateReviewProgress();
         }
         if (data.type === 'batch_progress') {
-            setState({ batchCompleted: data.completed });
+            setState({ batchActive: true, batchTotal: data.total, batchCompleted: data.completed });
         }
         if (data.type === 'batch_complete') {
             setState({ batchActive: false, batchCompleted: 0, batchTotal: 0 });

@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.datastructures import Headers
 
-from .models import CacheManager, KeywordDetector
+from .models import CacheManager, KeywordDetector, ReviewStateError
 from .config import FRONTEND_DIR, LOOPBACK_HOSTS
 from .api.routes import router, set_app_state
 
@@ -147,6 +147,13 @@ app.add_middleware(FrameGuard)  # added last, so it runs first and marks refusal
 
 # API routes
 app.include_router(router, prefix="/api")
+
+
+@app.exception_handler(ReviewStateError)
+async def review_state_error(request, exc: ReviewStateError):
+    """Answer 500 with the error's message, which names the review-state file that cannot be read and what to do."""
+    return JSONResponse({"detail": str(exc)}, status_code=500)
+
 
 # Serve frontend static files
 app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")

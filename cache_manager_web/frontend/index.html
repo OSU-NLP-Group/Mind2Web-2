@@ -89,7 +89,7 @@
                 <button id="btn-flag-issue" class="action-btn" disabled title="Flag for recapture (f)">
                     &#9873; Flag
                 </button>
-                <button id="btn-reset-url" class="action-btn" disabled title="Delete the stored page &amp; flag for recapture (x)">
+                <button id="btn-reset-url" class="action-btn" disabled title="Delete the stored page; the URL is listed as not captured yet (x)">
                     &#8634; Reset
                 </button>
                 <button id="btn-edit-url" class="action-btn" disabled title="Edit URL link (e)">
@@ -207,7 +207,7 @@
                         <h4 class="guide-section-title">URL Management</h4>
                         <ul class="guide-list">
                             <li><strong>Flag</strong> &mdash; mark a URL for recapture (red). The stored page stays, and evaluation keeps using it, until a capture replaces it.</li>
-                            <li><strong>Reset</strong> &mdash; delete the stored page (or the failed capture) and flag the URL; it is listed as not captured yet, and evaluation captures it live until it is captured again.</li>
+                            <li><strong>Reset</strong> &mdash; delete the stored page (or the failed capture); the URL is listed as not captured yet (red), and evaluation captures it live until it is captured again.</li>
                             <li><strong>Edit</strong> &mdash; change the URL link (a stored page moves to the new URL; otherwise the new URL is not captured yet).</li>
                             <li><strong>Add URL</strong> &mdash; add a URL the crawl missed; it is listed as not captured yet until you capture it or upload a file.</li>
                             <li><strong>Delete</strong> &mdash; permanently remove a URL: its stored page, failed capture, and flag.</li>
@@ -245,7 +245,7 @@
                             <tr><td><kbd>r</kbd> / <kbd>Ctrl+Enter</kbd></td><td>Mark as reviewed</td></tr>
                             <tr><td><kbd>f</kbd></td><td>Flag for recapture (red)</td></tr>
                             <tr><td><kbd>d</kbd> / <kbd>Backspace</kbd></td><td>Delete URL (asks first if a page is stored)</td></tr>
-                            <tr><td><kbd>x</kbd></td><td>Reset: delete the stored page &amp; flag (asks first)</td></tr>
+                            <tr><td><kbd>x</kbd></td><td>Reset: delete the stored page; the URL is not captured yet (asks first)</td></tr>
                             <tr><td><kbd>e</kbd></td><td>Edit URL link</td></tr>
                             <tr><td><kbd>a</kbd></td><td>Add new URL</td></tr>
                             <tr><td><kbd>o</kbd></td><td>Open in browser</td></tr>
