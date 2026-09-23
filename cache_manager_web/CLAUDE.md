@@ -45,7 +45,7 @@ cache_manager_web/
 - **No circular imports**: Components import shared actions from `actions.js`, NOT from `main.js`. This is critical — `main.js` imports components, so components must not import from `main.js`.
 - **Selective state subscriptions**: `subscribe(fn, ['key1', 'key2'])` — components only re-render when their relevant keys change.
 - **Chrome Extension for capture**: Uses a real browser session (not Playwright/Selenium) so it works on Cloudflare-protected and anti-bot pages.
-- **Extension captures as the crawler does**: the extension sends the page's `outerHTML`, which `/api/capture` converts with the crawler's `html_to_markdown()`, and a screenshot taken with the crawler's DevTools sequence through `chrome.debugger` (`captureFullPage()` in background.js): the viewport is resized to the page's content height, at most 6000 CSS pixels, and the screenshot is taken with `captureBeyondViewport`, which covers the whole page. `captureVisibleTab` (the visible part only) is the fallback when the debugger cannot attach. The backend URL is a setting in the popup (`settings.js`, default `http://127.0.0.1:8000`).
+- **Extension captures as the crawler does**: `captureFullPage()` in background.js repeats the crawler's capture steps through `chrome.debugger`. The page is laid out in a 1100×750 viewport (the middle of the crawler's window sizes) and scrolled to the end three times and back to the top (the crawler presses End and Home); the viewport is then resized to the page's content height, at most 6000 CSS pixels, and after 750 ms the page's `outerHTML` is read and the screenshot is taken with `captureBeyondViewport`, which covers the whole page. `/api/capture` converts the HTML with the crawler's `html_to_markdown()`. Every DevTools command and content script has a timeout. When the full-page screenshot fails, the extension scrolls the same way and sends a `captureVisibleTab` screenshot (the visible part only) with `visible_part_only`, and the `capture_complete` event carries a warning that the UI shows. The backend URL is a setting in the popup (`settings.js`, default `http://127.0.0.1:8000`).
 - **SSE for real-time updates**: When the extension captures a page, the frontend updates instantly.
 - **contentVersion cache busting**: Screenshot URLs include `&v={contentVersion}` to force browser to re-fetch after capture.
 - **MHTML parsing without Qt**: Uses Python's `email` module to parse MHTML (MIME format).
@@ -161,6 +161,8 @@ Key state fields:
 - **CAPTCHA detection**: Cloudflare, Turnstile, reCAPTCHA, hCaptcha, generic blocked pages
 - **Rich popup UI**: Live progress bar, status badge, current URL, scrollable log
 - **Skip on failure**: Failed captures skip and advance to prevent infinite loops
+- **Only the current URL advances the batch**: a capture or upload advances the queue only when it stores the URL at its head (`_batch_waits_for()` in routes.py), and only that page gets the `"recaptured"` status; pages captured or uploaded by hand for other URLs during a batch get `"fixed"`
+- **Resuming**: a batch that the extension did not finish (the batch tab was closed, or the extension was reloaded) stays queued on the server; Start Batch resumes it at its head, and the popup counts the server's `completed` as done earlier
 
 ## Gotchas
 

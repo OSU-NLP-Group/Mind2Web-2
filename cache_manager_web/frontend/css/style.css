@@ -542,6 +542,7 @@ body {
 }
 .toast.success { background: #166534; }
 .toast.error { background: #991b1b; }
+.toast.warning { background: #92400e; }
 
 /* ===== Drag & Drop ===== */
 .drop-target {

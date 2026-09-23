@@ -7,13 +7,18 @@
  * - Communication with the Cache Manager backend, whose URL is set in the popup
  *
  * A capture sends the page's HTML, which the backend converts to text as the
- * crawler does, and a screenshot taken as the crawler takes it (see captureFullPage).
+ * crawler does, and a screenshot, both taken as the crawler takes them (see captureFullPage).
  */
 
 importScripts('settings.js');  // getBackend(), isCacheManagerUrl()
 
-const MAX_VIEWPORT_HEIGHT = 6000;  // CSS pixels, as in the crawler; limits the viewport, not the screenshot
+// The crawler's capture steps, repeated by captureFullPage (sizes in CSS pixels)
+const CRAWLER_WINDOW = { width: 1100, height: 750 };  // the middle of the crawler's 1050-1150 by 700-800
+const MAX_VIEWPORT_HEIGHT = 6000;  // limits the viewport, not the screenshot
+const SCROLL_PAUSE_MS = 550;  // the crawler waits 0.3-0.8 s after each End and Home key press
 const SETTLE_AFTER_RESIZE_MS = 750;  // the crawler waits 0.5-1 s after resizing the viewport
+const COMMAND_TIMEOUT_MS = 10000;  // for a DevTools command or a script run in the page
+const SCREENSHOT_TIMEOUT_MS = 30000;  // for Page.captureScreenshot, which is slow on long pages
 
 /** fetch() a backend path such as '/api/status'. */
 async function api(path, options) {
@@ -38,8 +43,9 @@ const MIN_BODY_LENGTH = 200;  // pages shorter than this get retried
 // Rich batch status (for popup display)
 let batchState = {
     total: 0,
-    completed: 0,     // pages this batch captured
-    skipped: 0,       // pages this batch skipped
+    before: 0,        // pages done before this run, when it resumes a batch
+    completed: 0,     // pages this run captured
+    skipped: 0,       // pages this run skipped
     currentUrl: '',
     status: '',       // 'loading', 'retrying', 'captcha', 'capturing', 'advancing', 'done'
     log: [],          // [{time, msg, type}] — last 20 entries
@@ -54,6 +60,11 @@ function batchLog(msg, type = 'info') {
 function setBatchStatus(status, currentUrl = null) {
     batchState.status = status;
     if (currentUrl !== null) batchState.currentUrl = currentUrl;
+}
+
+/** The queued pages that are done, captured or skipped, including those done before a resumed run. */
+function batchDone() {
+    return batchState.before + batchState.completed + batchState.skipped;
 }
 
 // ---------------------------------------------------------------------------
@@ -175,22 +186,19 @@ async function capturePage(tab, opts = {}) {
             return { success: true };
         }
 
-        // The page's HTML; the backend converts it to text as the crawler does
-        const htmlResults = await chrome.scripting.executeScript({
-            target: { tabId: tab.id },
-            func: () => document.documentElement.outerHTML,
-        });
-        const html = htmlResults?.[0]?.result || '';
-
         // Ensure the target tab is active/visible before screenshot
         await chrome.tabs.update(tab.id, { active: true });
         await sleep(150);
 
-        let screenshot = await captureFullPage(tab.id);
-        if (!screenshot) {
-            if (batchMode) batchLog('Full-page screenshot unavailable; captured the visible part only', 'warn');
+        // The page's HTML, which the backend converts to text as the crawler does, and a screenshot
+        let captured = await captureFullPage(tab.id);
+        const visiblePartOnly = !captured;
+        if (visiblePartOnly) {
+            await scrollAsTheCrawler(tab.id);
+            const html = await readHtml(tab.id);
             const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'jpeg', quality: 85 });
-            screenshot = dataUrl.replace(/^data:image\/jpeg;base64,/, '');
+            captured = { html, screenshot: dataUrl.replace(/^data:image\/jpeg;base64,/, '') };
+            if (batchMode) batchLog('Full-page screenshot unavailable; captured the visible part only', 'warn');
         }
 
         // Detect redirect: tab.url may differ from the original URL
@@ -203,8 +211,9 @@ async function capturePage(tab, opts = {}) {
             body: JSON.stringify({
                 task_id,
                 url,
-                html,
-                screenshot_base64: screenshot,
+                html: captured.html,
+                screenshot_base64: captured.screenshot,
+                ...(visiblePartOnly ? { visible_part_only: true } : {}),
                 ...(actual_url ? { actual_url } : {}),
             }),
         });
@@ -231,46 +240,84 @@ async function capturePage(tab, opts = {}) {
 }
 
 /**
- * A screenshot of the whole page in a tab, as base64 PNG, taken as the crawler takes it.
+ * The HTML of the page in a tab and a screenshot of the whole page, as base64 PNG, taken as the crawler takes them.
  *
- * Through the DevTools protocol, the viewport is resized to the page's width
- * and content height, at most MAX_VIEWPORT_HEIGHT CSS pixels, and after
- * SETTLE_AFTER_RESIZE_MS the page is captured with captureBeyondViewport,
- * which covers the whole page, including any part below that viewport.  Only
- * Page and Emulation commands are sent; the Runtime domain, which some bot
- * checks detect, is never enabled.  Chrome shows a "started debugging this
- * browser" bar while the debugger is attached.  Returns null when the
- * debugger cannot attach, as on chrome:// pages, or when a command fails.
+ * Through the DevTools protocol, the page is laid out in a viewport of the
+ * crawler's window size (CRAWLER_WINDOW) at a device scale factor of 1, as in
+ * the crawler, and scrolled as the crawler scrolls (see scrollAsTheCrawler).  The viewport is then resized to the page's
+ * content height, at most MAX_VIEWPORT_HEIGHT, and after
+ * SETTLE_AFTER_RESIZE_MS the HTML is read and the page is captured with
+ * captureBeyondViewport, which covers the whole page, including any part
+ * below that viewport.  The DevTools commands are Page and Emulation commands
+ * only, and scrolling and reading the HTML run as content scripts, so the
+ * Runtime domain, which some bot checks detect, is never enabled.  Chrome
+ * shows a "started debugging this browser" bar while the debugger is
+ * attached, and the tab gets its own viewport back afterwards.
+ *
+ * Returns {html, screenshot}, or null when the debugger cannot attach (for
+ * example under a policy that blocks it), when a command fails (for example
+ * after Cancel on that bar), or when a command or content script does not
+ * finish within its timeout.
  */
 async function captureFullPage(tabId) {
     const target = { tabId };
+    const attaching = chrome.debugger.attach(target, '1.3');
     try {
-        await chrome.debugger.attach(target, '1.3');
+        await withTimeout(attaching, COMMAND_TIMEOUT_MS, 'debugger.attach');
     } catch (e) {
         console.warn('debugger.attach failed:', e);
+        attaching.then(() => chrome.debugger.detach(target)).catch(() => {});  // if it attaches after the timeout
         return null;
     }
+    const send = (method, params, ms = COMMAND_TIMEOUT_MS) =>
+        withTimeout(chrome.debugger.sendCommand(target, method, params), ms, method);
+    const setViewport = (height) => send('Emulation.setDeviceMetricsOverride', {
+        mobile: false, width: CRAWLER_WINDOW.width, height, deviceScaleFactor: 1,
+    });
     try {
-        const metrics = await chrome.debugger.sendCommand(target, 'Page.getLayoutMetrics');
-        await chrome.debugger.sendCommand(target, 'Emulation.setDeviceMetricsOverride', {
-            mobile: false,
-            width: Math.round(metrics.cssVisualViewport.clientWidth),
-            height: Math.round(Math.min(metrics.cssContentSize.height, MAX_VIEWPORT_HEIGHT)),
-            deviceScaleFactor: Math.round(metrics.visualViewport?.scale || 1),
-        });
+        await setViewport(CRAWLER_WINDOW.height);
+        await scrollAsTheCrawler(tabId);
+        const metrics = await send('Page.getLayoutMetrics');
+        await setViewport(Math.round(Math.min(metrics.cssContentSize.height, MAX_VIEWPORT_HEIGHT)));
         await sleep(SETTLE_AFTER_RESIZE_MS);
-        const shot = await chrome.debugger.sendCommand(target, 'Page.captureScreenshot', {
-            format: 'png',
-            captureBeyondViewport: true,
-        });
-        return shot.data;
+        const html = await readHtml(tabId);
+        const shot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true },
+                                SCREENSHOT_TIMEOUT_MS);
+        return { html, screenshot: shot.data };
     } catch (e) {
         console.warn('Full-page screenshot failed:', e);
         return null;
     } finally {
-        await chrome.debugger.sendCommand(target, 'Emulation.clearDeviceMetricsOverride').catch(() => {});
-        await chrome.debugger.detach(target).catch(() => {});
+        await send('Emulation.clearDeviceMetricsOverride').catch(() => {});
+        await withTimeout(chrome.debugger.detach(target), COMMAND_TIMEOUT_MS, 'debugger.detach').catch(() => {});
     }
+}
+
+/**
+ * Scroll the page in a tab to the end three times and back to the top, pausing
+ * SCROLL_PAUSE_MS after each, as the crawler does with the End and Home keys
+ * so that content loaded on scrolling is loaded.
+ */
+async function scrollAsTheCrawler(tabId) {
+    for (const toEnd of [true, true, true, false]) {
+        await runInPage(tabId, (end) => {
+            const root = document.scrollingElement || document.documentElement;
+            window.scrollTo(0, end ? root.scrollHeight : 0);
+        }, [toEnd]);
+        await sleep(SCROLL_PAUSE_MS);
+    }
+}
+
+/** The outerHTML of the document in a tab. */
+async function readHtml(tabId) {
+    return (await runInPage(tabId, () => document.documentElement.outerHTML)) || '';
+}
+
+/** The result of `func(...args)` run as a content script in a tab; rejects after COMMAND_TIMEOUT_MS. */
+async function runInPage(tabId, func, args = []) {
+    const results = await withTimeout(
+        chrome.scripting.executeScript({ target: { tabId }, func, args }), COMMAND_TIMEOUT_MS, 'a script in the page');
+    return results?.[0]?.result;
 }
 
 // ---------------------------------------------------------------------------
@@ -291,10 +338,18 @@ async function startBatch(opts = {}) {
         batchProcessing = false;
         currentRetryCount = 0;
         pauseOnCaptcha = !!opts.pauseOnCaptcha;
-        batchState = { total: status.total, completed: 0, skipped: 0, currentUrl: status.current.url, status: 'loading', log: [] };
-        batchLog(`Batch started: ${status.total} URLs (${pauseOnCaptcha ? 'pause on CAPTCHA' : 'auto'})`);
+        // A batch that an earlier run left unfinished (the batch tab was closed, or the extension
+        // was reloaded) resumes at its current URL; the server's completed count is what that run did.
+        batchState = {
+            total: status.total, before: status.completed || 0, completed: 0, skipped: 0,
+            currentUrl: status.current.url, status: 'loading', log: [],
+        };
+        const mode = pauseOnCaptcha ? 'pause on CAPTCHA' : 'auto';
+        batchLog(batchState.before
+            ? `Batch resumed: ${status.remaining} of ${status.total} URLs left (${mode})`
+            : `Batch started: ${status.total} URLs (${mode})`);
         batchLog(`Loading: ${truncUrl(status.current.url)}`);
-        setBadge(`0/${status.total}`, '#2563eb');
+        setBadge(`${batchDone()}/${status.total}`, '#2563eb');
 
         // Open the first URL in a new tab
         const tab = await chrome.tabs.create({ url: status.current.url });
@@ -322,7 +377,7 @@ async function advanceBatch() {
         }
 
         batchState.total = status.total;
-        setBadge(`${batchState.completed + batchState.skipped}/${status.total}`, '#2563eb');
+        setBadge(`${batchDone()}/${status.total}`, '#2563eb');
 
         // Navigate existing tab to the next URL
         if (batchTabId) {
@@ -346,7 +401,8 @@ async function endBatch() {
     clearPageTimeout();
 
     setBatchStatus('done');
-    batchLog(`Batch finished: ${batchState.completed} captured, ${batchState.skipped} skipped`);
+    batchLog(`Batch finished: ${batchState.completed} captured, ${batchState.skipped} skipped`
+             + (batchState.before ? `, ${batchState.before} done before it was resumed` : ''));
     setBadge('Done', '#22c55e', 3000);
 
     if (batchTabId) {
@@ -694,6 +750,15 @@ function setBadge(text, color, clearAfterMs = 0) {
 
 function sleep(ms) {
     return new Promise(r => setTimeout(r, ms));
+}
+
+/** `promise`, or a rejection that names `what` when it has not settled after `ms` milliseconds. */
+function withTimeout(promise, ms, what) {
+    let timer;
+    const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${what} did not finish within ${ms / 1000} s`)), ms);
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
 function truncUrl(url, maxLen = 60) {

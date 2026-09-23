@@ -36,7 +36,7 @@ The server has no authentication, so it answers only requests addressed to `127.
 
 After pulling a new version of the extension, click its reload button in `chrome://extensions`.
 
-A capture stores the page the way the crawler does: a screenshot of the whole page, and the page's HTML converted to text by the crawler's converter. For the full-page screenshot, the extension briefly attaches Chrome's debugger to the tab, so Chrome shows a "Cache Manager Capture started debugging this browser" bar during each capture. Clicking **Cancel** on that bar during a capture, or capturing a page the debugger cannot attach to (such as a `chrome://` page), stores a screenshot of only the visible part of the tab instead. Starting Chrome with `--silent-debugger-extension-api` hides the bar.
+A capture stores the page the way the crawler does. The page is laid out 1,100 CSS pixels wide, as in the crawler's browser window, and scrolled to the end and back to load content that appears on scrolling. The extension then stores a screenshot of the whole page and the page's HTML, which the Cache Manager converts to text with the crawler's converter. For the full-page screenshot, the extension briefly attaches Chrome's debugger to the tab, so Chrome shows a "Cache Manager Capture started debugging this browser" bar during each capture. If the full-page screenshot fails, for example because **Cancel** was clicked on that bar during the capture, the debugger did not answer in time, or a policy blocks the debugger, the extension stores a screenshot of only the visible part of the tab, and the Cache Manager shows a warning so that you can capture the page again. Starting Chrome with `--silent-debugger-extension-api` hides the bar.
 
 ### 3. Review & Fix
 
@@ -50,11 +50,13 @@ A capture stores the page the way the crawler does: a screenshot of the whole pa
 The most powerful feature — fix all broken pages at once:
 
 1. Click **Batch Recapture** in the toolbar (queues every unreviewed red URL that is not a stored PDF)
-2. Click the Chrome Extension icon → **Start Auto-Capture**
+2. Click the Chrome Extension icon → **Start Batch (auto)** or **Start Batch (pause on CAPTCHA)**
 3. The extension automatically opens each URL, waits for it to load, captures the page, and advances to the next one
-4. If a CAPTCHA is detected (Cloudflare, reCAPTCHA, hCaptcha, etc.), it pauses and waits for you to solve it, then continues
+4. If a CAPTCHA is detected (Cloudflare, reCAPTCHA, hCaptcha, etc.), the auto mode captures the page anyway and moves on; the pause mode waits for you to solve it, then continues
 5. Pages with very short content are auto-retried (up to 2 times)
 6. After batch completes, review the recaptured URLs (shown in blue) and press `r` to confirm each
+
+Only a capture of the URL the batch is waiting for advances the batch; capturing or uploading another URL by hand while a batch runs leaves the queue as it is. If the batch tab is closed or the extension is reloaded, the batch stays queued, and starting it again from the popup resumes it at that URL.
 
 Opening the Cache Manager page again, in the same tab or another one, and clicking **Refresh** keep a running batch; opening another cache folder stops it.
 

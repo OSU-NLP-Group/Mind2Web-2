@@ -499,7 +499,9 @@ function initSSE() {
     api.subscribeEvents((data) => {
         if (data.type === 'capture_complete') {
             const s = getState();
-            if (!s.batchActive) {
+            if (data.warning) {
+                toast(`Captured ${data.url?.substring(0, 60)}, but ${data.warning}. Capture it again for a full-page screenshot.`, 'warning');
+            } else if (!s.batchActive) {
                 toast(`Captured: ${data.url?.substring(0, 60)}...`, 'success');
             }
             setState({ contentVersion: s.contentVersion + 1 });
