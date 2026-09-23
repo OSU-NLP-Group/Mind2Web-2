@@ -21,6 +21,7 @@ from cache_manager_web.backend.models.cache_manager import (
 )
 from cache_manager_web.backend.models.keyword_detector import KeywordDetector
 from mind2web2.utils.cache_filesys import CacheFileSys, storage_key
+from mind2web2.utils.page_info_retrieval import html_to_markdown
 
 A, B = "https://example.com/a", "https://example.com/b"
 
@@ -247,6 +248,25 @@ def test_reset_deletes_the_stored_page_and_leaves_the_url_pending(tmp_path):
         assert CacheFileSys(str(task_dir)).get_web(A, get_screenshot=False)[0] == "captured by hand"
         assert pending(tmp_path) == [B]
         assert url_states(c)[A] == ("web", [], "")
+
+
+def test_a_captured_pages_html_is_stored_as_text_the_way_the_crawler_stores_it(tmp_path):
+    task_dir = tmp_path / "agent" / "task"
+    CacheFileSys(str(task_dir)).put_web(A, "page a", png_bytes())
+    html = "<html><body><h1>Title</h1><p>Some <b>bold</b> text.</p><script>hidden()</script></body></html>"
+
+    with client() as c:
+        c.post("/api/load", json={"path": str(tmp_path / "agent")})
+        from_extension = capture(B, text="ignored when html is sent") | {"html": html}
+        assert c.post("/api/capture", json=from_extension,
+                      headers={"Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop"}).json()["ok"]
+        assert c.post("/api/capture", json=capture(A)).json()["ok"]  # text only, as older extension versions send
+
+    cache = CacheFileSys(str(task_dir))
+    text, screenshot = cache.get_web(B)
+    assert text == html_to_markdown(html) == "# Title\n\nSome bold text.\n"
+    assert Image.open(io.BytesIO(screenshot)).format == "JPEG"  # the extension sends PNG
+    assert cache.get_web(A, get_screenshot=False)[0] == "captured by hand"
 
 
 def test_added_urls_are_pending_and_can_be_renamed_or_deleted(tmp_path):

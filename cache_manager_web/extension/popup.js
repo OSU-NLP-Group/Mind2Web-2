@@ -1,12 +1,14 @@
 /**
  * Popup script for Cache Manager Capture extension.
  *
- * Handles single capture, batch start/stop, and live batch status display.
+ * Handles single capture, batch start/stop, live batch status display, and
+ * the backend URL setting (getBackend and setBackend come from settings.js).
  */
 
-const BACKEND = 'http://127.0.0.1:8000';
-
 const statusEl = document.getElementById('status');
+const backendInput = document.getElementById('backend-input');
+const backendSaveBtn = document.getElementById('backend-save');
+const backendError = document.getElementById('backend-error');
 const batchSection = document.getElementById('batch-section');
 const batchRunningSection = document.getElementById('batch-running-section');
 const singleSection = document.getElementById('single-section');
@@ -110,9 +112,11 @@ function stopPolling() {
 }
 
 async function init() {
+    const backend = await getBackend();
+    backendInput.value = backend;
     try {
         // Check backend connection
-        const res = await fetch(`${BACKEND}/api/status`);
+        const res = await fetch(`${backend}/api/status`);
         const data = await res.json();
 
         if (data.loaded) {
@@ -133,7 +137,7 @@ async function init() {
         }
 
         // Check if batch is queued on the backend
-        const batchRes = await fetch(`${BACKEND}/api/capture/batch/status`);
+        const batchRes = await fetch(`${backend}/api/capture/batch/status`);
         const batch = await batchRes.json();
 
         if (batch.active) {
@@ -150,7 +154,7 @@ async function init() {
         showSection('single');
 
         // Load capture target
-        const targetRes = await fetch(`${BACKEND}/api/capture/target`);
+        const targetRes = await fetch(`${backend}/api/capture/target`);
         const target = await targetRes.json();
 
         if (target.active) {
@@ -174,10 +178,26 @@ async function init() {
         }
     } catch (err) {
         statusEl.className = 'status disconnected';
-        statusEl.textContent = 'Cannot connect to backend (is it running?)';
+        statusEl.textContent = `Cannot connect to ${backend} (is the Cache Manager running? The URL can be changed under Settings.)`;
         captureBtn.disabled = true;
     }
 }
+
+// Backend URL setting
+async function onSaveBackend() {
+    backendError.textContent = '';
+    try {
+        await setBackend(backendInput.value);
+    } catch (err) {
+        backendError.textContent = err.message;
+        return;
+    }
+    statusEl.className = 'status disconnected';
+    statusEl.textContent = 'Checking connection...';
+    await init();
+}
+backendSaveBtn.addEventListener('click', onSaveBackend);
+backendInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') onSaveBackend(); });
 
 // Single capture
 captureBtn.addEventListener('click', async () => {

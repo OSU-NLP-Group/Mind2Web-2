@@ -28,8 +28,9 @@ cache_manager_web/
 │           └── preview.js     # Screenshot/text/answer preview with zoom
 └── extension/
     ├── manifest.json          # Chrome Extension Manifest V3
-    ├── background.js          # Service worker: capture, batch mode, CAPTCHA detection
-    └── popup.html/js          # Extension popup UI with batch progress display
+    ├── settings.js            # Backend URL setting (chrome.storage.local), used by the popup and the service worker
+    ├── background.js          # Service worker: capture (full-page screenshot via chrome.debugger), batch mode, CAPTCHA detection
+    └── popup.html/js          # Extension popup UI with batch progress display and the backend URL setting
 ```
 
 ## Key Design Decisions
@@ -44,6 +45,7 @@ cache_manager_web/
 - **No circular imports**: Components import shared actions from `actions.js`, NOT from `main.js`. This is critical — `main.js` imports components, so components must not import from `main.js`.
 - **Selective state subscriptions**: `subscribe(fn, ['key1', 'key2'])` — components only re-render when their relevant keys change.
 - **Chrome Extension for capture**: Uses a real browser session (not Playwright/Selenium) so it works on Cloudflare-protected and anti-bot pages.
+- **Extension captures as the crawler does**: the extension sends the page's `outerHTML`, which `/api/capture` converts with the crawler's `html_to_markdown()`, and a screenshot taken with the crawler's DevTools sequence through `chrome.debugger` (`captureFullPage()` in background.js): the viewport is resized to the page's content height, at most 6000 CSS pixels, and the screenshot is taken with `captureBeyondViewport`, which covers the whole page. `captureVisibleTab` (the visible part only) is the fallback when the debugger cannot attach. The backend URL is a setting in the popup (`settings.js`, default `http://127.0.0.1:8000`).
 - **SSE for real-time updates**: When the extension captures a page, the frontend updates instantly.
 - **contentVersion cache busting**: Screenshot URLs include `&v={contentVersion}` to force browser to re-fetch after capture.
 - **MHTML parsing without Qt**: Uses Python's `email` module to parse MHTML (MIME format).
@@ -80,7 +82,7 @@ This project uses `uv`, not pip. Use `uv run`, `uv sync`, `uv add`.
 | POST | /api/capture/batch/skip | Skip current URL (on failure) |
 | POST | /api/capture/batch/stop | Stop batch capture |
 | POST | /api/capture/batch/captcha | CAPTCHA detected notification |
-| POST | /api/capture | Receive capture from extension |
+| POST | /api/capture | Receive capture from extension (`html` is converted with `html_to_markdown()`; `text` is stored as is when no HTML is sent) |
 | POST | /api/flag/{id} | Flag URL for recapture (flags.json only; the stored page is kept) |
 | POST | /api/reset/{id} | Delete the stored page or failure record; the URL becomes `pending` |
 | GET | /api/review/{id} | Get review statuses for a task |
@@ -162,8 +164,9 @@ Key state fields:
 ## Gotchas
 
 - `Ctrl+R` conflicts with browser refresh — don't use it as a shortcut.
-- The extension needs `activeTab` + `scripting` + `tabs` + `<all_urls>` permissions for batch mode.
+- The extension needs `activeTab` + `scripting` + `tabs` + `<all_urls>` permissions for batch mode, `debugger` for full-page screenshots, and `storage` for the backend URL.
+- While the extension's debugger is attached, Chrome shows a "started debugging this browser" bar. Clicking Cancel on it detaches the debugger, and that capture falls back to `captureVisibleTab`.
 - Screenshot browser caching: always use `contentVersion` in screenshot URLs.
 - MHTML upload uses Python's `email` module parser.
 - `"recaptured"` status is NOT counted in progress — these URLs still need human review.
-- `captureVisibleTab` captures the active tab, not a specific tab — must activate the target tab first.
+- `captureVisibleTab`, the fallback screenshot, captures the active tab, not a specific tab — must activate the target tab first.
