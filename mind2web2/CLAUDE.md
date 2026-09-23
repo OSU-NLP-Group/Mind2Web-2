@@ -43,10 +43,17 @@ Two classes that do the actual LLM-based work:
 - `compute_score(mutate=True)`: Recursive score computation with write-back
 
 ### eval_runner.py — Async Execution Engine
-- `evaluate_task()`: Evaluates all answers for one task (loads eval script, manages cache, runs answers concurrently)
+- `evaluate_task()`: Evaluates the `answer_<k>.md` files of one task (loads eval script, manages cache, runs answers concurrently) and keeps a copy of each answer and its `.meta.json` next to its results
 - `_eval_one_answer()`: Evaluates a single answer file
-- `merge_all_results()`: Aggregates results across all tasks/agents
 - `DualSemaphore`: Wrapper holding both webpage and LLM semaphores
+
+### submission.py, results.py, metrics.py — Submissions, Results, Leaderboard Metrics
+- `submission.py`: the answers layout (`<agent>/<task_id>/answer_<k>.md`, optional `answer_<k>.meta.json`), task lists (CSV with a `task_id` column, text file, or eval-script directory), and `validate_submission()`
+- `results.py`: the results layout (`<results>/<agent>/<task_id>/answer_<k>/results/<timestamp>_answer_<k>.md.json`) and lookup of an answer's latest result
+- `metrics.py`: Partial Completion, Success Rate, Pass@k, Time, and Answer Length over a task list; a missing answer or result scores 0 and is listed
+
+### cli/ — The `mind2web2` Command
+One module per subcommand (`validate`, `metrics`); each defines `register(subparsers)` and `run(args) -> int`. Shared options live in `cli/_common.py`.
 
 ## Data Flow
 
