@@ -1,0 +1,14 @@
+final_score 1
+root [sequential] 1 passed
+  identify_faker_step [parallel] 1 passed
+    player_verification [parallel, critical] 1 passed
+      player_info_exists [parallel, critical] 1 passed
+      player_name_verification [parallel, critical] 1 passed
+    game_evidence_verification [parallel, critical] 1 passed
+      game_evidence_exists [parallel, critical] 1 passed
+      game_evidence_substantiation [parallel, critical] 1 passed
+  win_rate_step [parallel] 1 passed
+    win_rate_info_exists [parallel, critical] 1 passed
+    win_rate_correctness [parallel, critical] 1 passed
+    win_rate_substantiation_exists [parallel, critical] 1 passed
+    win_rate_substantiation [parallel, critical] 1 passed

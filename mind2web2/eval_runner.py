@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import re
+import statistics
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -562,8 +563,6 @@ def generate_result_summary(output_dir: Union[str, Path], agent_name: str) -> Op
     dict or None
         Summary dict (also saved to ``<output_dir>/<agent_name>/summary.json``)
     """
-    import numpy as np
-
     agent_dir = Path(output_dir) / agent_name
     if not agent_dir.is_dir():
         logging.getLogger(__name__).error(f"Agent directory not found: {agent_dir}")
@@ -643,9 +642,9 @@ def generate_result_summary(output_dir: Union[str, Path], agent_name: str) -> Op
 
     for run_name in sorted(run_metrics.keys()):
         m = run_metrics[run_name]
-        avg_score = float(np.mean(m["scores"]))
-        avg_success = float(np.mean(m["successes"]))
-        avg_wc = float(np.mean(m["word_counts"]))
+        avg_score = float(statistics.fmean(m["scores"]))
+        avg_success = float(statistics.fmean(m["successes"]))
+        avg_wc = float(statistics.fmean(m["word_counts"]))
 
         per_run[run_name] = {
             "num_tasks": len(m["scores"]),
@@ -663,13 +662,13 @@ def generate_result_summary(output_dir: Union[str, Path], agent_name: str) -> Op
     # ------------------------------------------------------------------ #
     # 4. Across-run aggregates (avg & std of per-run values)
     # ------------------------------------------------------------------ #
-    avg_score = float(np.mean(run_avg_scores))
-    avg_success = float(np.mean(run_avg_successes))
-    avg_word_count = float(np.mean(run_avg_word_counts))
+    avg_score = float(statistics.fmean(run_avg_scores))
+    avg_success = float(statistics.fmean(run_avg_successes))
+    avg_word_count = float(statistics.fmean(run_avg_word_counts))
 
-    std_score = float(np.std(run_avg_scores, ddof=0)) if num_runs > 1 else 0.0
-    std_success = float(np.std(run_avg_successes, ddof=0)) if num_runs > 1 else 0.0
-    std_word_count = float(np.std(run_avg_word_counts, ddof=0)) if num_runs > 1 else 0.0
+    std_score = float(statistics.pstdev(run_avg_scores)) if num_runs > 1 else 0.0
+    std_success = float(statistics.pstdev(run_avg_successes)) if num_runs > 1 else 0.0
+    std_word_count = float(statistics.pstdev(run_avg_word_counts)) if num_runs > 1 else 0.0
 
     # ------------------------------------------------------------------ #
     # 5. Pass@k — task passes if any run succeeded
@@ -690,7 +689,7 @@ def generate_result_summary(output_dir: Union[str, Path], agent_name: str) -> Op
         tasks_detail[task_id] = {
             "answers": answers,
             "best_score": max(scores),
-            "avg_score": round(float(np.mean(scores)), 6),
+            "avg_score": round(float(statistics.fmean(scores)), 6),
             "pass": any(a["success"] for a in answers),
         }
 

@@ -1,0 +1,11 @@
+final_score 0.666667
+root [parallel] 0.666667 partial
+  template_0 [parallel] 1 passed
+    template_0_exists [parallel, critical] 1 passed
+    template_0_verification [parallel, critical] 1 passed
+  template_1 [parallel] 1 passed
+    template_1_exists [parallel, critical] 1 passed
+    template_1_verification [parallel, critical] 1 passed
+  template_2 [parallel] 0 failed
+    template_2_exists [parallel, critical] 0 failed
+    template_2_verification [parallel, critical] 0 skipped

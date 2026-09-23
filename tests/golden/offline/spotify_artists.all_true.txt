@@ -1,0 +1,57 @@
+final_score 0
+root [parallel] 0 failed
+  artist_0 [sequential] 0 failed
+    artist_0_criteria [parallel] 0 failed
+      artist_0_spotify_url_exists [parallel, critical] 1 passed
+      artist_0_spotify_url_valid [parallel, critical] 1 passed
+      artist_0_listeners_range [parallel, critical] 0 failed
+      artist_0_listeners_accuracy [parallel, critical] 1 passed
+    artist_0_playlist [parallel] 0 skipped
+      artist_0_playlist_info_exists [parallel, critical] 1 passed
+      artist_0_playlist_valid [parallel, critical] 0 skipped
+      artist_0_song_in_playlist [parallel, critical] 0 skipped
+      artist_0_main_performer [parallel, critical] 0 skipped
+  artist_1 [sequential] 0 failed
+    artist_1_criteria [parallel] 0 failed
+      artist_1_spotify_url_exists [parallel, critical] 1 passed
+      artist_1_spotify_url_valid [parallel, critical] 1 passed
+      artist_1_listeners_range [parallel, critical] 0 failed
+      artist_1_listeners_accuracy [parallel, critical] 1 passed
+    artist_1_playlist [parallel] 0 skipped
+      artist_1_playlist_info_exists [parallel, critical] 1 passed
+      artist_1_playlist_valid [parallel, critical] 0 skipped
+      artist_1_song_in_playlist [parallel, critical] 0 skipped
+      artist_1_main_performer [parallel, critical] 0 skipped
+  artist_2 [sequential] 0 failed
+    artist_2_criteria [parallel] 0 failed
+      artist_2_spotify_url_exists [parallel, critical] 0 failed
+      artist_2_spotify_url_valid [parallel, critical] 0 skipped
+      artist_2_listeners_range [parallel, critical] 0 failed
+      artist_2_listeners_accuracy [parallel, critical] 0 failed
+    artist_2_playlist [parallel] 0 skipped
+      artist_2_playlist_info_exists [parallel, critical] 0 failed
+      artist_2_playlist_valid [parallel, critical] 0 skipped
+      artist_2_song_in_playlist [parallel, critical] 0 skipped
+      artist_2_main_performer [parallel, critical] 0 skipped
+  artist_3 [sequential] 0 failed
+    artist_3_criteria [parallel] 0 failed
+      artist_3_spotify_url_exists [parallel, critical] 0 failed
+      artist_3_spotify_url_valid [parallel, critical] 0 skipped
+      artist_3_listeners_range [parallel, critical] 0 failed
+      artist_3_listeners_accuracy [parallel, critical] 0 failed
+    artist_3_playlist [parallel] 0 skipped
+      artist_3_playlist_info_exists [parallel, critical] 0 failed
+      artist_3_playlist_valid [parallel, critical] 0 skipped
+      artist_3_song_in_playlist [parallel, critical] 0 skipped
+      artist_3_main_performer [parallel, critical] 0 skipped
+  artist_4 [sequential] 0 failed
+    artist_4_criteria [parallel] 0 failed
+      artist_4_spotify_url_exists [parallel, critical] 0 failed
+      artist_4_spotify_url_valid [parallel, critical] 0 skipped
+      artist_4_listeners_range [parallel, critical] 0 failed
+      artist_4_listeners_accuracy [parallel, critical] 0 failed
+    artist_4_playlist [parallel] 0 skipped
+      artist_4_playlist_info_exists [parallel, critical] 0 failed
+      artist_4_playlist_valid [parallel, critical] 0 skipped
+      artist_4_song_in_playlist [parallel, critical] 0 skipped
+      artist_4_main_performer [parallel, critical] 0 skipped

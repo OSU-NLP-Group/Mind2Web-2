@@ -1,0 +1,20 @@
+final_score 0.666667
+root [parallel] 0.666667 partial
+  park_0 [parallel] 1 passed
+    park_0_info_exists [parallel, critical] 1 passed
+    park_0_is_state_park [parallel, critical] 1 passed
+    park_0_address_verified [parallel, critical] 1 passed
+    park_0_distance_valid [parallel, critical] 1 passed
+    park_0_distance_match [parallel, critical] 1 passed
+  park_1 [parallel] 1 passed
+    park_1_info_exists [parallel, critical] 1 passed
+    park_1_is_state_park [parallel, critical] 1 passed
+    park_1_address_verified [parallel, critical] 1 passed
+    park_1_distance_valid [parallel, critical] 1 passed
+    park_1_distance_match [parallel, critical] 1 passed
+  park_2 [parallel] 0 failed
+    park_2_info_exists [parallel, critical] 0 failed
+    park_2_is_state_park [parallel, critical] 0 skipped
+    park_2_address_verified [parallel, critical] 0 skipped
+    park_2_distance_valid [parallel, critical] 0 failed
+    park_2_distance_match [parallel, critical] 0 failed
