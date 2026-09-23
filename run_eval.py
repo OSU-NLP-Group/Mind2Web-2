@@ -73,7 +73,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Add *_debug suffix to logs / result files")
     p.add_argument("--overwrite", action="store_true",
                    help="Evaluate answers again even if their latest result scored the same answer "
-                        "with the same judge (earlier results move to results/superseded/)")
+                        "file with the same judge, eval script, and evaluator settings (earlier "
+                        "results move to results/superseded/)")
     return p
 
 

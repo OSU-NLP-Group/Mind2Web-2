@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import math
 import shutil
@@ -237,3 +238,28 @@ def test_metrics_read_the_results_evaluate_task_writes(tmp_path, monkeypatch):
         script_path=REPO_ROOT / "eval_scripts" / "dev_set" / "yu_lineage.py",
     ))
     assert not (results_root / "example" / "yu_lineage" / "answer_1" / "answer_1.meta.json").exists()
+
+def test_a_result_for_a_replaced_answer_is_not_used(tmp_path):
+    answers_root, results_root = tmp_path / "answers", tmp_path / "eval_results"
+    task_dir = answers_root / AGENT / "t1"
+    task_dir.mkdir(parents=True)
+    # run -> (the answer file now, the answer text the result recorded; None: a result without a digest)
+    runs = {1: ("the evaluated answer", "the evaluated answer"),
+            2: ("the replacement", "the answer before it was replaced"),
+            3: ("an answer scored by an older framework", None)}
+    for run, (text, recorded) in runs.items():
+        (task_dir / f"answer_{run}.md").write_text(text)
+        write_result(results_root, "t1", run, 1.0, "20260102_120000")
+        if recorded is not None:
+            [path] = (answer_output_dir(results_root, AGENT, "t1", f"answer_{run}.md") / "results").glob("*.json")
+            result = json.loads(path.read_text())
+            result["answer_sha256"] = hashlib.sha256(recorded.encode()).hexdigest()
+            path.write_text(json.dumps(result))
+
+    records, num_runs = collect_records(AGENT, ["t1"], answers_root, results_root)
+    assert [(r.run, r.score, r.stale_result) for r in records] == [(1, 1.0, False), (2, None, True), (3, 1.0, False)]
+    metrics = compute_metrics(records, [TaskInfo("t1")], num_runs, AGENT)
+    assert metrics["stale_results"] == [{"task_id": "t1", "run": 2}]
+    assert metrics["missing_results"] == []
+    assert metrics["partial_completion"]["per_run"] == [1.0, 0.0, 1.0]
+    assert "Answers changed since their evaluation result (scored 0): 1" in format_report(metrics)

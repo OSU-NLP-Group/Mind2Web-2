@@ -42,6 +42,10 @@ class EvaluatorConfig:
     default_use_screenshot: bool = True
     default_additional_instruction: str = "None"
 
+    def as_dict(self) -> dict:
+        """The settings by name, as recorded in each evaluation result."""
+        return {name: getattr(self, name) for name in type(self).__annotations__}
+
 
 class BaseEvaluator:
     """Common utilities shared by Extractor & Verifier."""
@@ -78,11 +82,16 @@ class BaseEvaluator:
         """Send one judge request under the LLM semaphore and record it in ``self.usage``.
 
         Raises :class:`JudgeError` when the request fails for good; callers let it
-        propagate so that the answer is reported as not scored.
+        propagate so that the answer is reported as not scored.  Once a request
+        for the answer has failed for good, the answer cannot be scored, so
+        later requests raise :class:`JudgeError` at once without being sent.
         """
         # Use LLM semaphore if available, fallback to default semaphore
         semaphore_to_use = getattr(self.semaphore, 'llm', self.semaphore)
         async with semaphore_to_use:
+            if self.usage.failed_requests:
+                raise JudgeError("An earlier judge request for this answer failed for good; "
+                                 "no further requests are sent for it")
             try:
                 result, tokens = await self.client.async_response(count_token=True, **kwargs)
             except JudgeError:

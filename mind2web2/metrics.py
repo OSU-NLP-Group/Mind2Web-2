@@ -17,9 +17,11 @@ of its rubric tree.
 
 A (task, run) pair without an answer file, or whose answer has no evaluation
 result, scores 0 in the first three metrics, and the report lists every such
-pair so that it can be fixed.  Time and Answer Length describe the answers
-themselves: an answer that exists counts toward them whether or not it has an
-evaluation result, and a missing answer file does not.
+pair so that it can be fixed.  A result that records the SHA-256 of a
+different answer file (the answer was replaced after it was evaluated) is not
+used: the pair also scores 0 and is listed.  Time and Answer Length describe
+the answers themselves: an answer that exists counts toward them whether or
+not it has an evaluation result, and a missing answer file does not.
 
 The metrics record which tasks they cover (``task_selection``), and they
 include a ``leaderboard_entry`` only when they are computed over a task list
@@ -58,9 +60,11 @@ class AnswerRecord:
     """Everything the metrics need about run ``run`` of task ``task_id``.
 
     ``score`` is ``None`` when there is no answer or the answer has no
-    evaluation result; ``word_count`` is ``None`` when there is no answer.
+    usable evaluation result; ``word_count`` is ``None`` when there is no
+    answer.  ``stale_result`` is true when the answer's latest result records
+    the SHA-256 of a different answer file, which leaves ``score`` ``None``.
     ``judge_model`` is the model that scored the answer, ``"unknown"`` for a
-    result that does not record it, and ``None`` without a result.
+    result that does not record it, and ``None`` without a score.
     """
 
     task_id: str
@@ -70,6 +74,7 @@ class AnswerRecord:
     word_count: int | None = None
     time_seconds: float | None = None
     judge_model: str | None = None
+    stale_result: bool = False
 
 
 def _mean_std(values: list[float]) -> dict:
@@ -158,10 +163,13 @@ def collect_records(
                 records.append(AnswerRecord(task_id, run, answer_present=False))
                 continue
             result = load_latest_result(results_root, agent_name, task_id, answer.name)
-            score = float(result["final_score"]) if result and "final_score" in result else None
+            data = answer.path.read_bytes()
+            recorded = result.get("answer_sha256") if result else None
+            stale = recorded is not None and recorded != hashlib.sha256(data).hexdigest()
+            score = float(result["final_score"]) if result and "final_score" in result and not stale else None
             metadata = load_metadata(answer)
             try:
-                text = answer.path.read_text(encoding="utf-8")
+                text = data.decode("utf-8")
             except UnicodeDecodeError as exc:
                 raise ValueError(f"{answer.path}: not UTF-8 text") from exc
             records.append(AnswerRecord(
@@ -172,6 +180,7 @@ def collect_records(
                 word_count=count_words(text),
                 time_seconds=metadata.time_seconds if metadata else None,
                 judge_model=_judge_model(result) if score is not None else None,
+                stale_result=stale,
             ))
     return records, num_runs
 
@@ -247,7 +256,10 @@ def compute_metrics(
         ],
         "missing_results": [
             {"task_id": rec.task_id, "run": rec.run}
-            for rec in records if rec.answer_present and rec.score is None
+            for rec in records if rec.answer_present and rec.score is None and not rec.stale_result
+        ],
+        "stale_results": [
+            {"task_id": rec.task_id, "run": rec.run} for rec in records if rec.stale_result
         ],
         "per_task": {
             t: {"scores": [table[(t, r)].score for r in runs], "pass": passed[t]} for t in task_ids
@@ -350,7 +362,8 @@ def format_report(metrics: dict, max_listed: int = 20) -> str:
                          f"{block['success_rate']:.4f}  ({block['num_tasks']} tasks)")
 
     for key, label in (("missing_answers", "Missing answer files"),
-                       ("missing_results", "Answers without an evaluation result")):
+                       ("missing_results", "Answers without an evaluation result"),
+                       ("stale_results", "Answers changed since their evaluation result")):
         items = metrics[key]
         if items:
             lines.append(f"  {label} (scored 0): {len(items)}")
