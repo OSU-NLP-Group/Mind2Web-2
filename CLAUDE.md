@@ -30,7 +30,8 @@ answers/                     # Agent answer files (markdown), organized by agent
 eval_scripts/dev_set/        # Eval scripts of the public dev set (all scripts: Hugging Face dataset)
 cache/                       # Cached webpage content (text + screenshots)
 eval_results/                # Evaluation output (JSON results + logs)
-cache_manager/               # [DEPRECATED] PySide6 GUI for managing webpage cache
+cache_manager_web/           # Cache Manager: web UI and Chrome extension for reviewing and recapturing cached pages
+tests/                       # Test suite (`uv run pytest`); needs no API keys
 ```
 
 ## Key Concepts
@@ -98,7 +99,6 @@ uv run mind2web2 metrics example --task-list <split.csv> --num-runs 3
 
 ## Notes for Developers
 
-- `cache_manager/` is deprecated and scheduled for removal. Do not invest effort there.
 - Eval scripts are per-task Python files released in the gated Hugging Face dataset (`evaluation_scripts/<YYYY_MM_DD>/`). This repo ships only the dev set (`eval_scripts/dev_set/`); never commit test-set scripts, task names, or their contents here. Changes to them go to the Hugging Face dataset as pull requests.
 - The default judge model is `gpt-6-luna` (`DEFAULT_JUDGE_MODEL`, set with `mind2web2 evaluate --judge-model`); the paper used `o4-mini`. The judge client sends every request to the configured judge, and each result records the judge and its token usage.
 - Cache lookups accept surface variants of a stored URL (scheme, `www.`, UTM parameters, encoding, trailing slash); the rules are in `CacheFileSys.lookup()` and `url_tools.normalize_url_simple()`. Cache writes are on disk as soon as `put_web` / `put_pdf` / `remove` return.
