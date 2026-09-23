@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import datetime
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
@@ -12,6 +13,17 @@ from mind2web2.evaluator import (
 )
 from mind2web2.llm_client.base_client import LLMClient
 from mind2web2.api_tools import tool_googlemap
+
+
+def evaluation_now(clock=datetime.datetime.now):
+    """Return the "now" from which this task's relative time ranges are computed.
+
+    This is midnight of MIND2WEB2_EVAL_DATE (YYYY-MM-DD) when that environment variable is set, for
+    example to the date the answers were collected, and ``clock()`` otherwise.
+    """
+    pinned = os.environ.get("MIND2WEB2_EVAL_DATE")
+    return datetime.datetime.strptime(pinned, "%Y-%m-%d") if pinned else clock()
+
 
 # --------------------------------------------------------------------------- #
 # Task-specific constants                                                     #
@@ -28,7 +40,7 @@ Find two upcoming sports or music events in New York City that are scheduled wit
 
 # Constants for evaluation
 ORIGIN_ADDRESS = "485 Marin Blvd, Jersey City, NJ"
-CURRENT_DATE = datetime.datetime.now()
+CURRENT_DATE = evaluation_now()
 TWO_MONTHS_LATER = CURRENT_DATE + datetime.timedelta(days=60)
 
 
