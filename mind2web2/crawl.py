@@ -7,19 +7,24 @@ A crawl has two stages for each task:
    optionally, with LLMs (:class:`LLMUrlExtractor`), which also recover URLs
    written without a scheme or split across lines.  Spellings of one URL that
    normalize to the same form are merged, preferring what the regex found, then
-   ``https``, then the shortest spelling.  The result is written to
-   ``<cache_root>/<agent>/<task_id>.json``::
+   ``https``, then the shortest spelling.  This merging spans the task's
+   answers: a page that two answers spell differently is listed, and captured,
+   once.  The result is written to ``<cache_root>/<agent>/<task_id>.json``::
 
        {"agent_name", "task_id", "total_unique_urls",
         "all_unique_urls": [url, ...],                 # case-insensitively sorted
         "urls": {url: [answer file, ...]},             # most-cited first
         "answer_digests": {answer file: sha256},       # the answers the URLs came from
+        "url_models": [model, ...],                    # the LLMs that extracted URLs; [] for regex only
+        "url_extraction_complete": bool,               # false if an LLM request failed
         "url_types": {url: "web" | "pdf"},             # filled in after the crawl
         "cached_url_count", "failed_urls": {url: reason}}
 
    A later crawl reuses this file instead of extracting again while the task's
    answer files are the same files with the same content (``answer_digests``),
-   unless asked to refresh it.
+   the URL models are the same, and the extraction was complete, unless asked
+   to refresh it.  An incomplete list is still written, so that it can be
+   reviewed, and is used for the crawl that wrote it.
 
 2. **Capture.** Each URL is stored in the task's cache
    (``<cache_root>/<agent>/<task_id>/``, a :class:`CacheFileSys`): PDFs are
@@ -27,7 +32,9 @@ A crawl has two stages for each task:
    is recorded as a failure in the cache instead of being stored.
 
 All tasks of a crawl share one browser, so ``max_concurrent_pages`` of the
-:class:`BatchBrowserManager` bounds the pages open across the whole crawl.
+:class:`BatchBrowserManager` bounds the pages open across the whole crawl, and
+at most ``max_concurrent_urls`` URLs are processed at once, which bounds the
+PDF checks and downloads that run outside the browser.
 """
 from __future__ import annotations
 
@@ -66,8 +73,9 @@ OUTCOMES = ("cached", "skipped", "stored", "failed", "blocked", "error")
 class LLMUrlExtractor:
     """Extracts the URLs of an answer with several LLMs and returns their union.
 
-    A model whose request fails contributes nothing (the failure is logged), so
-    one unavailable model lowers recall without stopping the crawl.
+    A model whose request fails contributes nothing (the failure is logged, and
+    :meth:`extract` reports the extraction as incomplete), so one unavailable
+    model lowers recall without stopping the crawl.
     """
 
     def __init__(self, client: LLMClient, models: Sequence[str] = DEFAULT_URL_MODELS,
@@ -76,11 +84,14 @@ class LLMUrlExtractor:
         self.models = tuple(models)
         self._semaphore = asyncio.Semaphore(max_concurrent_requests)
 
-    async def extract(self, answer_text: str, logger: Logger) -> List[str]:
+    async def extract(self, answer_text: str, logger: Logger) -> Tuple[List[str], bool]:
+        """The union of the URLs the models found, and whether every model's request succeeded."""
         results = await asyncio.gather(*(self._extract_with(model, answer_text, logger) for model in self.models))
-        return list(dict.fromkeys(url for urls in results for url in urls))
+        urls = list(dict.fromkeys(url for found in results if found is not None for url in found))
+        return urls, all(found is not None for found in results)
 
-    async def _extract_with(self, model: str, answer_text: str, logger: Logger) -> List[str]:
+    async def _extract_with(self, model: str, answer_text: str, logger: Logger) -> Optional[List[str]]:
+        """The URLs ``model`` found, or ``None`` if its request failed."""
         try:
             async with self._semaphore:
                 result: URLs = await self.client.async_response(
@@ -92,7 +103,7 @@ class LLMUrlExtractor:
             return result.urls or []
         except Exception as exc:
             logger.warning(f"URL extraction with {model} failed: {exc}")
-            return []
+            return None
 
 
 def filter_url_variants(urls: Iterable[str], priorities: Optional[Dict[str, int]] = None) -> List[str]:
@@ -114,14 +125,15 @@ def filter_url_variants(urls: Iterable[str], priorities: Optional[Dict[str, int]
     ]
 
 
-async def extract_answer_urls(answer_text: str, extractor: Optional[LLMUrlExtractor], logger: Logger) -> List[str]:
-    """The distinct URLs of one answer: regex matches first, then what the LLMs add."""
+async def extract_answer_urls(answer_text: str, extractor: Optional[LLMUrlExtractor],
+                              logger: Logger) -> Tuple[List[str], bool]:
+    """The distinct URLs of one answer (regex matches first, then what the LLMs add), and whether every LLM answered."""
     found_by_regex = regex_find_urls(answer_text)
-    found_by_llm = await extractor.extract(answer_text, logger) if extractor is not None else []
+    found_by_llm, complete = await extractor.extract(answer_text, logger) if extractor is not None else ([], True)
     priorities = {url: 0 for url in found_by_regex}
     for url in found_by_llm:
         priorities.setdefault(url, 1)
-    return filter_url_variants(found_by_regex + found_by_llm, priorities)
+    return filter_url_variants(found_by_regex + found_by_llm, priorities), complete
 
 
 def _sorted_ci(items: Iterable[str]) -> List[str]:
@@ -141,26 +153,37 @@ async def discover_task_urls(
     """Return the task's URLs, from its metadata file or by extracting them from its answers.
 
     The metadata file is reused when it was written for the answer files the
-    task has now, with the same content.  Otherwise (the answers changed, or
-    the file is missing or unreadable), or with ``refresh``, the answers are
-    scanned again and the file is rewritten.  See the module docstring for the
-    file's layout.
+    task has now, with the same content, by the same URL models (none when
+    ``extractor`` is ``None``), and no LLM request failed while writing it.
+    Otherwise (or when the file is missing or unreadable, or with
+    ``refresh``), the answers are scanned again and the file is rewritten.
+    See the module docstring for the file's layout.
     """
     meta_path = cache_root / agent / f"{task_id}.json"
     answers = list_answer_files(answers_root / agent / task_id)
     texts = [a.path.read_text(encoding="utf-8") for a in answers]
     digests = {a.path.name: hashlib.sha256(text.encode("utf-8")).hexdigest() for a, text in zip(answers, texts)}
+    url_models = list(extractor.models) if extractor is not None else []
     if meta_path.exists() and not refresh:
         try:
             meta = json.loads(meta_path.read_text("utf-8"))
         except ValueError:
             meta = {}
-        if meta.get("answer_digests") == digests:
+        if not isinstance(meta, dict):
+            meta = {}
+        if meta.get("answer_digests") != digests:
+            reason = "does not match the current answers"
+        elif meta.get("url_models") != url_models:
+            reason = f"lists the URLs found by {meta.get('url_models')}, not {url_models}"
+        elif meta.get("url_extraction_complete") is not True:
+            reason = "is incomplete: a URL-extraction request failed when it was written"
+        else:
             return meta["all_unique_urls"]
-        logger.info(f"[{agent}/{task_id}] {meta_path.name} does not match the current answers; "
-                    f"extracting their URLs again")
+        logger.info(f"[{agent}/{task_id}] {meta_path.name} {reason}; extracting the URLs again")
 
-    per_answer = await asyncio.gather(*(extract_answer_urls(text, extractor, logger) for text in texts))
+    extracted = await asyncio.gather(*(extract_answer_urls(text, extractor, logger) for text in texts))
+    per_answer = [urls for urls, _ in extracted]
+    complete = all(ok for _, ok in extracted)
 
     sources: Dict[str, List[str]] = {}
     for answer, urls in zip(answers, per_answer):
@@ -182,9 +205,14 @@ async def discover_task_urls(
         "all_unique_urls": all_urls,
         "urls": {url: _sorted_ci(files) for url, files in by_citations},
         "answer_digests": digests,
+        "url_models": url_models,
+        "url_extraction_complete": complete,
         "url_types": {},
     }, ensure_ascii=False, indent=2), "utf-8")
     logger.info(f"[{agent}/{task_id}] {len(all_urls)} URLs in {len(answers)} answers -> {meta_path}")
+    if not complete:
+        logger.warning(f"[{agent}/{task_id}] Some URL-extraction requests failed, so URLs may be missing; "
+                       f"the next crawl extracts the URLs again")
     return all_urls
 
 
@@ -260,11 +288,14 @@ async def cache_answers(
         retry_failed: bool = False,
         refresh_urls: bool = False,
         show_progress: bool = True,
+        max_concurrent_urls: int = 16,
 ) -> List[TaskCrawl]:
     """Discover and capture the URLs of ``task_ids`` for ``agent``, all through ``browser``.
 
-    URLs of every task are queued together, so the browser's page limit is the
-    only bound on concurrent captures.  After the pass over all URLs, the URLs
+    URLs of every task are queued together and processed ``max_concurrent_urls``
+    at a time, which bounds the PDF checks and downloads; the browser's page
+    limit bounds the captures among them, so ``max_concurrent_urls`` should
+    exceed it to keep the browser busy.  After the pass over all URLs, the URLs
     that failed in this crawl for a reason other than a refusal are retried
     once: such failures are often transient (a slow or overloaded site), while
     a refusal needs a person with a browser.  Finally each task's metadata file
@@ -286,13 +317,15 @@ async def cache_answers(
     caches = {task_id: CacheFileSys(str(cache_root / agent / task_id)) for task_id, urls in task_urls.items() if urls}
     pdf_parser = PDFParser()
     outcomes: Dict[Tuple[str, str], str] = {}
+    url_slots = asyncio.Semaphore(max_concurrent_urls)
 
     async def crawl_all(jobs: List[Tuple[str, str]], retry: bool, desc: str) -> None:
         with tqdm(total=len(jobs), desc=desc, unit="url", ncols=80, disable=not show_progress) as bar:
             async def crawl(job: Tuple[str, str]) -> None:
                 task_id, url = job
-                outcomes[job] = await crawl_one_page(url, caches[task_id], pdf_parser, browser, logger,
-                                                     retry_failed=retry)
+                async with url_slots:
+                    outcomes[job] = await crawl_one_page(url, caches[task_id], pdf_parser, browser, logger,
+                                                         retry_failed=retry)
                 bar.update(1)
 
             await asyncio.gather(*(crawl(job) for job in jobs))

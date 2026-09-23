@@ -15,7 +15,7 @@ import re
 from PIL import Image
 
 from local_site import LocalSite, Route
-from mind2web2 import cli
+from mind2web2 import cli, crawl
 from mind2web2.cli import cache as cache_command
 from mind2web2.crawl import discover_task_urls, extract_answer_urls, filter_url_variants
 from mind2web2.utils.cache_filesys import CacheFileSys
@@ -25,17 +25,17 @@ LOGGER = logging.getLogger("test")
 
 
 class FakeExtractor:
-    """Returns ``urls`` for every answer and counts its calls."""
+    """Returns ``urls`` for every answer, reporting the extraction as ``complete``, and counts its calls."""
 
-    models = ("fake-model",)
-
-    def __init__(self, urls: list[str]):
+    def __init__(self, urls: list[str], models=("fake-model",), complete: bool = True):
         self.urls = urls
+        self.models = models
+        self.complete = complete
         self.calls = 0
 
     async def extract(self, answer_text, logger):
         self.calls += 1
-        return list(self.urls)
+        return list(self.urls), self.complete
 
 
 def write_answers(tmp_path, texts: list[str]) -> None:
@@ -61,8 +61,8 @@ def test_one_spelling_is_kept_per_page():
 
 def test_the_regex_spelling_wins_and_llm_urls_are_added():
     extractor = FakeExtractor(["https://example.com/a", "https://example.org/extra"])
-    urls = asyncio.run(extract_answer_urls("See http://www.example.com/a/ for details.", extractor, LOGGER))
-    assert urls == ["http://www.example.com/a/", "https://example.org/extra"]
+    urls, complete = asyncio.run(extract_answer_urls("See http://www.example.com/a/ for details.", extractor, LOGGER))
+    assert (urls, complete) == (["http://www.example.com/a/", "https://example.org/extra"], True)
 
 
 def test_task_urls_are_merged_across_answers_and_listed_in_the_metadata_file(tmp_path):
@@ -72,6 +72,7 @@ def test_task_urls_are_merged_across_answers_and_listed_in_the_metadata_file(tmp
     assert meta["all_unique_urls"] == ["https://a.com/1", "https://b.org/2"]
     assert meta["urls"] == {"https://a.com/1": ["answer_1.md", "answer_2.md"], "https://b.org/2": ["answer_1.md"]}
     assert sorted(meta["answer_digests"]) == ["answer_1.md", "answer_2.md"]
+    assert (meta["url_models"], meta["url_extraction_complete"]) == ([], True)
 
 
 def test_the_url_list_is_reused_until_the_answers_change(tmp_path):
@@ -92,6 +93,42 @@ def test_the_url_list_is_reused_until_the_answers_change(tmp_path):
 
     (tmp_path / "cache" / "agent" / "task.json").write_text('{"all_unique_urls": ["https://a.c')  # truncated
     assert discover(tmp_path, extractor) == ["https://c.net/3", "https://d.io/4", "https://llm.example/x"]
+
+
+def test_the_url_list_is_extracted_again_when_incomplete_or_extracted_differently(tmp_path):
+    write_answers(tmp_path, ["https://a.com/1"])
+    failing = FakeExtractor(["https://llm.example/x"], complete=False)
+    assert discover(tmp_path, failing) == ["https://a.com/1", "https://llm.example/x"]  # used for this crawl
+    assert json.loads((tmp_path / "cache" / "agent" / "task.json").read_text())["url_extraction_complete"] is False
+
+    extractor = FakeExtractor(["https://llm.example/y"])
+    assert discover(tmp_path, extractor) == ["https://a.com/1", "https://llm.example/y"]
+    assert discover(tmp_path, extractor) == ["https://a.com/1", "https://llm.example/y"]
+    assert extractor.calls == 1
+
+    assert discover(tmp_path) == ["https://a.com/1"]  # regex only
+    other_models = FakeExtractor(["https://llm.example/z"], models=("other-model",))
+    assert discover(tmp_path, other_models) == ["https://a.com/1", "https://llm.example/z"]
+    assert json.loads((tmp_path / "cache" / "agent" / "task.json").read_text())["url_models"] == ["other-model"]
+
+
+def test_a_crawl_processes_a_bounded_number_of_urls_at_a_time(tmp_path, monkeypatch):
+    active = peak = 0
+
+    async def crawl_one_page(url, cache, pdf_parser, browser, logger, retry_failed=False):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return "stored"
+
+    monkeypatch.setattr(crawl, "crawl_one_page", crawl_one_page)
+    write_answers(tmp_path, [" ".join(f"https://example.com/{i}" for i in range(20))])
+    [report] = asyncio.run(crawl.cache_answers(
+        "agent", ["task"], answers_root=tmp_path / "answers", cache_root=tmp_path / "cache", browser=None,
+        extractor=None, logger=LOGGER, show_progress=False, max_concurrent_urls=3))
+    assert (report.urls, report.outcomes["stored"], peak) == (20, 20, 3)
 
 
 # ------------------------------------------------------------------ the cache command
@@ -168,3 +205,5 @@ def test_cache_command_exit_status(tmp_path, monkeypatch, capsys):
     assert run_cache(tmp_path) == 2  # no API key for the URL-extraction models
     assert "--no-llm" in capsys.readouterr().err
     assert run_cache(tmp_path, "--no-llm", "--task", "other") == 1  # no answers for the task
+    assert run_cache(tmp_path, "--no-llm", "--task-list", str(tmp_path / "missing.csv")) == 2
+    assert "Cannot read the task list" in capsys.readouterr().err

@@ -83,7 +83,7 @@ export OPENAI_API_KEY="..."     # Required for evaluation
 ```bash
 uv run mind2web2 validate example                  # check the answers layout
 uv run mind2web2 cache example --no-llm            # cache the cited pages (regex URL extraction only)
-uv run mind2web2 evaluate example                  # all tasks with answers, dev-set scripts
+uv run mind2web2 evaluate example                  # the tasks with answers and dev-set scripts
 uv run mind2web2 evaluate example --task yu_lineage
 uv run mind2web2 metrics example --task-list <split.csv> --num-runs 3
 ```

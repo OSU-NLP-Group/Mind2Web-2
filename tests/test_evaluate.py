@@ -16,7 +16,7 @@ from mind2web2 import Evaluator, cli, eval_runner, eval_toolkit
 from mind2web2.cli import evaluate as evaluate_command
 from mind2web2.eval_runner import ScriptsNotFound, resolve_scripts_dir
 from mind2web2.eval_toolkit import shared_browser
-from mind2web2.llm_client import JudgeConfig, JudgeError
+from mind2web2.llm_client import DEFAULT_JUDGE_MODEL, JudgeConfig, JudgeError
 
 from offline_eval import FakeLLMClient, SyntheticCache
 
@@ -176,7 +176,8 @@ def run_evaluate(tmp_path, monkeypatch):
 
 
 def test_evaluate_scores_every_answer_and_saves_the_metrics(tmp_path, run_evaluate, capsys):
-    assert run_evaluate("--judge-model", "judge-x", "--judge-reasoning-effort", "low", "--max-pages", "2") == 0
+    judge_x = ("--judge-model", "judge-x", "--judge-reasoning-effort", "low")
+    assert run_evaluate(*judge_x, "--max-pages", "2") == 0
     out = capsys.readouterr().out
     assert "t1: 2/2 answers scored, mean score 1.000" in out and "t2: 2/2 answers scored" in out
     assert FakeJudge.instances[-1].kwargs["judge"] == JudgeConfig(model="judge-x", reasoning_effort="low")
@@ -188,13 +189,22 @@ def test_evaluate_scores_every_answer_and_saves_the_metrics(tmp_path, run_evalua
     metrics = json.loads((tmp_path / "results" / "agent" / "metrics.json").read_text())
     assert (metrics["num_tasks"], metrics["num_runs"], metrics["success_rate"]["mean"]) == (2, 2, 1.0)
 
-    assert run_evaluate() == 0  # existing results are reused
+    assert run_evaluate(*judge_x) == 0  # the results scored these answers with this judge: reused
     assert FakeJudge.instances[-1].calls == 0
+
+    assert run_evaluate() == 0  # another judge: evaluated again, the earlier results kept aside
+    assert FakeJudge.instances[-1].calls > 0
+    results_dir = tmp_path / "results" / "agent" / "t1" / "answer_2" / "results"
+    assert [json.loads(p.read_text())["judge"]["model"] for p in results_dir.glob("*.json")] == [DEFAULT_JUDGE_MODEL]
+    assert [json.loads(p.read_text())["judge"]["model"]
+            for p in (results_dir / "superseded").glob("*.json")] == ["judge-x"]
 
 
 def test_evaluate_exits_with_1_when_an_answer_has_no_result(tmp_path, run_evaluate, monkeypatch, capsys):
     (tmp_path / "scripts" / "2025_10_23" / "t2.py").unlink()
-    assert run_evaluate() == 1
+    task_list = tmp_path / "split.txt"
+    task_list.write_text("t1\nt2\n")
+    assert run_evaluate("--task-list", str(task_list)) == 1
     out = capsys.readouterr().out
     assert "t2: no eval script" in out and "2 answers have no result" in out
     metrics = json.loads((tmp_path / "results" / "agent" / "metrics.json").read_text())
@@ -203,6 +213,25 @@ def test_evaluate_exits_with_1_when_an_answer_has_no_result(tmp_path, run_evalua
     monkeypatch.setattr(evaluate_command, "LLMClient", BrokenJudge)
     assert run_evaluate("--overwrite", "--task", "t1") == 1
     assert "t1: 0/2 answers scored" in capsys.readouterr().out
+
+
+def test_evaluate_without_a_task_selection_skips_tasks_without_eval_scripts(tmp_path, run_evaluate, capsys):
+    (tmp_path / "scripts" / "2025_10_23" / "t2.py").unlink()
+    assert run_evaluate() == 0
+    out = capsys.readouterr().out
+    assert "Skipping 1 tasks that have answers but no eval script" in out and "t2:" not in out
+    metrics = json.loads((tmp_path / "results" / "agent" / "metrics.json").read_text())
+    assert (metrics["num_tasks"], metrics["missing_results"]) == (1, [])
+
+    scripts = tmp_path / "scripts" / "2025_10_23"
+    (scripts / "t1.py").rename(scripts / "other.py")  # the version keeps a script, for no answered task
+    assert run_evaluate() == 1
+    assert "None of the 2 tasks that agent 'agent' has answers for has an eval script" in capsys.readouterr().err
+
+
+def test_evaluate_exits_with_2_when_the_task_list_cannot_be_read(tmp_path, run_evaluate, capsys):
+    assert run_evaluate("--task-list", str(tmp_path / "missing.csv")) == 2
+    assert "Cannot read the task list" in capsys.readouterr().err
 
 
 def test_evaluate_selects_tasks(tmp_path, run_evaluate, capsys):

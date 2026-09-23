@@ -52,9 +52,9 @@ Two classes that do the actual LLM-based work:
 - `DualSemaphore`: Wrapper holding both webpage and LLM semaphores
 
 ### crawl.py — Caching the Pages Answers Cite
-- URL discovery: regex plus `LLMUrlExtractor` (the union over several models), one spelling per page (`filter_url_variants`), listed in `<cache>/<agent>/<task_id>.json` and reused while the answers are unchanged
+- URL discovery: regex plus `LLMUrlExtractor` (the union over several models), one spelling per page (`filter_url_variants`), merged across a task's answers, listed in `<cache>/<agent>/<task_id>.json`, and reused while the answers and the URL models are unchanged and no extraction request failed
 - `crawl_one_page()`: Downloads a PDF or captures the page in the browser; records a failed capture in the cache's `failures.json`
-- `cache_answers()`: Discovers and captures the URLs of many tasks through one browser, retries this crawl's non-refusal failures once, and returns a `TaskCrawl` report per task
+- `cache_answers()`: Discovers and captures the URLs of many tasks through one browser, `max_concurrent_urls` URLs at a time (which bounds the PDF checks and downloads outside the browser), retries this crawl's non-refusal failures once, and returns a `TaskCrawl` report per task
 
 ### submission.py, results.py, metrics.py — Submissions, Results, Leaderboard Metrics
 - `submission.py`: the answers layout (`<agent>/<task_id>/answer_<k>.md` with k = 1, 2, 3, ..., optional `answer_<k>.meta.json`), task lists (CSV with a `task_id` column, text file, or eval-script directory), and `validate_submission()`

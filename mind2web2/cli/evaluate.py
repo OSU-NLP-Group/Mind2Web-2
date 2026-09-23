@@ -11,14 +11,21 @@ captures of a run share one browser with at most ``--max-pages`` pages open.
 An answer is not evaluated again when its latest result scored the same
 answer file with the same judge configuration, unless ``--overwrite``; before
 an answer is evaluated again, its earlier results move to
-``results/superseded/``.  Selected tasks without answers are skipped.  Unless
-``--task`` selects tasks, the run ends by printing and saving the metrics over
-the selected tasks, exactly as ``mind2web2 metrics`` computes them.
+``results/superseded/``.  Selected tasks without answers are skipped.
+
+Without ``--task-list`` or ``--task``, the tasks are those the agent has
+answers for and the eval-script version has scripts for; the others are
+counted and skipped, since an agent's answers may cover tasks whose scripts
+are not available locally.  With either option, a selected task without an
+eval script is an error.  Unless ``--task`` selects tasks, the run ends by
+printing and saving the metrics over the selected tasks, exactly as
+``mind2web2 metrics`` computes them.
 
 Exits with status 0 when every answer of the selected tasks has a result; 1
 when some answer has none, because its evaluation raised, a judge request
-failed for good, or its task has no eval script; and 2 when no eval-script
-version matches or the judge client cannot be created.
+failed for good, or its task has no eval script; and 2 when the task list
+cannot be read, no eval-script version matches, or the judge client cannot be
+created.
 """
 from __future__ import annotations
 
@@ -97,11 +104,23 @@ def run(args: argparse.Namespace) -> int:
         print(exc, file=sys.stderr)
         return 2
     agent_dir = args.answers_dir / args.agent
-    tasks = _common.selected_tasks(args, _common.answer_task_ids(agent_dir))
+    try:
+        tasks = _common.selected_tasks(args, _common.answer_task_ids(agent_dir))
+    except (OSError, ValueError) as exc:
+        print(f"Cannot read the task list: {exc}", file=sys.stderr)
+        return 2
+    without_script = 0
+    if args.task_list is None and not args.tasks:
+        with_script = [t for t in tasks if (scripts_dir / f"{t.task_id}.py").is_file()]
+        without_script, tasks = len(tasks) - len(with_script), with_script
     answered = [t.task_id for t in tasks if list_answer_files(agent_dir / t.task_id)]
     if not answered:
-        print(f"No answers found for the selected tasks of agent {args.agent!r} under {args.answers_dir}.",
-              file=sys.stderr)
+        if without_script:
+            print(f"None of the {without_script} tasks that agent {args.agent!r} has answers for has an eval "
+                  f"script in {scripts_dir}.", file=sys.stderr)
+        else:
+            print(f"No answers found for the selected tasks of agent {args.agent!r} under {args.answers_dir}.",
+                  file=sys.stderr)
         return 1
     missing = [task_id for task_id in answered if not (scripts_dir / f"{task_id}.py").is_file()]
     scripts = {task_id: scripts_dir / f"{task_id}.py" for task_id in answered if task_id not in missing}
@@ -121,6 +140,9 @@ def run(args: argparse.Namespace) -> int:
     logging.getLogger("httpx").setLevel(logging.WARNING)  # one INFO line per judge request otherwise
     print(f"Evaluating {len(scripts)} tasks of {args.agent!r} with the eval scripts in {scripts_dir} "
           f"(judge: {args.judge_model}); results go to {args.results_dir / args.agent}")
+    if without_script:
+        print(f"Skipping {without_script} tasks that have answers but no eval script in {scripts_dir}; "
+              f"pass --task-list or --task to evaluate a given set of tasks.")
     if len(answered) < len(tasks):
         print(f"Skipping {len(tasks) - len(answered)} selected tasks that have no answers.")
     results = asyncio.run(_evaluate(args, client, scripts)) if scripts else {}
@@ -170,6 +192,6 @@ def _report_metrics(args: argparse.Namespace, tasks: list[TaskInfo]) -> None:
     metrics = compute_metrics(records, tasks, num_runs, args.agent)
     print(format_report(metrics))
     if args.task_list is None:
-        print("Scored over the tasks the agent has answers for; pass --task-list to score a full split, "
-              "where tasks without answers count as 0.")
+        print("Scored over the evaluated tasks; pass --task-list to score a full split, where tasks "
+              "without answers count as 0.")
     print(f"Saved {save_metrics(metrics, args.results_dir, args.agent)}")

@@ -3,16 +3,20 @@
 For each task, the URLs of the task's ``answer_<k>.md`` files are extracted
 (regex plus LLMs, or regex only with ``--no-llm``) and listed in
 ``<cache-dir>/<agent>/<task_id>.json``, and every page is stored in
-``<cache-dir>/<agent>/<task_id>/``; see :mod:`mind2web2.crawl`.  The URL list
-is reused while the task's answers are unchanged.  URLs that are already
-cached are skipped, and so are URLs whose capture failed in an earlier crawl
-unless ``--retry-failed``.  All tasks share one browser with at most
-``--max-pages`` pages open.
+``<cache-dir>/<agent>/<task_id>/``; see :mod:`mind2web2.crawl`.  URLs are
+merged across the task's answers, so a page that several answers cite is
+captured once.  The URL list is reused while the task's answers and the URL
+models are unchanged, unless a URL-extraction request failed when it was made.
+URLs that are already cached are skipped, and so are URLs whose capture failed
+in an earlier crawl unless ``--retry-failed``.  All tasks share one browser
+with at most ``--max-pages`` pages open, and at most twice that many URLs (and
+at least 8) are processed at once.
 
 Failed captures are recorded in the task's ``failures.json``; the Cache Manager
 (``cache_manager_web/``) lists them for review.  Exits with status 1 when a
-task's URLs could not be extracted or a URL raised an unexpected error, and 0
-otherwise, including when captures failed.
+task's URLs could not be extracted or a URL raised an unexpected error; 2 when
+the task list cannot be read or the URL-extraction client cannot be created;
+and 0 otherwise, including when captures failed.
 """
 from __future__ import annotations
 
@@ -54,8 +58,8 @@ def register(subparsers) -> None:
                         help="Comma-separated models that extract URLs; their results are merged "
                              "(default: %(default)s).")
     parser.add_argument("--refresh-urls", action="store_true",
-                        help="Extract the URLs again even if the task's answers are unchanged since "
-                             "<cache-dir>/<agent>/<task_id>.json listed them, e.g. after changing --url-models.")
+                        help="Extract the URLs again even if <cache-dir>/<agent>/<task_id>.json lists them "
+                             "for the task's current answers and URL models.")
     parser.add_argument("--llm-provider", choices=["openai", "azure_openai"], default="openai",
                         help="Provider of the URL-extraction models (default: %(default)s).")
     parser.set_defaults(run=run)
@@ -63,7 +67,11 @@ def register(subparsers) -> None:
 
 def run(args: argparse.Namespace) -> int:
     agent_dir = args.answers_dir / args.agent
-    tasks = _common.selected_tasks(args, _common.answer_task_ids(agent_dir))
+    try:
+        tasks = _common.selected_tasks(args, _common.answer_task_ids(agent_dir))
+    except (OSError, ValueError) as exc:
+        print(f"Cannot read the task list: {exc}", file=sys.stderr)
+        return 2
     task_ids = [t.task_id for t in tasks if (agent_dir / t.task_id).is_dir()]
     if not task_ids:
         print(f"No answers found for the selected tasks of agent {args.agent!r} under {args.answers_dir}.",
@@ -104,6 +112,7 @@ async def _crawl(args: argparse.Namespace, task_ids, extractor, logger) -> list[
         return await cache_answers(
             args.agent, task_ids, answers_root=args.answers_dir, cache_root=args.cache_dir, browser=browser,
             extractor=extractor, logger=logger, retry_failed=args.retry_failed, refresh_urls=args.refresh_urls,
+            max_concurrent_urls=max(8, 2 * args.max_pages),
         )
     finally:
         await browser.stop()
