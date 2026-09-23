@@ -10,7 +10,7 @@ from tqdm import tqdm
 
 from mind2web2.eval_runner import evaluate_task
 from mind2web2.metrics import collect_records, compute_metrics, format_report, save_metrics
-from mind2web2.submission import MetadataError, TaskInfo
+from mind2web2.submission import TaskInfo
 from mind2web2.llm_client.base_client import LLMClient
 from mind2web2.utils.path_config import PathConfig
 
@@ -311,14 +311,15 @@ def main() -> None:
         try:
             records, num_runs = collect_records(
                 args.agent_name, [t.task_id for t in tasks], paths.answers_root, paths.eval_results_root)
-        except MetadataError as exc:
-            logging.error(f"Metrics not computed, invalid answer metadata: {exc}")
+        except (OSError, ValueError) as exc:  # includes MetadataError and answers that are not UTF-8
+            logging.error(f"Metrics not computed: {exc}")
         else:
             metrics = compute_metrics(records, tasks, num_runs, args.agent_name)
             logging.info("Metrics over the evaluated tasks:\n" + format_report(metrics))
             path = save_metrics(metrics, paths.eval_results_root, args.agent_name)
             logging.info(f"Metrics saved to {path}. To score a full split, where tasks without "
-                         f"answers count as 0, run: mind2web2 metrics {args.agent_name} --task-list <split.csv>")
+                         f"answers count as 0, run: mind2web2 metrics {args.agent_name} "
+                         f"--task-list <split.csv> --num-runs 3")
 
     logging.info("=" * 60)
     logging.info("🎉 Evaluation completed!")

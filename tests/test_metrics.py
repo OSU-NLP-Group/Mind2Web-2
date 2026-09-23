@@ -165,6 +165,24 @@ def test_metrics_command_fails_without_tasks(tmp_path, capsys):
     assert "No tasks found" in capsys.readouterr().err
 
 
+def test_metrics_command_reports_bad_input_in_one_line(tmp_path, capsys):
+    answers_root, results_root = build_submission(tmp_path)
+    argv = ["metrics", AGENT, "--answers-dir", str(answers_root), "--results-dir", str(results_root)]
+
+    with pytest.raises(SystemExit) as exit_info:
+        cli_main(argv + ["--num-runs", "0"])
+    assert exit_info.value.code == 2
+    assert "must be at least 1" in capsys.readouterr().err
+
+    assert cli_main(argv + ["--task-list", str(tmp_path / "missing.csv")]) == 1
+    assert "Cannot read the task list" in capsys.readouterr().err
+
+    (answers_root / AGENT / "t1" / "answer_1.md").write_bytes(b"\xff\xfe not UTF-8")
+    assert cli_main(argv + ["--no-save"]) == 1
+    err = capsys.readouterr().err
+    assert "Cannot read an answer" in err and "answer_1.md: not UTF-8 text" in err
+
+
 def test_metrics_read_the_results_evaluate_task_writes(tmp_path, monkeypatch):
     """Run the real evaluation loop offline and compute metrics from what it saved."""
     monkeypatch.setattr(eval_runner, "CacheFileSys", lambda task_dir: SyntheticCache())

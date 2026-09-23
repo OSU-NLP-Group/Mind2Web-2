@@ -58,5 +58,5 @@ def load_latest_result(results_root: Path, agent_name: str, task_id: str, answer
         return None
     try:
         return json.loads(latest.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError):  # ValueError: not UTF-8, or not JSON
         return None

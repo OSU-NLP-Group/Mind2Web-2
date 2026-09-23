@@ -8,6 +8,7 @@ there is any error.
 from __future__ import annotations
 
 import argparse
+import sys
 
 from . import _common
 from ..submission import MetadataError, list_answer_files, load_metadata, validate_submission
@@ -31,7 +32,11 @@ def run(args: argparse.Namespace) -> int:
     discovered = sorted(
         p.name for p in agent_dir.iterdir() if p.is_dir() and not p.name.startswith(".")
     ) if agent_dir.is_dir() else []
-    tasks = _common.resolve_tasks(args.task_list, discovered)
+    try:
+        tasks = _common.resolve_tasks(args.task_list, discovered)
+    except (OSError, ValueError) as exc:
+        print(f"Cannot read the task list: {exc}", file=sys.stderr)
+        return 1
     task_ids = [t.task_id for t in tasks] if args.task_list else None
     issues = validate_submission(agent_dir, task_ids, args.num_runs)
 

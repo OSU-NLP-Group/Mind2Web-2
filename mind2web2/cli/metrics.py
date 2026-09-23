@@ -22,7 +22,8 @@ def register(subparsers) -> None:
         description="Compute Partial Completion, Success Rate, Pass@k, Time, and Answer Length from "
                     "an agent's evaluation results, print them, and save them with per-run, per-task, "
                     "and per-domain breakdowns to <results-dir>/<agent>/metrics.json. Answers that "
-                    "are missing or have no evaluation result score 0 and are listed.",
+                    "are missing or have no evaluation result count as 0 in Partial Completion, "
+                    "Success Rate, and Pass@k, and are listed.",
     )
     _common.add_agent(parser)
     _common.add_answers_dir(parser)
@@ -35,7 +36,11 @@ def register(subparsers) -> None:
 
 def run(args: argparse.Namespace) -> int:
     discovered = discover_tasks(args.agent, args.answers_dir, args.results_dir)
-    tasks = _common.resolve_tasks(args.task_list, discovered)
+    try:
+        tasks = _common.resolve_tasks(args.task_list, discovered)
+    except (OSError, ValueError) as exc:
+        print(f"Cannot read the task list: {exc}", file=sys.stderr)
+        return 1
     if not tasks:
         print(f"No tasks found for agent {args.agent!r} under {args.answers_dir} or {args.results_dir}.",
               file=sys.stderr)
@@ -46,6 +51,9 @@ def run(args: argparse.Namespace) -> int:
     except MetadataError as exc:
         print(f"Invalid answer metadata: {exc}", file=sys.stderr)
         return 1
+    except (OSError, ValueError) as exc:
+        print(f"Cannot read an answer: {exc}", file=sys.stderr)
+        return 1
     metrics = compute_metrics(records, tasks, num_runs, args.agent)
 
     if args.json:
@@ -54,7 +62,8 @@ def run(args: argparse.Namespace) -> int:
         print(format_report(metrics))
         if args.task_list is None:
             print("Scored over the tasks the agent has answers for; pass --task-list to score a full "
-                  "split, where tasks without answers count as 0.")
+                  "split, where tasks without answers count as 0, and --num-runs 3 for the "
+                  "leaderboard's three runs.")
     if not args.no_save:
         path = save_metrics(metrics, args.results_dir, args.agent)
         print(f"Saved {path}", file=sys.stderr)

@@ -114,7 +114,7 @@ answers/
         └── ...
 ```
 
-Each `answer_<k>.md` file contains your agent's response for run `k` in markdown format; evaluation ignores files with other names. To check the layout, run `uv run mind2web2 validate <your_agent_name>`.
+Each `answer_<k>.md` file contains your agent's response for run `k` (1, 2, 3, ..., without leading zeros) in markdown format; evaluation ignores files with other names. To check the layout, run `uv run mind2web2 validate <your_agent_name>`.
 
 ### 2. Set up API Keys
 
@@ -203,8 +203,8 @@ When `run_eval.py` evaluates all tasks, it ends by printing the agent's metrics 
 # Over the tasks your agent has answers for
 uv run mind2web2 metrics <your_agent_name>
 
-# Over a full split: tasks without an answer or an evaluation result count as 0
-uv run mind2web2 metrics <your_agent_name> --task-list test_set.csv
+# Over a full split with the leaderboard's three runs: missing answers and results count as 0
+uv run mind2web2 metrics <your_agent_name> --task-list test_set.csv --num-runs 3
 ```
 
 The command reports the metrics of the paper and the leaderboard. Run `k` consists of the `answer_<k>.md` files, and a task's score is the root score of its rubric tree, between 0 and 1.
@@ -213,11 +213,11 @@ The command reports the metrics of the paper and the leaderboard. Run `k` consis
 | --- | --- |
 | Partial Completion | Mean task score over the tasks of a run |
 | Success Rate | Fraction of the tasks of a run with score 1 |
-| Pass@3 | Fraction of tasks for which at least one of the three runs has score 1 |
+| Pass@k | Fraction of tasks for which at least one of the k runs has score 1 (Pass@3 on the leaderboard) |
 | Time (min) | Mean inference time in minutes, from `time_seconds` in `answer_<k>.meta.json`, over the answers of a run that report it |
 | Answer Length | Mean number of words (whitespace-separated tokens) in the answers of a run |
 
-Every metric except Pass@3 is computed per run and reported as the mean ± population standard deviation over runs. An answer that is missing, or that has no evaluation result (for example because its evaluation failed), scores 0, and the report lists each one so that it can be fixed and re-evaluated. The metrics are also saved to `eval_results/<agent_name>/metrics.json`, together with per-run, per-task, and per-domain breakdowns (domains come from the CSV task list) and a `leaderboard_entry` block in the leaderboard's format.
+Every metric except Pass@k is computed per run and reported as the mean ± population standard deviation over runs. The number of runs k is the highest run index among the answers unless `--num-runs` is given. An answer that is missing, or that has no evaluation result (for example because its evaluation failed), counts as a score of 0 in Partial Completion, Success Rate, and Pass@k, and the report lists each one so that it can be fixed and re-evaluated; Time and Answer Length are averaged over the answers that exist. The metrics are also saved to `eval_results/<agent_name>/metrics.json`, together with per-run, per-task, and per-domain breakdowns (domains come from the CSV task list) and a `leaderboard_entry` block in the leaderboard's format.
 
 ## 🧪 Development
 
