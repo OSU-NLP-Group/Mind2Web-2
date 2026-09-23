@@ -17,8 +17,9 @@ of its rubric tree.
 
 A (task, run) pair without an answer file, or whose answer has no evaluation
 result, scores 0 in the first three metrics, and the report lists every such
-pair so that it can be fixed.  These pairs do not contribute to Time or Answer
-Length.
+pair so that it can be fixed.  Time and Answer Length describe the answers
+themselves: an answer that exists counts toward them whether or not it has an
+evaluation result, and a missing answer file does not.
 """
 from __future__ import annotations
 
