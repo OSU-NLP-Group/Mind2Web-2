@@ -36,7 +36,7 @@ def test_pages_are_readable_from_a_new_instance(tmp_path):
     reopened = CacheFileSys(str(tmp_path))  # no save step: every put is already on disk
     assert reopened.get_all_urls() == ["https://example.com/a", "https://example.com/b",
                                        "https://example.com/c", "https://example.com/doc.pdf"]
-    assert reopened.summary() == {"total_urls": 4, "web_pages": 3, "pdf_pages": 1}
+    assert reopened.summary() == {"total_urls": 4, "web_pages": 3, "pdf_pages": 1, "failed_urls": 0}
     text, screenshot = reopened.get_web("http://www.example.com/a")
     assert text == "text A"
     assert Image.open(io.BytesIO(screenshot)).format == "JPEG"
@@ -274,3 +274,35 @@ def test_index_entries_without_their_files_are_ignored(tmp_path, caplog):
     assert reopened.get_all_urls() == ["https://example.com/b.pdf"]
     assert f"Ignoring index entry for {key}: its files are missing" in caplog.text
     assert "unknown content type 'mhtml'" in caplog.text
+
+
+def test_failures_are_recorded_matched_and_cleared_by_storing_the_page(tmp_path):
+    cache = CacheFileSys(str(tmp_path))
+    assert cache.record_failure("https://example.com/a/", "HTTP 503") == "https://example.com/a"
+    cache.record_failure("http://www.example.com/a", "blocked: HTTP 403", blocked=True)
+
+    record = CacheFileSys(str(tmp_path)).failure("https://example.com/a#section")
+    assert (record["reason"], record["blocked"], record["attempts"]) == ("blocked: HTTP 403", True, 2)
+    assert cache.summary()["failed_urls"] == 1
+    assert cache.has("https://example.com/a") is None
+
+    cache.put_web("https://example.com/a", "captured", png_bytes())
+    assert cache.failure("https://example.com/a") is None
+    assert json.loads((tmp_path / "failures.json").read_text()) == {}
+
+
+def test_failure_records_stay_consistent_between_processes(tmp_path):
+    crawler, manager = CacheFileSys(str(tmp_path)), CacheFileSys(str(tmp_path))
+
+    # A page stored by one process clears the failure another process recorded after it started.
+    crawler.record_failure("https://example.com/a", "timed out after 90s")
+    manager.put_web("https://example.com/a", "captured by hand", png_bytes())
+    assert json.loads((tmp_path / "failures.json").read_text()) == {}
+
+    # A failure recorded for a page that another process has stored is ignored.
+    manager.put_web("https://example.com/b", "stored", png_bytes())
+    crawler.record_failure("https://example.com/b", "timed out after 90s")
+    reopened = CacheFileSys(str(tmp_path))
+    assert reopened.failure("https://example.com/b") is None
+    assert reopened.failures() == {}
+    assert reopened.summary()["failed_urls"] == 0

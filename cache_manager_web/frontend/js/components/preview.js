@@ -105,6 +105,15 @@ function renderScreenshot(s) {
         currentImgSrc = '';
         return;
     }
+    if (urlData?.content_type === 'failed') {
+        const note = document.createElement('div');
+        note.className = 'placeholder';
+        note.textContent = `No page stored: capturing it failed (${urlData.failure?.reason || 'unknown reason'}).`;
+        container.replaceChildren(note);
+        currentImgEl = null;
+        currentImgSrc = '';
+        return;
+    }
 
     const imgSrc = api.screenshotUrl(s.selectedTaskId, s.selectedUrl, s.contentVersion);
 

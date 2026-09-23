@@ -4,6 +4,7 @@ One :class:`CacheFileSys` holds the pages cached for one task of one agent::
 
     <task_dir>/
     ├── index.json      # {"<storage key>": "web" | "pdf", ...}
+    ├── failures.json   # {"<storage key>": {"reason", "blocked", "attempts", "time"}, ...}
     ├── <stem>.txt      # web page: text (Markdown)
     ├── <stem>.jpg      # web page: screenshot
     └── <stem>.pdf      # PDF document
@@ -11,11 +12,14 @@ One :class:`CacheFileSys` holds the pages cached for one task of one agent::
 A page is stored under the :func:`storage_key` of its URL, and its files are
 named by the MD5 hex digest of that key (``<stem>``).  Lookups accept other
 surface forms of a stored URL; see :meth:`CacheFileSys.lookup`.
+``failures.json`` records URLs whose capture failed, so that they are neither
+evaluated against an error page nor silently missing; storing a page for a
+URL clears its failure record.
 
 Every change is written to disk, and fsynced, before the call returns.
-Content files and ``index.json`` are replaced atomically, and each change,
+Content files and the two JSON files are replaced atomically, and each change,
 from writing the content files to deleting files the change replaced, happens
-under a lock, with ``index.json`` re-read and merged before it is written.
+under a lock, with each JSON file re-read and merged before it is written.
 Several processes (the crawler, an evaluation run, the Cache Manager) can
 therefore write to the same task without dropping each other's entries, and a
 process that is interrupted keeps every page it finished storing.
@@ -32,6 +36,7 @@ import os
 import secrets
 import threading
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterator, List, Literal, Optional, Tuple
 from urllib.parse import quote, quote_plus, unquote, urldefrag
 
@@ -48,6 +53,9 @@ ContentType = Literal["web", "pdf"]
 
 FILE_EXTENSIONS: Dict[str, Tuple[str, ...]] = {"web": (".txt", ".jpg"), "pdf": (".pdf",)}
 """The files that make up a cached page of each content type."""
+
+INDEX_FILE = "index.json"
+FAILURES_FILE = "failures.json"
 
 logger = logging.getLogger(__name__)
 
@@ -96,17 +104,18 @@ def _address(key: str) -> str:
 
 
 class CacheIndexError(RuntimeError):
-    """A task's ``index.json`` exists but cannot be read.
+    """A task's ``index.json`` or ``failures.json`` exists but cannot be read.
 
-    The index is the only record of which URL each cached file belongs to, so
-    the cache refuses to load or change the task rather than start over and
-    drop its entries.  Restore the file, or delete it to start the task's cache
-    over.
+    ``index.json`` is the only record of which URL each cached file belongs
+    to, and ``failures.json`` of which captures failed, so the cache refuses to
+    load or change the task rather than start over and drop their entries.
+    Restore the file, or delete it to have the cache forget what it recorded.
     """
 
     def __init__(self, path: str, reason: str):
-        super().__init__(f"Cannot read the cache index {path} ({reason}); restore it, "
-                         f"or delete it to start this task's cache over")
+        forgotten = "cached pages" if os.path.basename(path) == INDEX_FILE else "failed captures"
+        super().__init__(f"Cannot read {path} ({reason}); restore it, or delete it to have the cache "
+                         f"forget the task's {forgotten}")
 
 
 class CacheFileSys:
@@ -116,24 +125,28 @@ class CacheFileSys:
     construction; an entry whose files are missing or whose content type is
     unknown is ignored with a warning, and an index that cannot be read raises
     :class:`CacheIndexError`.  Pages that other processes store later become
-    visible to a new instance.
+    visible to a new instance.  The failure records are read at construction
+    and again whenever this instance records or clears one.
     """
 
     def __init__(self, task_dir: str):
         self.task_dir = os.path.abspath(task_dir)
-        self.index_file = os.path.join(self.task_dir, "index.json")
+        self.index_file = os.path.join(self.task_dir, INDEX_FILE)
+        self.failures_file = os.path.join(self.task_dir, FAILURES_FILE)
         self._types: Dict[str, ContentType] = {}
         self._keys_by_match: Dict[str, List[str]] = {}  # normalize_url_simple(key) -> keys, oldest first
         self._raw_keys_by_form: Dict[str, List[str]] = {}  # _raw_form(raw key) -> raw keys, oldest first
+        self._failures: Dict[str, Dict[str, Any]] = {}
         self._lock = threading.Lock()
         os.makedirs(self.task_dir, exist_ok=True)
-        for key, content_type in self._read_index().items():
+        for key, content_type in self._read_json(self.index_file).items():
             if content_type not in FILE_EXTENSIONS:
                 logger.warning("Ignoring index entry for %s: unknown content type %r", key, content_type)
             elif not all(os.path.exists(path) for path in self._paths(key, content_type)):
                 logger.warning("Ignoring index entry for %s: its files are missing", key)
             else:
                 self._add(key, content_type)
+        self._failures = self._load_failures()
 
     # ------------------------------------------------------------------ lookup
 
@@ -208,7 +221,51 @@ class CacheFileSys:
 
     def summary(self) -> Dict[str, Any]:
         types = list(self._types.values())
-        return {"total_urls": len(types), "web_pages": types.count("web"), "pdf_pages": types.count("pdf")}
+        return {"total_urls": len(types), "web_pages": types.count("web"), "pdf_pages": types.count("pdf"),
+                "failed_urls": len(self.failures())}
+
+    # ------------------------------------------------------------------ failures
+
+    def failure(self, url: str) -> Optional[Dict[str, Any]]:
+        """The failure recorded for ``url``, or ``None``.
+
+        Matched like pages (see :meth:`lookup`), by rules 1-3 and the rule for
+        raw keys.  A record has ``reason`` (text), ``blocked`` (the site
+        refused an automated browser, so a person may still capture it),
+        ``attempts``, and ``time`` (ISO 8601, UTC, of the latest attempt).  A
+        record is ignored while a page is stored for its URL, which happens
+        when another process stored the page after the failure was recorded.
+        """
+        key = self._failure_key(url)
+        if key is None or self._is_stored(_address(key)):
+            return None
+        return dict(self._failures[key])
+
+    def failures(self) -> Dict[str, Dict[str, Any]]:
+        """Every failure record that :meth:`failure` returns, by its URL as :meth:`lookup` returns URLs."""
+        return {_address(key): dict(record) for key, record in self._failures.items()
+                if not self._is_stored(_address(key))}
+
+    def record_failure(self, url: str, reason: str, *, blocked: bool = False) -> str:
+        """Record that capturing ``url`` failed; returns the URL of the record, as :meth:`failures` lists it.
+
+        A record already matching ``url`` is updated and its ``attempts``
+        count incremented.
+        """
+        with self._index_lock():
+            self._failures = self._load_failures()
+            key = self._failure_key(url) or storage_key(url)
+            attempts = self._failures.get(key, {}).get("attempts", 0) + 1
+            record = {"reason": reason, "blocked": blocked, "attempts": attempts,
+                      "time": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+            self._update_json(self.failures_file, key, record)
+            self._failures[key] = record
+        return _address(key)
+
+    def clear_failure(self, url: str) -> bool:
+        """Delete the failure record matching ``url``; returns whether there was one."""
+        with self._index_lock():
+            return self._clear_failure(url)
 
     # ------------------------------------------------------------------ read
 
@@ -267,7 +324,7 @@ class CacheFileSys:
             key = self._find_key(url)
             if key is None:
                 return None
-            on_disk = self._commit(self._read_index(), key, None)
+            on_disk = self._update_json(self.index_file, key, None)
             content_type = on_disk if on_disk in FILE_EXTENSIONS else None
             self._discard(key)
             if content_type is not None:
@@ -277,11 +334,13 @@ class CacheFileSys:
     def _put(self, url: str, content_type: ContentType, files: Dict[str, bytes]) -> str:
         key = storage_key(url)
         with self._index_lock():
-            index = self._read_index()  # an unreadable index raises before any file is written
+            for path in (self.index_file, self.failures_file):
+                self._read_json(path)  # an unreadable JSON file raises before any file is written
             for ext, data in files.items():
                 _write_atomic(self._path(key, ext), data)
-            previous = self._commit(index, key, content_type) or self._types.get(key)
+            previous = self._update_json(self.index_file, key, content_type) or self._types.get(key)
             self._add(key, content_type)
+            self._clear_failure(url)
             if previous in FILE_EXTENSIONS and previous != content_type:
                 self._delete_files(key, previous)
         return _address(key)
@@ -324,32 +383,77 @@ class CacheFileSys:
             return self._raw_keys_by_form, _raw_form(key)
         return self._keys_by_match, _match_key(key)
 
-    def _read_index(self) -> Dict[str, str]:
-        """The entries of ``index.json``, or none if it does not exist; raises :class:`CacheIndexError` if unreadable."""
+    def _failure_key(self, url: str) -> Optional[str]:
+        """The key of the failure record ``url`` refers to, matched like :meth:`_find_key` without rule 4."""
+        key = storage_key(url)
+        if key in self._failures:
+            return key
+        if _is_raw(key):
+            raw_form = _raw_form(key)
+            found = next((k for k in self._failures if _is_raw(k) and _raw_form(k) == raw_form), None)
+            if found is not None:
+                return found
+        if url in self._failures and not _is_raw(url):
+            return url
+        match = _match_key(url)
+        if match is None:
+            return None
+        return next((k for k in self._failures if not _is_raw(k) and _match_key(k) == match), None)
+
+    def _clear_failure(self, url: str) -> bool:
+        """Delete the failure record matching ``url``, whichever process wrote it.
+
+        Must be called under :meth:`_index_lock`.
+        """
+        self._failures = self._load_failures()
+        key = self._failure_key(url)
+        if key is None:
+            return False
+        self._update_json(self.failures_file, key, None)
+        del self._failures[key]
+        return True
+
+    def _load_failures(self) -> Dict[str, Dict[str, Any]]:
+        return {key: record for key, record in self._read_json(self.failures_file).items()
+                if isinstance(record, dict)}
+
+    def _is_stored(self, url: str) -> bool:
         try:
-            with open(self.index_file, 'r', encoding='utf-8') as f:
-                index = json.load(f)
+            return self.lookup(url) is not None
+        except ValueError:
+            return False
+
+    @staticmethod
+    def _read_json(path: str) -> Dict[str, Any]:
+        """The JSON object in ``path``, or ``{}`` if the file does not exist; raises :class:`CacheIndexError` if unreadable."""
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
         except FileNotFoundError:
             return {}
         except (OSError, ValueError) as e:  # ValueError: not UTF-8, or not JSON
-            raise CacheIndexError(self.index_file, str(e)) from e
-        if not isinstance(index, dict):
-            raise CacheIndexError(self.index_file, "not a JSON object")
-        return index
+            raise CacheIndexError(path, str(e)) from e
+        if not isinstance(data, dict):
+            raise CacheIndexError(path, "not a JSON object")
+        return data
 
-    def _commit(self, index: Dict[str, str], key: str, content_type: ContentType | None) -> Optional[str]:
-        """Apply one entry change to ``index``, as just read from disk, and write it to ``index.json``.
+    def _update_json(self, path: str, key: str, value: Any) -> Any:
+        """Set (or, with ``value=None``, delete) one key of a JSON object file, keeping other writers' keys.
 
-        Reading the index under the same :meth:`_index_lock` as the write keeps
-        the entries other writers committed.  ``content_type=None`` removes the
-        entry.  Returns the entry's previous content type on disk.
+        Returns the key's previous value on disk.  The file is not rewritten
+        when deleting a key it does not have.  Must be called under
+        :meth:`_index_lock`, so that the read and the write see no other writer
+        in between.
         """
-        previous = index.get(key)
-        if content_type is None:
-            index.pop(key, None)
+        data = self._read_json(path)
+        previous = data.get(key)
+        if value is None:
+            if key not in data:
+                return None
+            del data[key]
         else:
-            index[key] = content_type  # a replaced entry keeps its position
-        _write_atomic(self.index_file, json.dumps(index, indent=2, ensure_ascii=False).encode('utf-8'))
+            data[key] = value  # a replaced entry keeps its position
+        _write_atomic(path, json.dumps(data, indent=2, ensure_ascii=False).encode('utf-8'))
         return previous
 
     @contextmanager

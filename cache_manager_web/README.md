@@ -33,7 +33,7 @@ The web UI opens automatically in your browser.
 ### 3. Review & Fix
 
 1. **Browse tasks** — select a task from the left panel to see its URLs
-2. **Check issues** — red = definite issue, yellow = possible issue, green = reviewed OK
+2. **Check issues** — red = definite issue, yellow = possible issue, green = reviewed OK. URLs the crawler could not capture are listed as `failed`, with the reason, and are definite issues; capturing one with the extension (or uploading a PDF or MHTML file) stores the page and clears the failure
 3. **Navigate quickly** — use `j`/`k` to move between URLs, `n`/`N` to jump across issues in all tasks
 4. **Preview** — toggle between screenshot (`1`), extracted text (`2`), and agent answer (`3`) views
 

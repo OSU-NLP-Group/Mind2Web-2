@@ -217,7 +217,10 @@ class SyntheticCache:
     def put_pdf(self, *args: Any, **kwargs: Any) -> None:
         pass
 
-    def save(self) -> None:
+    def failure(self, url: str) -> None:
+        return None
+
+    def record_failure(self, *args: Any, **kwargs: Any) -> None:
         pass
 
     def get_all_urls(self) -> list[str]:

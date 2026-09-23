@@ -40,6 +40,15 @@ export async function selectUrl(taskId, url) {
     const urlData = s.urls.find(u => u.url === url);
     const isPdf = urlData?.content_type === 'pdf';
 
+    if (urlData?.content_type === 'failed') {
+        // Nothing is stored for a failed capture: show why instead of fetching text
+        setState({
+            currentText: failureText(urlData.failure),
+            currentIssues: { has_issues: true, severity: 'definite', keywords: urlData.issues || [], patterns: [] },
+        });
+        return;
+    }
+
     if (isPdf) {
         setState({ currentText: '', currentIssues: { has_issues: false } });
         // Auto-mark unflagged PDF as reviewed when viewed
@@ -84,6 +93,15 @@ export async function selectUrl(taskId, url) {
     } catch {
         setState({ currentText: null, currentIssues: null });
     }
+}
+
+function failureText(failure) {
+    const f = failure || {};
+    const lines = [`Capturing this URL failed: ${f.reason || 'unknown reason'}.`];
+    if (f.blocked) lines.push('The site refused the automated browser; it may load in your own browser.');
+    if (f.attempts) lines.push(`Attempts: ${f.attempts}${f.time ? ` (latest ${f.time})` : ''}.`);
+    lines.push('', 'Open it in your browser and capture it with the extension, or upload a PDF or MHTML file.');
+    return lines.join('\n');
 }
 
 // ---- Reload current task ----
