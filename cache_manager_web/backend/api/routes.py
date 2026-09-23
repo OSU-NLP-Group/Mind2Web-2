@@ -5,6 +5,7 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Optional
@@ -13,6 +14,9 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, HTTPException, UploadFile, File, Query
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
+
+from mind2web2.utils.cache_filesys import storage_key
+from mind2web2.utils.url_tools import normalize_url_simple
 
 from ..models import CacheManager, KeywordDetector
 
@@ -30,7 +34,7 @@ _kd: Optional[KeywordDetector] = None
 # Active capture target — tells the extension what task/URL we're capturing for
 _capture_target: dict = {}  # {"task_id": ..., "url": ..., "ts": ...}
 
-# Per-URL issue cache: {task_id: {url: {"issues": [...], "severity": "..."}}}
+# Per-URL issue cache: {task_id: {url: {"issues": [...], "severity": "..."}}}, see _issue_entry()
 _url_issue_cache: dict = {}
 
 # Batch capture state
@@ -90,9 +94,6 @@ class CaptureTargetRequest(BaseModel):
 
 class AddUrlRequest(BaseModel):
     url: str
-    text: Optional[str] = None
-    screenshot_base64: Optional[str] = None
-    auto_flag: bool = False
 
 class AddPdfRequest(BaseModel):
     url: str
@@ -149,40 +150,34 @@ async def sse_stream():
 
 @router.post("/load")
 async def load_cache(req: LoadRequest):
+    """Load an agent's cache folder and scan it for issues.
+
+    The folder is read and scanned in a worker thread into a new
+    ``CacheManager``, which replaces the current one only when complete, so
+    the server keeps answering (the extension polls it) and a failed load
+    leaves the loaded cache in place.
+    """
+    global _cm, _url_issue_cache
     p = Path(req.path).resolve()
     if not p.is_dir():
         raise HTTPException(400, f"Not a directory: {req.path}")
+    cm = CacheManager()
     try:
-        ok, total = _cm.load_agent_cache(str(p))
-        stats = _cm.get_statistics()
-
-        issue_index = _rebuild_issue_cache()
-
-        # Build task issue summaries
-        task_issues = {}
-        for task_id in _cm.get_task_ids():
-            task_cache = _url_issue_cache.get(task_id, {})
-            if not task_cache:
-                continue
-            worst = "possible"
-            for url, info in task_cache.items():
-                if info.get("severity") == "definite":
-                    worst = "definite"
-                    break
-            task_issues[task_id] = {"count": len(task_cache), "severity": worst}
-
-        return {
-            "ok": True,
-            "agent_name": _cm.agent_name,
-            "agent_path": str(p),
-            "loaded_tasks": ok,
-            "total_tasks": total,
-            "stats": stats,
-            "task_issues": task_issues,
-            "issue_index": issue_index,
-        }
+        ok, total = await asyncio.to_thread(cm.load_agent_cache, str(p))
+        issue_cache = await asyncio.to_thread(_scan_issues, cm)
     except Exception as e:
         raise HTTPException(500, str(e))
+    _cm, _url_issue_cache = cm, issue_cache
+    return {
+        "ok": True,
+        "agent_name": _cm.agent_name,
+        "agent_path": str(p),
+        "loaded_tasks": ok,
+        "total_tasks": total,
+        "stats": _cm.get_statistics(),
+        "task_issues": _task_issues(issue_cache),
+        "issue_index": _issue_index(issue_cache),
+    }
 
 
 @router.get("/status")
@@ -222,6 +217,7 @@ async def list_tasks():
                 "web_urls": summary.web_urls,
                 "pdf_urls": summary.pdf_urls,
                 "failed_urls": summary.failed_urls,
+                "pending_urls": summary.pending_urls,
                 "issue_urls": summary.issue_urls,
                 "reviewed_count": len(reviewed),
                 "issue_count": len(task_issue_cache),
@@ -292,13 +288,15 @@ async def get_text(task_id: str, url: str = Query(...)):
     text, _ = _cm.get_url_content(task_id, url, get_screenshot=False)
     if text is None:
         raise HTTPException(404, "Text not found")
-    # Detect issues
     det = _kd.detect_issues(text)
+    keywords, severity = det.matched_keywords, det.severity
+    if _cm.is_flagged(task_id, url):
+        keywords, severity = ["flagged", *keywords], "definite"
     return {"text": text, "issues": {
-        "has_issues": det.has_issues,
-        "keywords": det.matched_keywords,
+        "has_issues": bool(keywords or det.matched_patterns),
+        "keywords": keywords,
         "patterns": det.matched_patterns,
-        "severity": det.severity,
+        "severity": severity,
     }}
 
 
@@ -387,14 +385,10 @@ async def receive_capture(req: CaptureRequest):
     review_status = "recaptured" if _batch_active else "fixed"
     _cm.mark_url_reviewed(req.task_id, req.url, review_status)
 
-    # Invalidate issue cache and clear flags (content changed)
-    if req.task_id in _url_issue_cache:
-        _url_issue_cache[req.task_id].pop(req.url, None)
-        if req.actual_url:
-            _url_issue_cache[req.task_id].pop(req.actual_url, None)
-    _cm.unflag_url(req.task_id, req.url)
-    if req.actual_url:
-        _cm.unflag_url(req.task_id, req.actual_url)
+    # Clear the flags and rescan the new content
+    for url in {req.url, req.actual_url or req.url}:
+        _cm.unflag_url(req.task_id, url)
+        _refresh_issue(req.task_id, url)
 
     # Push SSE event to frontend
     await _push_event("capture_complete", {
@@ -429,75 +423,43 @@ async def set_review(task_id: str, req: ReviewRequest):
 
 @router.post("/flag/{task_id}")
 async def flag_url(task_id: str, req: FlagRequest):
-    """Flag a URL as having definite issues.
+    """Flag a URL as needing a (re)capture: a definite issue, queued by batch recapture.
 
-    For web URLs: replaces text with 'access denied' to trigger detection.
-    For PDF URLs: stores flag in flags.json (doesn't corrupt the PDF).
+    Only ``flags.json`` changes; the stored page, which evaluation reads,
+    stays as it is until a capture or upload replaces it.
     """
     _require_loaded()
-    cache = _cm.get_task_cache(task_id)
-    if not cache:
-        raise HTTPException(404, f"Task not found: {task_id}")
-
-    content_type = cache.has(req.url)
-    if content_type == "web":
-        # Replace text with keyword that triggers definite detection
-        flag_text = "access denied"
-        _, screenshot = _cm.get_url_content(task_id, req.url)
-        if screenshot is None:
-            screenshot = _placeholder_jpeg()
-        _cm.update_url_content(task_id, req.url, flag_text, screenshot)
-    # For PDF (or any type): persist flag without touching content files
+    _require_url(task_id, req.url)
     _cm.flag_url(task_id, req.url)
-
-    # Clear review status
     _cm.mark_url_reviewed(task_id, req.url, "")
-
-    # Update issue cache
-    if task_id not in _url_issue_cache:
-        _url_issue_cache[task_id] = {}
-    _url_issue_cache[task_id][req.url] = {
-        "issues": ["flagged"],
-        "severity": "definite",
-    }
-
+    _refresh_issue(task_id, req.url)
     return {"ok": True}
 
 
 @router.post("/reset/{task_id}")
 async def reset_url(task_id: str, req: FlagRequest):
-    """Reset a URL's cached content and flag it for recapture.
+    """Delete a URL's stored page or failure record and flag the URL, which leaves it pending.
 
-    Clears content files but keeps the URL in the index.
-    Auto-flags so it shows as a definite issue for batch recapture.
+    Until the URL is captured again, evaluation treats it as not cached and
+    captures it live.  Returns what was deleted: ``"web"``, ``"pdf"``, or
+    ``"failed"``.
     """
     _require_loaded()
-    cache = _cm.get_task_cache(task_id)
-    if not cache:
-        raise HTTPException(404, f"Task not found: {task_id}")
-
+    _require_url(task_id, req.url)
     content_type = _cm.reset_url(task_id, req.url)
     if content_type is None:
-        raise HTTPException(404, f"URL not found: {req.url}")
-
-    # Flag the URL
-    _cm.flag_url(task_id, req.url)
-
-    # Clear review status
+        raise HTTPException(409, f"Nothing is stored for {req.url}; it is already pending")
     _cm.mark_url_reviewed(task_id, req.url, "")
-
-    # Update issue cache
-    if task_id not in _url_issue_cache:
-        _url_issue_cache[task_id] = {}
-    _url_issue_cache[task_id][req.url] = {
-        "issues": ["flagged"],
-        "severity": "definite",
-    }
-
-    # Push SSE so frontend refreshes
+    _refresh_issue(task_id, req.url)
     await _push_event("capture_complete", {"task_id": task_id, "url": req.url})
-
     return {"ok": True, "content_type": content_type}
+
+
+@router.get("/issues")
+async def list_issues():
+    """The current issue index and per-task issue summary, without scanning pages again."""
+    _require_loaded()
+    return {"issue_index": _issue_index(_url_issue_cache), "task_issues": _task_issues(_url_issue_cache)}
 
 
 @router.get("/review-progress")
@@ -648,13 +610,17 @@ async def batch_stop():
 
 @router.get("/answers/{task_id}")
 async def list_answers(task_id: str):
+    """The answer files of a task, from ``<answers>/<agent>/<task_id>/``.
+
+    ``<answers>`` is ``CM_ANSWERS_DIR`` if set (``run.py --answers-dir``),
+    else the ``answers`` directory next to the cache directory.
+    """
     _require_loaded()
     if not _cm.agent_path:
         return {"files": []}
 
-    # Look for answers in <project_root>/answers/<agent_name>/<task_id>/
-    project_root = _cm.agent_path.parent.parent
-    answers_dir = project_root / "answers" / _cm.agent_name / task_id
+    answers_root = Path(os.environ.get("CM_ANSWERS_DIR") or _cm.agent_path.parent.parent / "answers")
+    answers_dir = answers_root / _cm.agent_name / task_id
     if not answers_dir.is_dir():
         return {"files": []}
 
@@ -678,117 +644,73 @@ async def list_answers(task_id: str):
 
 @router.delete("/urls/{task_id}")
 async def delete_url(task_id: str, url: str = Query(...)):
+    """Delete a URL from a task: its stored page, failure record, flag, and review status."""
     _require_loaded()
-    if _cm.delete_url(task_id, url):
-        return {"ok": True}
-    raise HTTPException(500, "Failed to delete URL")
+    _require_url(task_id, url)
+    if not _cm.delete_url(task_id, url):
+        raise HTTPException(500, "Failed to delete URL")
+    _cm.mark_url_reviewed(task_id, url, "")
+    _url_issue_cache.get(task_id, {}).pop(url, None)
+    return {"ok": True}
 
 
 @router.post("/urls/{task_id}/rename")
 async def rename_url(task_id: str, req: RenameUrlRequest):
-    """Rename/edit a URL's link. Moves content from old URL to new URL."""
+    """Change a URL's link.
+
+    A stored page moves to the new URL, with its flag and review status.  A
+    URL whose capture failed or that is pending leaves the new URL pending,
+    since the new link has not been captured.
+    """
     _require_loaded()
-    cache = _cm.get_task_cache(task_id)
-    if not cache:
-        raise HTTPException(404, f"Task not found: {task_id}")
-
-    old_url = req.old_url
-    new_url = req.new_url
-
-    if not cache.has(old_url):
-        raise HTTPException(404, f"Old URL not found: {old_url}")
-    if cache.has(new_url):
+    old_url, new_url = req.old_url, _valid_url(req.new_url)
+    state = _require_url(task_id, old_url)
+    if _cm.url_state(task_id, new_url) is not None:
         raise HTTPException(409, f"New URL already exists: {new_url}")
 
-    content_type = cache.has(old_url)
-
-    # Read old content
-    if content_type == "web":
+    if state == "web":
         text, screenshot = _cm.get_url_content(task_id, old_url)
-        if text is None:
-            text = ""
-        if screenshot is None:
-            screenshot = _placeholder_jpeg()
-        # Add new URL with old content
-        success = _cm.add_url_to_task(task_id, new_url, text=text, screenshot=screenshot)
-    elif content_type == "pdf":
+        success = _cm.add_url_to_task(task_id, new_url, text=text or "",
+                                      screenshot=screenshot if screenshot is not None else _placeholder_jpeg())
+    elif state == "pdf":
         _, pdf_bytes = _cm.get_url_content(task_id, old_url)
         if pdf_bytes is None:
             raise HTTPException(500, "Failed to read PDF content")
         success = _cm.add_url_to_task(task_id, new_url, pdf_bytes=pdf_bytes)
     else:
-        raise HTTPException(400, f"Unknown content type: {content_type}")
-
+        success = _cm.add_pending_url(task_id, new_url)
     if not success:
         raise HTTPException(500, "Failed to create new URL")
 
-    # Transfer review status
-    reviewed = _cm.load_reviewed(task_id)
-    old_status = reviewed.get(old_url, "")
-    if old_status:
-        _cm.mark_url_reviewed(task_id, new_url, old_status)
+    if state in ("web", "pdf"):
+        if _cm.is_flagged(task_id, old_url):
+            _cm.flag_url(task_id, new_url)
+        old_status = _cm.load_reviewed(task_id).get(old_url, "")
+        if old_status:
+            _cm.mark_url_reviewed(task_id, new_url, old_status)
 
-    # Transfer flags
-    if _cm.is_flagged(task_id, old_url):
-        _cm.flag_url(task_id, new_url)
-
-    # Transfer issue cache
-    if task_id in _url_issue_cache and old_url in _url_issue_cache[task_id]:
-        _url_issue_cache[task_id][new_url] = _url_issue_cache[task_id][old_url]
-
-    # Delete old URL
     _cm.delete_url(task_id, old_url)
-    _cm.unflag_url(task_id, old_url)
     _cm.mark_url_reviewed(task_id, old_url, "")
-    if task_id in _url_issue_cache:
-        _url_issue_cache[task_id].pop(old_url, None)
-
-    return {"ok": True, "content_type": content_type}
+    _url_issue_cache.get(task_id, {}).pop(old_url, None)
+    _refresh_issue(task_id, new_url)
+    return {"ok": True, "content_type": _cm.url_state(task_id, new_url)}
 
 
 @router.post("/urls/{task_id}")
 async def add_url(task_id: str, req: AddUrlRequest):
+    """Add a URL to a task as pending: listed as not captured yet, with nothing stored.
+
+    A capture by the extension, or a PDF or MHTML upload, then stores its
+    page.  Until then, evaluation treats the URL as not cached.
+    """
     _require_loaded()
-    cache = _cm.get_task_cache(task_id)
-    if not cache:
+    if not _cm.get_task_cache(task_id):
         raise HTTPException(404, f"Task not found: {task_id}")
-    if cache.has(req.url):
+    url = _valid_url(req.url)
+    if not _cm.add_pending_url(task_id, url):
         raise HTTPException(409, "URL already exists in this task")
-
-    # Detect PDF by URL suffix
-    parsed_path = urlparse(req.url).path.lower()
-    is_pdf = parsed_path.endswith('.pdf')
-
-    if is_pdf:
-        # Create as PDF type with placeholder
-        pdf_bytes = _cm._placeholder_pdf_bytes()
-        success = _cm.add_url_to_task(task_id, req.url, pdf_bytes=pdf_bytes)
-        content_type = "pdf"
-    else:
-        text = req.text or ("access denied" if req.auto_flag else f"Placeholder content for {req.url}")
-        screenshot = None
-        if req.screenshot_base64:
-            screenshot = base64.b64decode(req.screenshot_base64)
-        else:
-            screenshot = _placeholder_jpeg()
-        success = _cm.add_url_to_task(task_id, req.url, text=text, screenshot=screenshot)
-        content_type = "web"
-
-    if not success:
-        raise HTTPException(500, "Failed to add URL")
-
-    # Auto-flag if requested
-    if req.auto_flag:
-        _cm.flag_url(task_id, req.url)
-        _cm.mark_url_reviewed(task_id, req.url, "")
-        if task_id not in _url_issue_cache:
-            _url_issue_cache[task_id] = {}
-        _url_issue_cache[task_id][req.url] = {
-            "issues": ["flagged"],
-            "severity": "definite",
-        }
-
-    return {"ok": True, "content_type": content_type}
+    _refresh_issue(task_id, url)
+    return {"ok": True, "content_type": "pending"}
 
 
 @router.post("/urls/{task_id}/pdf")
@@ -828,10 +750,8 @@ async def upload_mhtml(task_id: str, url: str = Query(...), file: UploadFile = F
         if not _cm.add_url_to_task(task_id, url, text=text, screenshot=screenshot):
             raise HTTPException(500, "Failed to save MHTML content")
 
-    # Clear issue cache and unflag
-    if task_id in _url_issue_cache:
-        _url_issue_cache[task_id].pop(url, None)
     _cm.unflag_url(task_id, url)
+    _refresh_issue(task_id, url)
 
     review_status = "recaptured" if _batch_active else "fixed"
     _cm.mark_url_reviewed(task_id, url, review_status)
@@ -872,10 +792,8 @@ async def upload_pdf(task_id: str, url: str = Query(...), file: UploadFile = Fil
     if not success:
         raise HTTPException(500, "Failed to save PDF")
 
-    # Clear issue cache and mark as fixed
-    if task_id in _url_issue_cache:
-        _url_issue_cache[task_id].pop(url, None)
     _cm.unflag_url(task_id, url)
+    _refresh_issue(task_id, url)
 
     # Use "recaptured" in batch mode (needs human review), "fixed" otherwise
     review_status = "recaptured" if _batch_active else "fixed"
@@ -897,9 +815,11 @@ async def upload_pdf(task_id: str, url: str = Query(...), file: UploadFile = Fil
 
 @router.post("/scan")
 async def scan_all():
+    """Scan every URL for issues again, in a worker thread."""
+    global _url_issue_cache
     _require_loaded()
-    issue_index = _rebuild_issue_cache()
-
+    _url_issue_cache = await asyncio.to_thread(_scan_issues, _cm)
+    issue_index = _issue_index(_url_issue_cache)
     return {"issue_count": len(issue_index), "issues": issue_index}
 
 
@@ -907,61 +827,98 @@ async def scan_all():
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _rebuild_issue_cache() -> list[dict]:
-    """Rebuild ``_url_issue_cache`` and return the issue index.
+def _require_url(task_id: str, url: str) -> str:
+    """The state of ``url`` in the task (see ``CacheManager.url_state``); 404 if the task or URL is unknown."""
+    if not _cm.get_task_cache(task_id):
+        raise HTTPException(404, f"Task not found: {task_id}")
+    state = _cm.url_state(task_id, url)
+    if state is None:
+        raise HTTPException(404, f"URL not found: {url}")
+    return state
 
-    Issues come from the keyword scan of stored text, from flagged URLs
-    (flags.json), and from URLs whose capture failed (failures.json).  Flagged
-    and failed URLs are definite issues.
-    """
-    global _url_issue_cache
-    issues_map = {}
+
+def _valid_url(url: str) -> str:
+    """``url`` without surrounding whitespace; 400 unless it is an http(s) URL that the cache can store."""
+    url = url.strip()
     try:
-        issues_map = _kd.scan_all_text_content(_cm)
-    except Exception as e:
-        logger.warning(f"Issue scan failed: {e}")
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            raise ValueError
+        storage_key(url), normalize_url_simple(url)
+    except ValueError:
+        raise HTTPException(400, f"Not an http(s) URL: {url!r}")
+    return url
 
-    _url_issue_cache = {}
-    issue_index = []
-    for task_id in sorted(issues_map.keys()):
-        _url_issue_cache[task_id] = {}
-        for url, det in issues_map[task_id]:
-            _url_issue_cache[task_id][url] = {
-                "issues": det.matched_keywords + det.matched_patterns,
-                "severity": det.severity,
-            }
-            issue_index.append({
-                "task_id": task_id,
-                "url": url,
-                "severity": det.severity,
-                "issue_count": det.issue_count,
-                "keywords": det.matched_keywords[:5],
-            })
 
-    def add_definite(task_id: str, url: str, label: str):
-        task_cache = _url_issue_cache.setdefault(task_id, {})
-        if url in task_cache:
-            return
-        task_cache[url] = {"issues": [label], "severity": "definite"}
-        issue_index.append({
-            "task_id": task_id,
-            "url": url,
-            "severity": "definite",
-            "issue_count": 1,
-            "keywords": [label],
-        })
+def _issue_entry(cm: CacheManager, task_id: str, url: str, state: Optional[str]) -> Optional[dict]:
+    """The issues of a URL in state ``state`` and their severity, or ``None`` if it has none.
 
-    for task_id in _cm.get_task_ids():
-        for url in sorted(_cm.get_flagged_urls(task_id)):
-            add_definite(task_id, url, "flagged")
-        cache = _cm.get_task_cache(task_id)
-        for url, record in (cache.failures().items() if cache else ()):
-            add_definite(task_id, url, f"capture failed: {record.get('reason', 'unknown reason')}")
-    return issue_index
+    A pending URL, a failed capture, and a flagged URL are definite issues.
+    A stored web page is also checked by the keyword detector, whose
+    severity counts when there is no definite issue already.
+    """
+    if state is None:
+        return None
+    if state == "pending":
+        return {"issues": ["not captured yet"], "severity": "definite"}
+    issues = []
+    if state == "failed":
+        record = cm.get_task_cache(task_id).failure(url) or {}
+        issues.append(f"capture failed: {record.get('reason', 'unknown reason')}")
+    if cm.is_flagged(task_id, url):
+        issues.append("flagged")
+    severity = "definite" if issues else "possible"
+    if state == "web":
+        text, _ = cm.get_url_content(task_id, url, get_screenshot=False)
+        det = _kd.detect_issues(text)
+        if det.has_issues:
+            issues += det.matched_keywords + det.matched_patterns
+            if det.severity == "definite":
+                severity = "definite"
+    return {"issues": issues, "severity": severity} if issues else None
+
+
+def _scan_issues(cm: CacheManager) -> dict:
+    """The issue-cache entries (see :func:`_issue_entry`) of every URL of ``cm`` with issues, by task.
+
+    Reads the text of every stored web page, so it runs in a worker thread.
+    """
+    issue_cache = {}
+    for task_id in cm.get_task_ids():
+        for info in cm.get_task_urls(task_id):
+            entry = _issue_entry(cm, task_id, info.url, info.content_type)
+            if entry is not None:
+                issue_cache.setdefault(task_id, {})[info.url] = entry
+    return issue_cache
+
+
+def _issue_index(issue_cache: dict) -> list[dict]:
+    """One item per URL with issues, by task ID: its task, URL, severity, number of issues, and first five issues."""
+    return [{"task_id": task_id, "url": url, "severity": entry["severity"],
+             "issue_count": len(entry["issues"]), "keywords": entry["issues"][:5]}
+            for task_id in sorted(issue_cache) for url, entry in issue_cache[task_id].items()]
+
+
+def _task_issues(issue_cache: dict) -> dict:
+    """For each task with issues: their number, and "definite" if any of them is, else "possible"."""
+    return {task_id: {"count": len(entries),
+                      "severity": "definite" if any(e["severity"] == "definite" for e in entries.values())
+                      else "possible"}
+            for task_id, entries in issue_cache.items() if entries}
+
+
+def _refresh_issue(task_id: str, url: str) -> None:
+    """Recompute the issue-cache entry of one URL after it changed."""
+    task_cache = _url_issue_cache.setdefault(task_id, {})
+    entry = _issue_entry(_cm, task_id, url, _cm.url_state(task_id, url))
+    if entry is None:
+        task_cache.pop(url, None)
+    else:
+        task_cache[url] = entry
 
 
 def _placeholder_jpeg() -> bytes:
-    """Generate a tiny valid JPEG placeholder."""
+    """A 1x1 white JPEG, stored as the screenshot of a page that has none (an MHTML upload)."""
     # Minimal 1x1 white JPEG
     return base64.b64decode(
         "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkS"

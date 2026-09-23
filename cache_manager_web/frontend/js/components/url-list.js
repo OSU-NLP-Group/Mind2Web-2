@@ -126,10 +126,12 @@ function renderUrlStats(el, s) {
     const web = s.urls.filter(u => u.content_type === 'web').length;
     const pdf = s.urls.filter(u => u.content_type === 'pdf').length;
     const failed = s.urls.filter(u => u.content_type === 'failed').length;
+    const pending = s.urls.filter(u => u.content_type === 'pending').length;
     const issues = s.urls.filter(u => u.issues?.length > 0).length;
     const parts = [`${s.urls.length} URLs`];
     if (web > 0 && pdf > 0) parts.push(`${web} web · ${pdf} PDF`);
     if (failed > 0) parts.push(`${failed} failed`);
+    if (pending > 0) parts.push(`${pending} not captured`);
     if (issues > 0) parts.push(`${issues} issues`);
     el.textContent = parts.join(' · ');
 }

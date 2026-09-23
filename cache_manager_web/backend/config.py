@@ -9,7 +9,7 @@ FRONTEND_DIR = PACKAGE_DIR / "frontend"
 
 # Server
 DEFAULT_PORT = 8000
-CORS_ORIGINS = ["*"]  # localhost only, safe for local tool
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")  # the hosts served unless CM_ALLOWED_HOSTS says otherwise
 
 # Capture
 MAX_SCREENSHOT_SIZE = 20 * 1024 * 1024  # 20MB max screenshot

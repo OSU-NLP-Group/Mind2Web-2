@@ -8,6 +8,8 @@ from typing import List, Dict, Set, Tuple
 from dataclasses import dataclass
 import logging
 
+from mind2web2.utils.page_info_retrieval import SHORT_PAGE_CHARS, detect_block
+
 logger = logging.getLogger(__name__)
 
 
@@ -143,45 +145,42 @@ class KeywordDetector:
             return False
     
     def detect_issues(self, text: str) -> DetectionResult:
-        """Detect issues in text content."""
+        """Detect issues in text content.
+
+        Every matching keyword (sorted, definite ones first) and pattern is
+        reported.  The severity is "definite" for empty text, and for a page
+        shorter than ``SHORT_PAGE_CHARS`` characters that matches a definite
+        keyword or pattern or that the crawler's ``detect_block()`` judges a
+        refusal; it is "possible" otherwise.  A longer page is never
+        "definite" by its wording, since articles may quote it; the crawler
+        applies the same length threshold when it decides whether a page it
+        loaded is a refusal.
+        """
         if text is None or not text.strip():
             # Empty or whitespace-only content is a definite issue
             return DetectionResult(True, ["empty content"], [], "definite")
-        
+
         text_lower = text.lower()
-        matched_keywords = []
+        matched_keywords = sorted(k for k in self.definite_keywords if k in text_lower)
+        definite = bool(matched_keywords)
+        matched_keywords += sorted(k for k in self.possible_keywords - self.definite_keywords if k in text_lower)
         matched_patterns = []
-        level: str | None = None
-        
-        # Definite keywords first
-        for keyword in self.definite_keywords:
-            if keyword in text_lower:
-                matched_keywords.append(keyword)
-                level = "definite"
-        
-        # Possible keywords only if no definite yet
-        if level != "definite":
-            for keyword in self.possible_keywords:
-                if keyword in text_lower:
-                    matched_keywords.append(keyword)
-                    if level is None:
-                        level = "possible"
-        
-        # Check regex patterns
+
         for pattern, description, pat_level in self.patterns:
             try:
                 if re.search(pattern, text, re.IGNORECASE | re.MULTILINE):
                     matched_patterns.append(description)
-                    # escalate to definite if any pattern is definite
-                    if pat_level == "definite":
-                        level = "definite"
-                    elif level is None:
-                        level = "possible"
+                    definite = definite or pat_level == "definite"
             except re.error as e:
                 logger.warning(f"Invalid regex pattern '{pattern}': {e}")
-        
+
+        if block := detect_block(None, "", text):
+            matched_patterns.append(block)
+            definite = True
+
         has_issues = bool(matched_keywords or matched_patterns)
-        return DetectionResult(has_issues, matched_keywords, matched_patterns, level or "possible")
+        severity = "definite" if definite and len(text) < SHORT_PAGE_CHARS else "possible"
+        return DetectionResult(has_issues, matched_keywords, matched_patterns, severity)
     
     def add_keyword(self, keyword: str, priority: str = "possible") -> bool:
         """Add a new keyword with specified priority."""
@@ -268,28 +267,3 @@ class KeywordDetector:
         elif keyword_lower in self.possible_keywords:
             return "possible"
         return "none"
-    
-    def scan_all_text_content(self, cache_manager) -> Dict[str, List[Tuple[str, DetectionResult]]]:
-        """Scan all text content across all tasks for issues.
-        
-        Returns:
-            Dict mapping task_id to list of (url, DetectionResult) tuples
-        """
-        results = {}
-        
-        for task_id in cache_manager.get_task_ids():
-            task_results = []
-            url_infos = cache_manager.get_task_urls(task_id)
-            
-            for url_info in url_infos:
-                if url_info.content_type == "web":
-                    text, _ = cache_manager.get_url_content(task_id, url_info.url,get_screenshot=False)
-                    if text:
-                        detection_result = self.detect_issues(text)
-                        if detection_result.has_issues:
-                            task_results.append((url_info.url, detection_result))
-            
-            if task_results:
-                results[task_id] = task_results
-        
-        return results

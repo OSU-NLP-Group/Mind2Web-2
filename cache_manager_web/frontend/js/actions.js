@@ -40,10 +40,10 @@ export async function selectUrl(taskId, url) {
     const urlData = s.urls.find(u => u.url === url);
     const isPdf = urlData?.content_type === 'pdf';
 
-    if (urlData?.content_type === 'failed') {
-        // Nothing is stored for a failed capture: show why instead of fetching text
+    if (urlData?.content_type === 'failed' || urlData?.content_type === 'pending') {
+        // Nothing is stored: say why instead of fetching text
         setState({
-            currentText: failureText(urlData.failure),
+            currentText: urlData.content_type === 'failed' ? failureText(urlData.failure) : PENDING_TEXT,
             currentIssues: { has_issues: true, severity: 'definite', keywords: urlData.issues || [], patterns: [] },
         });
         return;
@@ -95,6 +95,13 @@ export async function selectUrl(taskId, url) {
     }
 }
 
+const PENDING_TEXT = [
+    'This URL is not captured yet: it was added in the Cache Manager, or its stored page was reset.',
+    'Until it is captured, evaluation treats it as not cached and captures it live.',
+    '',
+    'Open it in your browser and capture it with the extension, or upload a PDF or MHTML file.',
+].join('\n');
+
 function failureText(failure) {
     const f = failure || {};
     const lines = [`Capturing this URL failed: ${f.reason || 'unknown reason'}.`];
@@ -108,6 +115,7 @@ function failureText(failure) {
 
 export async function reloadCurrentTask() {
     const s = getState();
+    refreshIssues();
     if (!s.selectedTaskId) return;
     try {
         const data = await api.getUrls(s.selectedTaskId);
@@ -120,6 +128,21 @@ export async function reloadCurrentTask() {
         if (s.selectedUrl && data.urls?.some(u => u.url === s.selectedUrl)) {
             selectUrl(s.selectedTaskId, s.selectedUrl);
         }
+    } catch {}
+}
+
+// ---- Issue index and task list, after an edit or capture changed them ----
+
+export async function refreshIssues() {
+    try {
+        const [issues, taskData] = await Promise.all([api.getIssues(), api.getTasks()]);
+        const issueIndex = issues.issue_index || [];
+        setState({
+            issueIndex,
+            taskIssues: issues.task_issues || {},
+            tasks: taskData.tasks || [],
+            issueCursor: Math.min(getState().issueCursor, issueIndex.length - 1),
+        });
     } catch {}
 }
 

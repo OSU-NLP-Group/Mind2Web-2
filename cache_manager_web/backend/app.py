@@ -5,17 +5,81 @@ import os
 import logging
 from pathlib import Path
 from contextlib import asynccontextmanager
+from typing import Iterable, Optional
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, Response
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse, Response
+from starlette.datastructures import Headers
 
 from .models import CacheManager, KeywordDetector
-from .config import FRONTEND_DIR, CORS_ORIGINS
+from .config import FRONTEND_DIR, LOOPBACK_HOSTS
 from .api.routes import router, set_app_state
 
 logger = logging.getLogger(__name__)
+
+
+class LocalRequestGuard:
+    """ASGI middleware that refuses requests from web pages other than the Cache Manager's own.
+
+    The API has no authentication, and every page open in the reviewer's
+    browser, including the pages being recaptured, can send requests to this
+    server.  Two checks keep them out:
+
+    - The ``Host`` header must name one of ``allowed_hosts``; ``"*"`` allows
+      any.  A page that points its own domain at this machine (DNS
+      rebinding) sends that domain as the host and is refused.
+    - A request that can change data (any method but GET, HEAD, and OPTIONS)
+      and carries an ``Origin`` header must come from this server's own
+      origin or from a Chrome extension.  Browsers send ``Origin`` with such
+      requests, so a cross-site form post or fetch is refused.  Clients that
+      are not browsers, such as scripts, send none and are allowed.
+
+    Refused requests get status 403.  No CORS headers are sent, so pages on
+    other origins cannot read responses either.  The extension does not need
+    them: an extension's pages and service worker may fetch from the hosts
+    in its ``host_permissions``.
+    """
+
+    SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+    def __init__(self, app, allowed_hosts: Iterable[str]):
+        self.app = app
+        self.allowed_hosts = frozenset(host.strip().lower() for host in allowed_hosts if host.strip())
+
+    async def __call__(self, scope, receive, send):
+        reason = self.refusal(scope) if scope["type"] == "http" else None
+        if reason:
+            await JSONResponse({"detail": reason}, status_code=403)(scope, receive, send)
+        else:
+            await self.app(scope, receive, send)
+
+    def refusal(self, scope) -> Optional[str]:
+        """Why the request is refused, or ``None`` if it is allowed."""
+        headers = Headers(scope=scope)
+        host = headers.get("host", "").lower()
+        if "*" not in self.allowed_hosts and _host_name(host) not in self.allowed_hosts:
+            return (f"Host {host!r} is not served; the served hosts are {', '.join(sorted(self.allowed_hosts))} "
+                    "(see run.py --host)")
+        origin = headers.get("origin")
+        if (scope["method"] not in self.SAFE_METHODS and origin is not None
+                and origin.lower() != f"{scope['scheme']}://{host}"
+                and not origin.startswith("chrome-extension://")):
+            return f"Requests from {origin} are not accepted"
+        return None
+
+
+def _host_name(host: str) -> str:
+    """The host name of a ``Host`` header value, without its port and the brackets of an IPv6 address."""
+    if host.startswith("["):
+        return host[1:host.find("]")] if "]" in host else host
+    return host.rsplit(":", 1)[0] if host.count(":") == 1 else host
+
+
+def allowed_hosts_from_env() -> list[str]:
+    """``CM_ALLOWED_HOSTS`` (comma-separated, ``"*"`` for any host), or the loopback host names if it is unset."""
+    value = os.environ.get("CM_ALLOWED_HOSTS")
+    return value.split(",") if value else list(LOOPBACK_HOSTS)
 
 
 @asynccontextmanager
@@ -39,13 +103,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Cache Manager", lifespan=lifespan)
 
-# CORS — allow the Chrome extension (and any localhost origin) to call us
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=CORS_ORIGINS,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.add_middleware(LocalRequestGuard, allowed_hosts=allowed_hosts_from_env())
 
 # API routes
 app.include_router(router, prefix="/api")

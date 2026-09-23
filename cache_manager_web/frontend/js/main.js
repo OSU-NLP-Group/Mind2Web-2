@@ -206,19 +206,9 @@ async function onFlagAsIssue() {
     if (!s.selectedTaskId || !s.selectedUrl) return;
     try {
         await api.flagUrl(s.selectedTaskId, s.selectedUrl);
-        const urlData = s.urls.find(u => u.url === s.selectedUrl);
-        const isPdf = urlData?.content_type === 'pdf';
-        // Update local state: mark URL as having issues, clear review
-        const urls = s.urls.map(u => u.url === s.selectedUrl
-            ? { ...u, issues: ['flagged'], severity: 'definite', reviewed: '' }
-            : u);
-        const updates = { urls };
-        if (!isPdf) {
-            updates.currentText = 'access denied';
-            updates.currentIssues = { has_issues: true, severity: 'definite', keywords: ['flagged'], patterns: [] };
-        }
-        setState(updates);
-        toast('Flagged as issue (red)');
+        await reloadCurrentTask();
+        await updateReviewProgress();
+        toast('Flagged for recapture; the stored page is kept');
     } catch (err) {
         toast('Flag failed: ' + err.message, 'error');
     }
@@ -232,9 +222,15 @@ async function onOpenInBrowser() {
     toast('Opened in browser. Use the extension to capture.');
 }
 
+function hasStoredPage(s) {
+    const urlData = s.urls.find(u => u.url === s.selectedUrl);
+    return ['web', 'pdf'].includes(urlData?.content_type);
+}
+
 async function onDeleteUrl() {
     const s = getState();
     if (!s.selectedTaskId || !s.selectedUrl) return;
+    if (hasStoredPage(s) && !confirm(`Delete ${s.selectedUrl} and its stored page? This cannot be undone.`)) return;
     try {
         await api.deleteUrl(s.selectedTaskId, s.selectedUrl);
         setState({ selectedUrl: null, currentText: null, currentIssues: null });
@@ -248,10 +244,12 @@ async function onDeleteUrl() {
 async function onResetUrl() {
     const s = getState();
     if (!s.selectedTaskId || !s.selectedUrl) return;
+    if (hasStoredPage(s) && !confirm(`Delete the stored page of ${s.selectedUrl}? The URL stays listed as not `
+            + 'captured yet, and evaluation captures it live until it is captured again.')) return;
     try {
         showStatus('Resetting URL...', 'warning');
         await api.resetUrl(s.selectedTaskId, s.selectedUrl);
-        toast('URL cache reset and flagged for recapture', 'success');
+        toast('Reset: the URL is not captured yet and flagged for recapture', 'success');
         setState({ contentVersion: s.contentVersion + 1 });
         await reloadCurrentTask();
         await updateReviewProgress();
@@ -284,7 +282,7 @@ async function onAddUrl() {
     try {
         showStatus('Adding URL...', 'warning');
         await api.addUrl(s.selectedTaskId, url.trim());
-        toast('URL added and flagged for capture', 'success');
+        toast('URL added as not captured yet', 'success');
         setState({ contentVersion: s.contentVersion + 1 });
         await reloadCurrentTask();
         await updateReviewProgress();

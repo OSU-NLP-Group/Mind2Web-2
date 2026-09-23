@@ -66,6 +66,10 @@ export async function deleteUrl(taskId, url) {
     return (await request('DELETE', `/api/urls/${encodeURIComponent(taskId)}?url=${encodeURIComponent(url)}`)).json();
 }
 
+export async function getIssues() {
+    return (await request('GET', '/api/issues')).json();
+}
+
 export async function scanAll() {
     return (await request('POST', '/api/scan')).json();
 }
@@ -99,7 +103,7 @@ export async function renameUrl(taskId, oldUrl, newUrl) {
 }
 
 export async function addUrl(taskId, url) {
-    return (await request('POST', `/api/urls/${encodeURIComponent(taskId)}`, { url, auto_flag: true })).json();
+    return (await request('POST', `/api/urls/${encodeURIComponent(taskId)}`, { url })).json();
 }
 
 export async function uploadPdf(taskId, url, file) {

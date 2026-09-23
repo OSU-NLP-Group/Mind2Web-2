@@ -8,7 +8,7 @@ Web-based tool for reviewing and fixing cached web pages used by Mind2Web agents
 cache_manager_web/
 ├── run.py                     # Entry point: starts FastAPI server, auto-opens browser
 ├── backend/
-│   ├── app.py                 # FastAPI app, lifespan, CORS, static file serving
+│   ├── app.py                 # FastAPI app, lifespan, LocalRequestGuard, static file serving
 │   ├── config.py              # Constants (paths, limits)
 │   ├── api/routes.py          # ALL API endpoints + SSE + MHTML parsing
 │   └── models/
@@ -34,6 +34,10 @@ cache_manager_web/
 
 ## Key Design Decisions
 
+- **Evaluation reads only captured content**: evaluation uses a task's stored pages (`index.json`) and failure records (`failures.json`). The Cache Manager's own state is `flags.json` (URLs that need a (re)capture) and `reviewed.json` (review statuses), which evaluation never reads. No action stores content that was not captured: Flag writes only `flags.json`; Reset deletes the stored page or failure record and flags the URL; Add URL only flags it. A flagged URL with neither a stored page nor a failure record is `pending` (listed as "not captured yet").
+- **Request guard, no CORS**: the API has no authentication, and the reviewer's browser opens arbitrary pages while recapturing. `LocalRequestGuard` (app.py) answers only `Host` names in `CM_ALLOWED_HOSTS` (default: the loopback names; `run.py --host` extends it) and refuses non-GET requests whose `Origin` is neither the app's own origin nor a `chrome-extension://` origin. No CORS headers are sent; the extension does not need them because of its `host_permissions`.
+- **Issue severity**: definite for pending, failed, and flagged URLs, empty text, and pages shorter than `SHORT_PAGE_CHARS` (3,000 characters, shared with the crawler's `detect_block()`) that match a definite keyword or pattern or `detect_block()`; possible for other keyword matches. `_issue_entry()` in routes.py computes a URL's issues; every edit recomputes that URL's entry with `_refresh_issue()`.
+- **Load and scan off the event loop**: `/api/load` reads and scans the folder in a worker thread into a new `CacheManager`, which replaces the current one only when complete; `/api/scan` also runs in a worker thread.
 - **No build step**: Vanilla JS with ES modules. Files are served directly by FastAPI's StaticFiles.
 - **No circular imports**: Components import shared actions from `actions.js`, NOT from `main.js`. This is critical — `main.js` imports components, so components must not import from `main.js`.
 - **Selective state subscriptions**: `subscribe(fn, ['key1', 'key2'])` — components only re-render when their relevant keys change.
@@ -45,10 +49,12 @@ cache_manager_web/
 ## Running
 
 ```bash
-uv run python3 cache_manager_web/run.py zhoukai              # Agent name
+uv run python3 cache_manager_web/run.py zhoukai              # Agent name, under --cache-dir (default: cache/)
 uv run python3 cache_manager_web/run.py /path/to/cache/folder # Full path
-# Options: --port 8000  --host 127.0.0.1  --no-browser
+# Options: --cache-dir DIR  --answers-dir DIR  --port 8000  --host 127.0.0.1  --no-browser
 ```
+
+`run.py` passes its settings to the app through environment variables, read when uvicorn imports it: `CM_INITIAL_CACHE_FOLDER`, `CM_ANSWERS_DIR`, and `CM_ALLOWED_HOSTS`. Tests must reach the app as `TestClient(app, base_url="http://127.0.0.1:8000")`, since the guard refuses TestClient's default host.
 
 ## Package Management
 
@@ -58,10 +64,11 @@ This project uses `uv`, not pip. Use `uv run`, `uv sync`, `uv add`.
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| POST | /api/load | Load cache folder; build the issue list from the keyword scan, flags.json, and failures.json |
+| POST | /api/load | Load cache folder and scan every URL for issues (in a worker thread) |
 | GET | /api/status | Current load status |
 | GET | /api/tasks | Task list with summaries |
-| GET | /api/tasks/{id}/urls | URLs (stored pages, then `failed` URLs with their failure record), issues, reviewed status |
+| GET | /api/tasks/{id}/urls | URLs (stored pages, then `failed` URLs with their failure record, then `pending` URLs), issues, reviewed status |
+| GET | /api/issues | Issue index and per-task issue summary, from the issue cache (no rescan) |
 | GET | /api/content/{id}/text | Text content + issues |
 | GET | /api/content/{id}/screenshot | Screenshot JPEG |
 | GET | /api/content/{id}/pdf | PDF content |
@@ -72,16 +79,16 @@ This project uses `uv`, not pip. Use `uv run`, `uv sync`, `uv add`.
 | POST | /api/capture/batch/stop | Stop batch capture |
 | POST | /api/capture/batch/captcha | CAPTCHA detected notification |
 | POST | /api/capture | Receive capture from extension |
-| POST | /api/flag/{id} | Flag URL as issue (web: replace text; PDF: flags.json) |
-| POST | /api/reset/{id} | Reset URL cache (clear content + auto-flag) |
+| POST | /api/flag/{id} | Flag URL for recapture (flags.json only; the stored page is kept) |
+| POST | /api/reset/{id} | Delete the stored page or failure record and flag the URL (it becomes `pending`) |
 | GET | /api/review/{id} | Get review statuses for a task |
 | POST | /api/review/{id} | Set review status |
 | GET | /api/review-progress | Overall progress |
 | GET | /api/answers/{id} | Answer markdown files |
-| POST | /api/urls/{id} | Add URL to task (auto_flag, PDF suffix detection) |
-| POST | /api/urls/{id}/rename | Rename/edit URL link (moves content) |
+| POST | /api/urls/{id} | Add URL to task as `pending` (409 if the task already has it) |
+| POST | /api/urls/{id}/rename | Rename/edit URL link (moves a stored page; a failed or pending URL leaves the new URL `pending`) |
 | POST | /api/urls/{id}/pdf | Add PDF URL to task |
-| DELETE | /api/urls/{id} | Delete URL |
+| DELETE | /api/urls/{id} | Delete URL: stored page, failure record, flag, review status |
 | POST | /api/upload-mhtml/{id} | Upload MHTML |
 | POST | /api/upload-pdf/{id} | Upload PDF (replaces content, switches type) |
 | POST | /api/scan | Re-scan all tasks for issues |
@@ -108,9 +115,9 @@ Key state fields:
 | `n` | Next issue (cross-task) |
 | `N` | Previous issue (cross-task) |
 | `r` / `Ctrl+Enter` | Mark as reviewed |
-| `f` | Flag as issue (red) |
-| `d` / `Backspace` | Delete URL |
-| `x` | Reset URL cache & flag |
+| `f` | Flag for recapture (red) |
+| `d` / `Backspace` | Delete URL (asks first if a page is stored) |
+| `x` | Reset: delete the stored page & flag (asks first if a page is stored) |
 | `e` | Edit URL link |
 | `a` | Add new URL |
 | `o` | Open in browser |

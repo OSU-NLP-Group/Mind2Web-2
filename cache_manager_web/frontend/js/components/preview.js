@@ -105,10 +105,12 @@ function renderScreenshot(s) {
         currentImgSrc = '';
         return;
     }
-    if (urlData?.content_type === 'failed') {
+    if (urlData?.content_type === 'failed' || urlData?.content_type === 'pending') {
         const note = document.createElement('div');
         note.className = 'placeholder';
-        note.textContent = `No page stored: capturing it failed (${urlData.failure?.reason || 'unknown reason'}).`;
+        note.textContent = urlData.content_type === 'failed'
+            ? `No page stored: capturing it failed (${urlData.failure?.reason || 'unknown reason'}).`
+            : 'No page stored: not captured yet.';
         container.replaceChildren(note);
         currentImgEl = null;
         currentImgSrc = '';
