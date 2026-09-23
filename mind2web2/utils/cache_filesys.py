@@ -12,12 +12,13 @@ A page is stored under the :func:`storage_key` of its URL, and its files are
 named by the MD5 hex digest of that key (``<stem>``).  Lookups accept other
 surface forms of a stored URL; see :meth:`CacheFileSys.lookup`.
 
-Every change is on disk when the call returns.  Content files and
-``index.json`` are replaced atomically, and ``index.json`` is re-read and
-merged under a lock before each write.  Several processes (the crawler, an
-evaluation run, the Cache Manager) can therefore write to the same task
-without dropping each other's entries, and a process that is interrupted
-keeps every page it finished storing.
+Every change is written to disk, and fsynced, before the call returns.
+Content files and ``index.json`` are replaced atomically, and each change,
+from writing the content files to deleting files the change replaced, happens
+under a lock, with ``index.json`` re-read and merged before it is written.
+Several processes (the crawler, an evaluation run, the Cache Manager) can
+therefore write to the same task without dropping each other's entries, and a
+process that is interrupted keeps every page it finished storing.
 """
 from __future__ import annotations
 
@@ -60,13 +61,62 @@ def storage_key(url: str) -> str:
     return decoded
 
 
+def _is_raw(key: str) -> bool:
+    """Whether :func:`storage_key` would change ``key`` again.
+
+    Such a key keeps what percent-decoding produced and a second pass would act
+    on (a ``#``, or a ``%`` followed by two hex digits), or a trailing slash left
+    from ``//``: the URL ``.../a%2520b`` is stored under ``.../a%20b``.
+    """
+    return storage_key(key) != key
+
+
+def _raw_form(key: str) -> str:
+    """The form by which raw keys match: UTM parameters removed, ``http`` made ``https``, and ``www.`` dropped.
+
+    Unlike :func:`~mind2web2.utils.url_tools.normalize_url_simple`, it works
+    on the string as is: no further decoding, no fragment removal, no
+    lowercasing, so a raw key's ``#`` and ``%`` keep their meaning.
+    """
+    base, sep, query = key.partition("?")
+    if sep:
+        params = [p for p in query.split("&") if not p.lower().startswith("utm_")]
+        base = base + ("?" + "&".join(params) if params else "")
+    if base.startswith("http://"):
+        base = "https://" + base[len("http://"):]
+    return base.replace("://www.", "://", 1)
+
+
+def _address(key: str) -> str:
+    """A URL whose storage key is ``key``: the key itself, or a raw key re-encoded (see :func:`_is_raw`)."""
+    if not _is_raw(key):
+        return key
+    url = key.replace("%", "%25").replace("#", "%23")
+    return url + "/" if key.endswith("/") else url
+
+
+class CacheIndexError(RuntimeError):
+    """A task's ``index.json`` exists but cannot be read.
+
+    The index is the only record of which URL each cached file belongs to, so
+    the cache refuses to load or change the task rather than start over and
+    drop its entries.  Restore the file, or delete it to start the task's cache
+    over.
+    """
+
+    def __init__(self, path: str, reason: str):
+        super().__init__(f"Cannot read the cache index {path} ({reason}); restore it, "
+                         f"or delete it to start this task's cache over")
+
+
 class CacheFileSys:
     """The cached web pages (text and screenshot) and PDFs of one task, looked up by URL.
 
     ``task_dir`` is created if missing.  The index is read once, at
     construction; an entry whose files are missing or whose content type is
-    unknown is ignored with a warning.  Pages that other processes store later
-    become visible to a new instance.
+    unknown is ignored with a warning, and an index that cannot be read raises
+    :class:`CacheIndexError`.  Pages that other processes store later become
+    visible to a new instance.
     """
 
     def __init__(self, task_dir: str):
@@ -74,6 +124,7 @@ class CacheFileSys:
         self.index_file = os.path.join(self.task_dir, "index.json")
         self._types: Dict[str, ContentType] = {}
         self._keys_by_match: Dict[str, List[str]] = {}  # normalize_url_simple(key) -> keys, oldest first
+        self._raw_keys_by_form: Dict[str, List[str]] = {}  # _raw_form(raw key) -> raw keys, oldest first
         self._lock = threading.Lock()
         os.makedirs(self.task_dir, exist_ok=True)
         for key, content_type in self._read_index().items():
@@ -87,35 +138,62 @@ class CacheFileSys:
     # ------------------------------------------------------------------ lookup
 
     def lookup(self, url: str) -> Optional[str]:
-        """The stored URL that ``url`` refers to, or ``None`` if its page is not cached.
+        """The URL of the cached page that ``url`` refers to, or ``None`` if its page is not cached.
 
-        The rules are tried in order and the first hit wins:
+        Each page is stored under a key, the :func:`storage_key` of the URL it
+        was stored with.  A key that :func:`storage_key` leaves unchanged is
+        found by these rules, tried in order, the first hit winning:
 
-        1. ``url`` itself is stored.
+        1. ``url`` itself is the key.
         2. Its normalized form (:func:`~mind2web2.utils.url_tools.normalize_url_simple`)
-           is stored.
-        3. A stored URL has the same normalized form; the one stored first wins.
-        4. One of its surface variants (:func:`_surface_variants`) is stored.
-           This finds stored URLs whose normalized form differs from the
-           query's because percent-decoding changed their structure, as with
-           an encoded ``#`` or ``%``.
+           is the key.
+        3. The key has the same normalized form; among several, the one stored
+           first wins.
+        4. One of its surface variants (:func:`_surface_variants`) is the key.
+           This finds keys whose normalized form differs from the query's
+           because percent-decoding changed their structure, as with an
+           encoded ``#`` or ``%``.
 
-        Rules 1-3 are dictionary lookups; rule 4 runs only when they miss.
-        Raises ``ValueError`` if ``url`` cannot be parsed.
+        A key that :func:`storage_key` would change again (:func:`_is_raw`) is
+        found only for a ``url`` whose storage key is that key, or is raw too
+        and has the same :func:`_raw_form` (UTM parameters, scheme, and
+        ``www.`` disregarded; among several such keys, the one stored first
+        wins).  These checks come before the rules above, which would let such
+        a key capture other pages: the key of ``.../search?q=C%23`` has the
+        normalized form of ``.../search?q=C``.
+
+        The URL returned is the key, or for a raw key a re-encoded form whose
+        storage key is the key, so that passing it to any method of this class
+        addresses the same page.  All rules but 4 are dictionary lookups, and
+        rule 4 runs only when they miss.  Raises ``ValueError`` if ``url``
+        cannot be parsed.
         """
-        if url in self._types:
+        key = self._find_key(url)
+        return _address(key) if key is not None else None
+
+    def _find_key(self, url: str) -> Optional[str]:
+        """The key of the page ``url`` refers to, by the rules of :meth:`lookup`."""
+        key = storage_key(url)
+        if _is_raw(key):
+            if key in self._types:
+                return key
+            raw_keys = self._raw_keys_by_form.get(_raw_form(key))
+            if raw_keys:
+                return raw_keys[0]
+        if url in self._types and not _is_raw(url):
             return url
         match = normalize_url_simple(url)
-        if match in self._types:
+        if match in self._types and not _is_raw(match):
             return match
         keys = self._keys_by_match.get(match)
         if keys:
             return keys[0]
-        return next((variant for variant in _surface_variants(url) if variant in self._types), None)
+        return next((variant for variant in _surface_variants(url)
+                     if variant in self._types and not _is_raw(variant)), None)
 
     def has(self, url: str) -> ContentType | None:
         """The content type cached for ``url`` ("web" or "pdf"), or ``None`` if it is not cached."""
-        key = self.lookup(url)
+        key = self._find_key(url)
         return self._types[key] if key is not None else None
 
     def has_web(self, url: str) -> bool:
@@ -125,8 +203,8 @@ class CacheFileSys:
         return self.has(url) == "pdf"
 
     def get_all_urls(self) -> List[str]:
-        """Every stored URL, in the order it was first stored."""
-        return list(self._types)
+        """The URL of every cached page, as :meth:`lookup` returns it, in the order the pages were first stored."""
+        return [_address(key) for key in self._types]
 
     def summary(self) -> Dict[str, Any]:
         types = list(self._types.values())
@@ -139,7 +217,7 @@ class CacheFileSys:
 
         Raises ``KeyError`` if no web page is cached for ``url``.
         """
-        key = self.lookup(url)
+        key = self._find_key(url)
         if key is None or self._types[key] != "web":
             raise KeyError(f"No web content found for URL: {url}")
         with open(self._path(key, ".txt"), 'r', encoding='utf-8') as f:
@@ -152,7 +230,7 @@ class CacheFileSys:
 
     def get_pdf(self, url: str) -> bytes:
         """The cached PDF bytes; raises ``KeyError`` if no PDF is cached for ``url``."""
-        key = self.lookup(url)
+        key = self._find_key(url)
         if key is None or self._types[key] != "pdf":
             raise KeyError(f"No PDF content found for URL: {url}")
         with open(self._path(key, ".pdf"), 'rb') as f:
@@ -161,43 +239,44 @@ class CacheFileSys:
     # ------------------------------------------------------------------ write
 
     def put_web(self, url: str, text: str, screenshot: str | bytes) -> str:
-        """Store a web page's text and screenshot; returns the key it is stored under.
+        """Store a web page's text and screenshot; returns its URL, as :meth:`lookup` returns it.
 
-        The key is ``url`` itself if that is already a stored URL (so passing
-        the result of :meth:`lookup` replaces that entry), otherwise
-        ``storage_key(url)``.  A page already stored under the key is replaced,
-        whatever its content type.  ``screenshot`` is image bytes or a base64
-        string (optionally a ``data:image/...`` URL) and is saved as JPEG.
+        The page is stored under ``storage_key(url)``, so passing a URL that
+        :meth:`lookup` or :meth:`get_all_urls` returned replaces that page.  A
+        page already stored under the key is replaced, whatever its content
+        type.  ``screenshot`` is image bytes or a base64 string (optionally a
+        ``data:image/...`` URL) and is saved as JPEG.
         """
         return self._put(url, "web", {".txt": text.encode("utf-8"), ".jpg": _to_jpeg(screenshot)})
 
     def put_pdf(self, url: str, pdf_bytes: bytes) -> str:
-        """Store a PDF, keyed and replacing like :meth:`put_web`; returns the key it is stored under."""
+        """Store a PDF, keyed and replacing like :meth:`put_web`; returns its URL, as :meth:`lookup` returns it."""
         return self._put(url, "pdf", {".pdf": pdf_bytes})
 
     def remove(self, url: str) -> ContentType | None:
         """Delete the cached page ``url`` refers to; returns its content type, or ``None`` if nothing was cached."""
-        key = self.lookup(url)
-        if key is None:
-            return None
         with self._index_lock():
-            self._commit(key, None)
+            key = self._find_key(url)
+            if key is None:
+                return None
+            self._commit(self._read_index(), key, None)
             content_type = self._types.get(key)
             self._discard(key)
-        if content_type is not None:
-            self._delete_files(key, content_type)
+            if content_type is not None:
+                self._delete_files(key, content_type)
         return content_type
 
     def _put(self, url: str, content_type: ContentType, files: Dict[str, bytes]) -> str:
-        key = url if url in self._types else storage_key(url)
-        for ext, data in files.items():
-            _write_atomic(self._path(key, ext), data)
+        key = storage_key(url)
         with self._index_lock():
-            previous = self._commit(key, content_type) or self._types.get(key)
+            index = self._read_index()  # an unreadable index raises before any file is written
+            for ext, data in files.items():
+                _write_atomic(self._path(key, ext), data)
+            previous = self._commit(index, key, content_type) or self._types.get(key)
             self._add(key, content_type)
-        if previous in FILE_EXTENSIONS and previous != content_type:
-            self._delete_files(key, previous)
-        return key
+            if previous in FILE_EXTENSIONS and previous != content_type:
+                self._delete_files(key, previous)
+        return _address(key)
 
     # ------------------------------------------------------------------ internals
 
@@ -216,42 +295,47 @@ class CacheFileSys:
 
     def _add(self, key: str, content_type: ContentType) -> None:
         if key not in self._types:
-            match = _match_key(key)
-            if match is not None:
-                self._keys_by_match.setdefault(match, []).append(key)
+            by_form, form = self._form_index(key)
+            if form is not None:
+                by_form.setdefault(form, []).append(key)
         self._types[key] = content_type
 
     def _discard(self, key: str) -> None:
         if self._types.pop(key, None) is None:
             return
-        match = _match_key(key)
-        keys = self._keys_by_match.get(match, [])
+        by_form, form = self._form_index(key)
+        keys = by_form.get(form, [])
         if key in keys:
             keys.remove(key)
             if not keys:
-                del self._keys_by_match[match]
+                del by_form[form]
+
+    def _form_index(self, key: str) -> Tuple[Dict[str, List[str]], Optional[str]]:
+        """The index that finds ``key`` by a form of the query (see :meth:`lookup`), and that form of ``key``."""
+        if _is_raw(key):
+            return self._raw_keys_by_form, _raw_form(key)
+        return self._keys_by_match, _match_key(key)
 
     def _read_index(self) -> Dict[str, str]:
+        """The entries of ``index.json``, or none if it does not exist; raises :class:`CacheIndexError` if unreadable."""
         try:
             with open(self.index_file, 'r', encoding='utf-8') as f:
                 index = json.load(f)
         except FileNotFoundError:
             return {}
-        except (OSError, json.JSONDecodeError) as e:
-            logger.warning("Failed to read %s: %s. Treating it as empty.", self.index_file, e)
-            return {}
+        except (OSError, ValueError) as e:  # ValueError: not UTF-8, or not JSON
+            raise CacheIndexError(self.index_file, str(e)) from e
         if not isinstance(index, dict):
-            logger.warning("Ignoring %s: expected a JSON object", self.index_file)
-            return {}
+            raise CacheIndexError(self.index_file, "not a JSON object")
         return index
 
-    def _commit(self, key: str, content_type: ContentType | None) -> Optional[str]:
-        """Write one entry change to ``index.json``, keeping the entries other writers committed.
+    def _commit(self, index: Dict[str, str], key: str, content_type: ContentType | None) -> Optional[str]:
+        """Apply one entry change to ``index``, as just read from disk, and write it to ``index.json``.
 
-        ``content_type=None`` removes the entry.  Returns the entry's previous
-        content type on disk.  Must be called under :meth:`_index_lock`.
+        Reading the index under the same :meth:`_index_lock` as the write keeps
+        the entries other writers committed.  ``content_type=None`` removes the
+        entry.  Returns the entry's previous content type on disk.
         """
-        index = self._read_index()
         previous = index.get(key)
         if content_type is None:
             index.pop(key, None)
@@ -262,7 +346,7 @@ class CacheFileSys:
 
     @contextmanager
     def _index_lock(self) -> Iterator[None]:
-        """Serialize index updates across threads and, on POSIX, across processes.
+        """Serialize changes to the task across threads and, on POSIX, across processes.
 
         The cross-process lock is an advisory ``flock`` on the task directory,
         so no lock file is left in it.
@@ -287,12 +371,19 @@ def _match_key(key: str) -> Optional[str]:
 
 
 def _write_atomic(path: str, data: bytes) -> None:
-    """Replace ``path`` with ``data``; a concurrent reader sees either the old or the complete new content."""
+    """Replace ``path`` with ``data``, fsyncing the file and its directory before returning.
+
+    A concurrent reader sees either the old or the complete new content, and
+    once this returns the new content survives a crash of the process or of
+    the operating system.
+    """
     directory, name = os.path.split(path)
     tmp = os.path.join(directory, f".{name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
     try:
         with open(tmp, 'xb') as f:
             f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(tmp, path)
     except BaseException:
         try:
@@ -300,6 +391,21 @@ def _write_atomic(path: str, data: bytes) -> None:
         except FileNotFoundError:
             pass
         raise
+    _fsync_directory(directory)
+
+
+def _fsync_directory(directory: str) -> None:
+    """Make the renames in ``directory`` durable; a no-op where directories cannot be opened (Windows)."""
+    try:
+        fd = os.open(directory, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:  # some file systems do not support fsync on directories
+        pass
+    finally:
+        os.close(fd)
 
 
 def _to_jpeg(image_data: str | bytes, quality: int = 85) -> bytes:

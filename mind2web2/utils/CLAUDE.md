@@ -15,17 +15,17 @@ task_dir/
 ```
 
 **Key methods:**
-- `put_web(url, text, screenshot)` / `put_pdf(url, pdf_bytes)`: store a page, replacing any page under the same key whatever its type; return the key. The key is `storage_key(url)` (fragment removed, percent-decoded, trailing slash removed), or `url` itself when it is already stored.
+- `put_web(url, text, screenshot)` / `put_pdf(url, pdf_bytes)`: store a page under `storage_key(url)` (fragment removed, percent-decoded, trailing slash removed), replacing any page under the same key whatever its type; return the page's URL as `lookup` returns it.
 - `get_web(url)` → `(text, jpeg_bytes)`; `get_pdf(url)` → `pdf_bytes`; `has(url)` → `"web"` | `"pdf"` | `None`
-- `lookup(url)` → the stored URL that `url` refers to, or `None`; `remove(url)` deletes a page and its files
+- `lookup(url)` → the URL of the cached page `url` refers to, or `None`; `get_all_urls()` lists these URLs; `remove(url)` deletes a page and its files. A URL from `lookup` or `get_all_urls` passed to any method addresses the same page.
 
-**Persistence:** every put and remove is on disk when it returns. Files are replaced atomically, and `index.json` is re-read and merged under an `flock` on the task directory, so the crawler, an eval run, and the Cache Manager can write to one task at the same time, and an interrupted crawl keeps the pages it stored. There is no separate save step.
+**Persistence:** every put and remove is on disk, fsynced, when it returns. Files are replaced atomically, and each change, including deleting the files of a replaced page, runs under an `flock` on the task directory with `index.json` re-read and merged, so the crawler, an eval run, and the Cache Manager can write to one task at the same time, and an interrupted crawl keeps the pages it stored. There is no separate save step. An `index.json` that exists but cannot be read raises `CacheIndexError` instead of being treated as empty.
 
-**URL matching** (`lookup`), first hit wins:
-1. `url` is stored
-2. `normalize_url_simple(url)` is stored
-3. a stored URL has the same normalized form (dictionary index; the earliest stored wins)
-4. a surface variant of `url` is stored (scheme, `www.`, UTM suffixes, percent-encoding forms, trailing slash). Runs only when 1-3 miss; it finds keys whose normalized form changes under percent-decoding, such as an encoded `#` or `%`.
+**URL matching** (`lookup`). A key that `storage_key` would change again (a decoded `#` or `%XX`, or a trailing slash from `//`; a "raw" key) is found only through a URL whose storage key is that key, or is raw with the same form once UTM parameters, the scheme, and `www.` are disregarded. Other keys are found by these rules, first hit wins:
+1. `url` is the key
+2. `normalize_url_simple(url)` is the key
+3. the key has the same normalized form (dictionary index; the earliest stored wins)
+4. a surface variant of `url` is the key (scheme, `www.`, UTM suffixes, percent-encoding forms, trailing slash). Runs only when 1-3 miss; it finds keys whose normalized form changes under percent-decoding.
 
 ### page_info_retrieval.py — Browser-Based Web Capture
 **`BatchBrowserManager`**: Manages a shared Chromium browser (via patchright) for concurrent page capture.
@@ -60,7 +60,7 @@ Custom formatters:
 - `normalize_url_simple(url)`: The form under which two URLs are the same page, for cache lookups and crawl deduplication (UTM parameters and fragment removed, percent-decoded, trailing slash removed, `https`, no `www.`, lowercased)
 - `remove_utm_parameters(url)`: Strip all `utm_*` query params
 - `normalize_url_for_browser(url)`: Ensure URL has protocol for navigation
-- `regex_find_urls(text)`: `http(s)://` and `www.` URLs in Markdown or plain text, in order of appearance; keeps balanced parentheses (Wikipedia titles), removes Markdown escapes and trailing punctuation, stops at CJK punctuation
+- `regex_find_urls(text)`: `http(s)://` and `www.` URLs in Markdown or plain text, in order of appearance; keeps balanced parentheses and brackets (Wikipedia titles, `?filter[type]=x`) and `|`, removes Markdown escapes, emphasis delimiters, and trailing punctuation, stops at CJK punctuation
 - `URLs` Pydantic model: For LLM structured output of URL lists
 
 ### load_eval_script.py — Dynamic Script Loading

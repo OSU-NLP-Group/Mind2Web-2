@@ -30,6 +30,16 @@ from mind2web2.utils.url_tools import normalize_url_simple, regex_find_urls
     ("https://example.com/dir/ and 'https://y.com/b'", ["https://example.com/dir/", "https://y.com/b"]),
     ('[t](https://x.com/a "Title")', ["https://x.com/a"]),
     ("no links here, just www and https://", []),
+    ("[filter](https://www.example.com/search?filters[type]=book)",
+     ["https://www.example.com/search?filters[type]=book"]),
+    ("[fonts](https://fonts.googleapis.com/css?family=Roboto|Open+Sans)",
+     ["https://fonts.googleapis.com/css?family=Roboto|Open+Sans"]),
+    ("|https://a.com/x|https://b.com/y|", ["https://a.com/x", "https://b.com/y"]),
+    ("[https://a.com/x](https://b.com/y)", ["https://a.com/x", "https://b.com/y"]),
+    ("[t](https://a.com/x)(see https://b.com/y)", ["https://a.com/x", "https://b.com/y"]),
+    (r"[w](https://en.wikipedia.org/wiki/Foo_\(bar\))", ["https://en.wikipedia.org/wiki/Foo_(bar)"]),
+    ("_https://example.com/ital_, ~~https://example.com/strike~~ and https://example.com/a_",
+     ["https://example.com/ital", "https://example.com/strike", "https://example.com/a_"]),
 ])
 def test_regex_find_urls(text, expected):
     assert regex_find_urls(text) == expected

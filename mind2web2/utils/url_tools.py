@@ -102,21 +102,58 @@ def normalize_url_for_browser(url: str) -> str:
 # (Markdown), e.g. ``some\_page``; the escape is removed after matching.
 _URL_CHAR = (
     r"(?:\\[!-/:-@\[-`{-~]"
-    r"|[^\s<>\"`{}|\\^\[\]\u3000-\u303f\uff01-\uff0f\uff1a-\uff20\uff3b-\uff40\uff5b-\uff65"
+    r"|[^\s<>\"`{}\\^\u3000-\u303f\uff01-\uff0f\uff1a-\uff20\uff3b-\uff40\uff5b-\uff65"
     r"\u201c\u201d\u00ab\u00bb\u2026])"
 )
-_URL_RE = re.compile(rf"(?:https?://|(?<![\w/.@-])www\.){_URL_CHAR}+", re.IGNORECASE)
+_URL_START = r"(?:https?://|(?<![\w/.@-])www\.)"
+_URL_RE = re.compile(rf"{_URL_START}{_URL_CHAR}+", re.IGNORECASE)
+_URL_START_RE = re.compile(_URL_START, re.IGNORECASE)
 _MARKDOWN_ESCAPE_RE = re.compile(r"\\([!-/:-@\[-`{-~])")
-_TRAILING_PUNCTUATION = ".,;:!?*'"
+_TRAILING_PUNCTUATION = ".,;:!?*'|"
+_CLOSING = {")": "(", "]": "["}
+_EMPHASIS = ("~~", "__", "_")  # closing delimiters of Markdown emphasis that a URL can absorb
 
 
-def _trim_url(url: str) -> str:
-    """Strip sentence punctuation and unbalanced closing parentheses from the end of a matched URL."""
+def _cut_url(match: str) -> str:
+    r"""The part of a regex match that is the URL.
+
+    The URL ends before the first closing parenthesis or bracket that it did
+    not open, as in ``[text](https://a.com/x)`` or ``(see https://a.com)``,
+    and before a ``|`` that starts another URL, as in a Markdown table
+    without spaces.  Markdown-escaped characters (``\(``) count like the
+    characters they escape.
+    """
+    depth = {"(": 0, "[": 0}
+    i = 0
+    while i < len(match):
+        char = match[i]
+        if char == "\\" and i + 1 < len(match):
+            char = match[i + 1]
+            step = 2
+        else:
+            step = 1
+        if char in depth:
+            depth[char] += 1
+        elif char in _CLOSING:
+            if depth[_CLOSING[char]] == 0:
+                return match[:i]
+            depth[_CLOSING[char]] -= 1
+        elif char == "|" and _URL_START_RE.match(match, i + step):
+            return match[:i]
+        i += step
+    return match
+
+
+def _trim_url(url: str, preceding: str) -> str:
+    """Strip sentence punctuation from the end of a URL, and the Markdown emphasis delimiter
+    (``_``, ``__``, ``~~``) that closes one ``preceding``, the text before the URL, opened."""
+    emphasis = next((d for d in _EMPHASIS if preceding.endswith(d)), None)
     while url:
         if url[-1] in _TRAILING_PUNCTUATION:
             url = url[:-1]
-        elif url[-1] == ")" and url.count("(") < url.count(")"):
-            url = url[:-1]
+        elif emphasis and url.endswith(emphasis):
+            url = url[:-len(emphasis)]
+            emphasis = None
         else:
             break
     return url
@@ -125,15 +162,19 @@ def _trim_url(url: str) -> str:
 def regex_find_urls(text: str) -> List[str]:
     """Every ``http(s)://`` and ``www.`` URL in ``text`` (Markdown or plain), in order of first appearance.
 
-    Handles Markdown links and autolinks, parentheses inside URLs (kept when
-    balanced, as in Wikipedia titles), Markdown backslash escapes, trailing
+    Handles Markdown links and autolinks, parentheses and brackets inside URLs
+    (kept when balanced, as in Wikipedia titles and ``?filter[type]=x``), ``|``
+    inside URLs, Markdown backslash escapes and emphasis around URLs, trailing
     sentence punctuation, and URLs followed directly by CJK punctuation.
     ``www.`` URLs get an ``https://`` scheme.  Only URLs that
     ``validators.url`` accepts are returned.
     """
     urls: List[str] = []
-    for match in _URL_RE.finditer(text):
-        url = _trim_url(_MARKDOWN_ESCAPE_RE.sub(r"\1", match.group()))
+    pos = 0
+    while (match := _URL_RE.search(text, pos)) is not None:
+        raw = _cut_url(match.group())
+        pos = match.start() + max(len(raw), 1)  # a cut match is scanned again from the cut
+        url = _trim_url(_MARKDOWN_ESCAPE_RE.sub(r"\1", raw), text[max(match.start() - 2, 0):match.start()])
         if url.lower().startswith("www."):
             url = "https://" + url
         if _is_valid_url(url):

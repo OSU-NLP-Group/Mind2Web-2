@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from mind2web2.utils.cache_filesys import CacheFileSys, _surface_variants, storage_key
+from mind2web2.utils.cache_filesys import CacheFileSys, CacheIndexError, _raw_form, _surface_variants, storage_key
 from mind2web2.utils.url_tools import normalize_url_simple
 
 
@@ -57,24 +57,43 @@ def test_pages_whose_storage_key_changes_when_normalized_again_stay_readable(tmp
     """Keys that percent-decoding would change again are read from the files named by the key itself."""
     CacheFileSys(str(tmp_path)).put_web(url, "content", png_bytes())
     reopened = CacheFileSys(str(tmp_path))
-    assert reopened.get_all_urls() == [storage_key(url)]
-    assert reopened.get_web(url)[0] == "content"
+    [listed] = reopened.get_all_urls()
+    assert storage_key(listed) == storage_key(url)
+    assert reopened.get_web(url)[0] == reopened.get_web(listed)[0] == "content"
+
+
+def is_raw(key: str) -> bool:
+    return storage_key(key) != key
 
 
 def reference_lookup(stored: list[str], url: str):
-    """CacheFileSys.lookup's documented rules, applied by scanning every stored URL."""
-    if url in stored:
+    """The key CacheFileSys.lookup's documented rules find, applied by scanning every stored key."""
+    query_key = storage_key(url)
+    if is_raw(query_key):
+        if query_key in stored:
+            return query_key
+        raw_match = next((k for k in stored if is_raw(k) and _raw_form(k) == _raw_form(query_key)), None)
+        if raw_match is not None:
+            return raw_match
+    plain = [k for k in stored if not is_raw(k)]
+    if url in plain:
         return url
     match = normalize_url_simple(url)
-    if match in stored:
+    if match in plain:
         return match
-    for key in stored:
+    for key in plain:
         try:
             if normalize_url_simple(key) == match:
                 return key
         except ValueError:
             pass
-    return next((variant for variant in _surface_variants(url) if variant in stored), None)
+    return next((variant for variant in _surface_variants(url) if variant in plain), None)
+
+
+def found_key(cache: CacheFileSys, url: str):
+    """The key of the page ``cache.lookup(url)`` returns the URL of."""
+    found = cache.lookup(url)
+    return storage_key(found) if found is not None else None
 
 
 def surface_forms(url: str) -> set[str]:
@@ -93,7 +112,7 @@ def test_lookup_follows_its_rules_as_pages_are_added_replaced_and_removed(tmp_pa
         url = rng.choice(urls)
         action = rng.random()
         if action < 0.6:
-            key = cache.put_web(rng.choice(sorted(surface_forms(url))), "t", png_bytes())
+            key = storage_key(cache.put_web(rng.choice(sorted(surface_forms(url))), "t", png_bytes()))
             if key not in stored:
                 stored.append(key)
         elif action < 0.8:
@@ -102,8 +121,41 @@ def test_lookup_follows_its_rules_as_pages_are_added_replaced_and_removed(tmp_pa
             if removed is not None:
                 stored.remove(removed)
         for query in surface_forms(rng.choice(urls)):
-            assert cache.lookup(query) == reference_lookup(stored, query), query
-    assert CacheFileSys(str(tmp_path)).get_all_urls() == stored
+            assert found_key(cache, query) == reference_lookup(stored, query), query
+    reopened = CacheFileSys(str(tmp_path))
+    assert [storage_key(url) for url in reopened.get_all_urls()] == stored
+    assert all(found_key(reopened, url) == storage_key(url) for url in reopened.get_all_urls())
+
+
+def test_raw_keys_match_their_own_urls_and_capture_no_others(tmp_path):
+    """A key that percent-decoding would change again is found only through its own URL."""
+    cache = CacheFileSys(str(tmp_path))
+    for url, label in [("https://www.example.com/search?q=C%23", "C#"), ("https://example.com/search?q=C", "C"),
+                       ("https://example.com/a%2520b", "literal %20"), ("https://example.com/a%20b", "space"),
+                       ("https://example.com/x//", "x//"), ("https://example.com/tags/%23python", "#python"),
+                       ("https://www.example.com/tags", "tags")]:
+        cache.put_web(url, label, png_bytes())
+
+    def page(url):
+        return cache.get_web(url, get_screenshot=False)[0] if cache.has(url) else None
+
+    assert page("https://www.example.com/search?q=C%23") == "C#"
+    assert page("http://example.com/search?q=C%23&utm_source=chatgpt.com") == "C#"
+    assert page("https://example.com/search?q=C") == page("https://www.example.com/search?q=c") == "C"
+    assert page("https://example.com/a%2520b") == "literal %20"
+    assert page("https://example.com/a%20b") == page("https://example.com/a b") == "space"
+    assert page("https://example.com/x//") == "x//"
+    assert page("https://example.com/x/") is None
+    assert page("https://example.com/tags/%23python") == "#python"
+    assert page("https://example.com/tags") == page("https://example.com/tags/") == "tags"
+
+    cache.put_web("https://example.com/a%20b", "space, recaptured", png_bytes())
+    assert page("https://example.com/a%2520b") == "literal %20"
+    assert page("https://example.com/a b") == "space, recaptured"
+    for url in cache.get_all_urls():  # every listed URL addresses its own page
+        assert cache.put_web(url, page(url), png_bytes()) == url
+    assert len(cache.get_all_urls()) == 7
+
 
 
 def test_storing_a_page_of_the_other_type_replaces_its_files(tmp_path):
@@ -116,12 +168,13 @@ def test_storing_a_page_of_the_other_type_replaces_its_files(tmp_path):
     assert index_on_disk(tmp_path) == {key: "web"}
 
 
-def test_a_stored_url_passed_to_put_replaces_that_entry(tmp_path):
+def test_a_url_returned_by_lookup_passed_to_put_replaces_that_entry(tmp_path):
     cache = CacheFileSys(str(tmp_path))
-    key = cache.put_web("https://example.com/a%23b", "old", png_bytes())  # key ".../a#b"
-    assert cache.put_web(cache.lookup("https://example.com/a%23b"), "new", png_bytes()) == key
-    assert cache.get_all_urls() == [key]
+    stored = cache.put_web("https://example.com/a%23b", "old", png_bytes())  # key ".../a#b"
+    assert cache.put_web(cache.lookup("https://example.com/a%23b"), "new", png_bytes()) == stored
+    assert cache.get_all_urls() == [stored]
     assert cache.get_web("https://example.com/a%23b")[0] == "new"
+    assert index_on_disk(tmp_path) == {"https://example.com/a#b": "web"}
 
 
 def test_remove_deletes_the_entry_and_its_files(tmp_path):
@@ -141,6 +194,40 @@ def test_instances_sharing_a_task_keep_each_others_entries(tmp_path):
     crawler.put_pdf("https://example.com/3.pdf", b"%PDF")
     manager.remove("https://example.com/2")
     assert index_on_disk(tmp_path) == {"https://example.com/1": "web", "https://example.com/3.pdf": "pdf"}
+
+
+def test_an_unreadable_index_is_an_error_not_an_empty_cache(tmp_path):
+    cache = CacheFileSys(str(tmp_path))
+    cache.put_web("https://example.com/a", "a", png_bytes())
+    (tmp_path / "index.json").write_text("{not json", encoding="utf-8")
+    with pytest.raises(CacheIndexError, match="restore it, or delete it"):
+        CacheFileSys(str(tmp_path))
+    files = sorted(p.name for p in tmp_path.iterdir())
+    with pytest.raises(CacheIndexError):
+        cache.put_web("https://example.com/b", "b", png_bytes())
+    with pytest.raises(CacheIndexError):
+        cache.remove("https://example.com/a")
+    assert sorted(p.name for p in tmp_path.iterdir()) == files  # nothing written or deleted
+    assert (tmp_path / "index.json").read_text(encoding="utf-8") == "{not json"
+
+
+def test_concurrent_changes_to_one_page_leave_its_entry_and_files_consistent(tmp_path):
+    """Writing a page's files and deleting the files of the type it replaces happen under the lock."""
+    cache = CacheFileSys(str(tmp_path))
+    url = "https://example.com/report"
+
+    def store(i: int) -> None:
+        if i % 2:
+            cache.put_pdf(url, b"%PDF")
+        else:
+            cache.put_web(url, "html", png_bytes())
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(store, range(400)))
+    content_type = index_on_disk(tmp_path)[url]
+    expected = [".jpg", ".json", ".txt"] if content_type == "web" else [".json", ".pdf"]
+    assert sorted(p.suffix for p in tmp_path.iterdir()) == expected
+    assert CacheFileSys(str(tmp_path)).has(url) == content_type
 
 
 def test_threads_sharing_an_instance_lose_no_entries(tmp_path):
