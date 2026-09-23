@@ -20,6 +20,12 @@ Policies control what the fake judge returns:
     Every list-typed extraction field gets 12 items; verifications pass.
     Exercises truncation to the number of items a task requires.
 
+Every run happens at a fixed time, :data:`FROZEN_NOW` (2026-09-22 12:00 UTC,
+the date the golden files were recorded), with UTC as the local time zone, so
+a script that reads the current date or year produces the same tree on any
+day and on any machine.  Anything a script prints goes to stderr, so that
+stdout carries only the JSON result.
+
 Run one script (prints a JSON result to stdout)::
 
     uv run python tests/offline_eval.py --script eval_scripts/dev_set/yu_lineage.py --policy hash
@@ -28,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import enum
 import hashlib
 import io
@@ -37,14 +44,20 @@ import sys
 import traceback
 import types
 import typing
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
+import time_machine
 from PIL import Image
 from pydantic import BaseModel
 
 POLICIES = ("all_true", "hash", "empty", "long")
 LIST_LENGTHS = {"all_true": 2, "hash": 2, "empty": 0, "long": 12}
+
+#: The clock during a script run (see the module docstring).
+FROZEN_NOW = datetime(2026, 9, 22, 12, 0, tzinfo=ZoneInfo("UTC"))
 
 DEFAULT_ANSWER = (
     "Offline answer used when no answer file is available.\n\n"
@@ -272,7 +285,7 @@ def render_result(final_score: float, tree: dict) -> str:
 
 
 async def run_script(script: Path, policy: str, answer: str, model: str = "o4-mini") -> dict:
-    """Run one eval script with fakes and return its canonical result.
+    """Run one eval script with fakes, at :data:`FROZEN_NOW`, and return its canonical result.
 
     Returns ``{"ok": True, "final_score", "tree", "llm_calls", "models_requested"}``
     on success and ``{"ok": False, "error", "traceback"}`` when the script raises.
@@ -287,11 +300,12 @@ async def run_script(script: Path, policy: str, answer: str, model: str = "o4-mi
     logger.propagate = False
     client = FakeLLMClient(policy)
     try:
-        evaluate_answer = load_eval_script(str(script))
-        result = await evaluate_answer(
-            client=client, answer=answer, agent_name="offline", answer_name="answer_1.md",
-            cache=SyntheticCache(), semaphore=_DualSemaphore(), logger=logger, model=model,
-        )
+        with time_machine.travel(FROZEN_NOW, tick=False):  # from loading: scripts may read the clock at import
+            evaluate_answer = load_eval_script(str(script))
+            result = await evaluate_answer(
+                client=client, answer=answer, agent_name="offline", answer_name="answer_1.md",
+                cache=SyntheticCache(), semaphore=_DualSemaphore(), logger=logger, model=model,
+            )
         tree = result["eval_breakdown"][0]["verification_tree"]
         return {
             "ok": True,
@@ -326,7 +340,8 @@ def main() -> None:
     parser.add_argument("--model", default="o4-mini")
     args = parser.parse_args()
     answer = answer_for(args.script, args.answers_dir)
-    result = asyncio.run(run_script(args.script, args.policy, answer, args.model))
+    with contextlib.redirect_stdout(sys.stderr):  # keep stdout for the result
+        result = asyncio.run(run_script(args.script, args.policy, answer, args.model))
     json.dump(result, sys.stdout, sort_keys=True)
 
 

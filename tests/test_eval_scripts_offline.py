@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import difflib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -73,3 +74,44 @@ def test_eval_script_offline(eval_script: Path, policy: str, request):
         shown = "\n".join(diff[:MAX_DIFF_LINES])
         more = f"\n... {len(diff) - MAX_DIFF_LINES} more diff lines" if len(diff) > MAX_DIFF_LINES else ""
         pytest.fail(f"rubric result changed ({golden_file.name}):\n{shown}{more}")
+
+
+CLOCK_PROBE = """\
+from datetime import date, datetime
+
+from mind2web2.evaluator import Evaluator
+from mind2web2.verification_tree import AggregationStrategy
+
+LOADED_ON = date.today().isoformat()
+
+
+async def evaluate_answer(client, answer, agent_name, answer_name, cache, semaphore, logger,
+                          model="o4-mini"):
+    print("a script may print")
+    evaluator = Evaluator()
+    root = evaluator.initialize(
+        task_id="clock_probe", strategy=AggregationStrategy.PARALLEL, agent_name=agent_name,
+        answer_name=answer_name, client=client, answer=answer, global_cache=cache,
+        global_semaphore=semaphore, logger=logger, default_model=model,
+    )
+    evaluator.add_custom_node(result=True, id=f"loaded_{LOADED_ON}", desc="date at import", parent=root)
+    evaluator.add_custom_node(result=True, id=f"ran_{datetime.now():%Y-%m-%d_%H%M}",
+                              desc="local time during the run", parent=root)
+    return evaluator.get_summary()
+"""
+
+
+def test_scripts_see_a_fixed_clock_in_utc(tmp_path):
+    """A script sees 2026-09-22 12:00 UTC, at import and while it runs, whatever the
+    host's date and time zone, and what it prints stays out of the JSON on stdout."""
+    script = tmp_path / "clock_probe.py"
+    script.write_text(CLOCK_PROBE, encoding="utf-8")
+    # 12:00 UTC is already the next day in Auckland, so a run in the host time zone fails
+    env = {**os.environ, "TZ": "Pacific/Auckland"}
+    cmd = [sys.executable, str(OFFLINE_EVAL), "--script", str(script), "--policy", "all_true"]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60, cwd=REPO_ROOT, env=env)
+    assert proc.returncode == 0, proc.stderr[-3000:]
+    result = json.loads(proc.stdout)
+    assert result["ok"], result["error"]
+    assert [child["id"] for child in result["tree"]["children"]] == [
+        "loaded_2026-09-22", "ran_2026-09-22_1200"]

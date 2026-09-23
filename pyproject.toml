@@ -47,6 +47,7 @@ code-gen = [
 [dependency-groups]
 dev = [
     "pytest>=8",
+    "time-machine>=3.5.1",
 ]
 
 # ── setuptools settings ────────────────────────────────────────────────
