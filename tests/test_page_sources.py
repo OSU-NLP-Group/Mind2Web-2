@@ -15,9 +15,9 @@ import pymupdf
 from PIL import Image
 from pydantic import BaseModel
 
-import batch_answer_cache as crawler
 from local_site import LocalSite, Route
 from mind2web2.api_tools.tool_pdf import PDFParser
+from mind2web2.crawl import cache_answers, crawl_one_page
 from mind2web2.eval_toolkit import Extractor, Verifier, empty_extraction
 from mind2web2.utils.cache_filesys import CacheFileSys
 from mind2web2.utils.page_info_retrieval import Capture
@@ -138,7 +138,7 @@ def test_evaluation_stores_live_captures_and_pdf_downloads(tmp_path):
 # ------------------------------------------------------------------ crawler
 
 def crawl(cache: CacheFileSys, browser: StubBrowser, url: str, retry_failed: bool = False) -> str:
-    return asyncio.run(crawler.crawl_one_page(url, cache, PDFParser(), browser, LOGGER, retry_failed=retry_failed))
+    return asyncio.run(crawl_one_page(url, cache, PDFParser(), browser, LOGGER, retry_failed=retry_failed))
 
 
 def test_crawler_records_failures_and_retries_them_only_when_asked(tmp_path):
@@ -170,20 +170,11 @@ def test_crawler_downloads_pdfs_and_loads_fake_pdfs_in_the_browser(tmp_path):
     assert browser.urls == [landing]
 
 
-def test_crawler_retries_failures_of_the_run_once_but_not_refusals(tmp_path, monkeypatch):
+def test_crawler_retries_failures_of_the_run_once_but_not_refusals(tmp_path):
     calls: dict[str, int] = {}
 
     class ScriptedBrowser:
         """Fails "/article" once, always refuses "/forbidden", and captures everything else."""
-
-        def __init__(self, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *exc):
-            pass
 
         async def capture(self, url, logger):
             calls[url] = calls.get(url, 0) + 1
@@ -193,19 +184,20 @@ def test_crawler_retries_failures_of_the_run_once_but_not_refusals(tmp_path, mon
                 return Capture(error="navigation failed: no response within 30s")
             return Capture(screenshot_b64=png_b64(), text=f"Page at {url}")
 
-    monkeypatch.setattr(crawler, "BatchBrowserManager", ScriptedBrowser)
     with LocalSite(PAGES) as site:
         urls = [site.url(path) for path in ("/article", "/forbidden", "/other")]
-        (tmp_path / "cache" / "agent").mkdir(parents=True)
-        (tmp_path / "cache" / "agent" / "task.json").write_text(json.dumps(
-            {"all_unique_urls": urls, "urls": {url: ["answer_1.md"] for url in urls}}))
-        asyncio.run(crawler.process_cache("agent", "task", answers_root=tmp_path / "answers",
-                                          cache_root=tmp_path / "cache", logger=LOGGER))
+        answer_dir = tmp_path / "answers" / "agent" / "task"
+        answer_dir.mkdir(parents=True)
+        (answer_dir / "answer_1.md").write_text("\n".join(urls))
+        [report] = asyncio.run(cache_answers(
+            "agent", ["task"], answers_root=tmp_path / "answers", cache_root=tmp_path / "cache",
+            browser=ScriptedBrowser(), extractor=None, logger=LOGGER, show_progress=False))
 
     cache = CacheFileSys(str(tmp_path / "cache" / "agent" / "task"))
     assert [cache.has(url) for url in urls] == ["web", None, "web"]
     assert cache.failure(urls[1])["attempts"] == 1
     assert calls == {urls[0]: 2, urls[1]: 1, urls[2]: 1}
+    assert (report.urls, dict(report.outcomes)) == (3, {"stored": 2, "blocked": 1})
     meta = json.loads((tmp_path / "cache" / "agent" / "task.json").read_text())
     assert meta["failed_urls"] == {urls[1]: "blocked: HTTP 403"}
 

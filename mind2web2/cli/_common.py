@@ -19,7 +19,7 @@ def positive_int(text: str) -> int:
 
 
 def add_agent(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("agent", help="Agent name: the agent's directory name under the answers and results directories.")
+    parser.add_argument("agent", help="Agent name: the agent's directory name under the answers, cache, and results directories.")
 
 
 def add_answers_dir(parser: argparse.ArgumentParser) -> None:
@@ -32,13 +32,42 @@ def add_results_dir(parser: argparse.ArgumentParser) -> None:
                         help="Directory the evaluation writes results to (default: %(default)s).")
 
 
+def add_cache_dir(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--cache-dir", type=Path, default=Path("cache"),
+                        help="Directory of the page caches, one per <agent>/<task_id> (default: %(default)s).")
+
+
+_TASK_LIST_HELP = ("Tasks of the split: a CSV with a task_id column (dev_set.csv / test_set.csv from the "
+                   "Hugging Face dataset), a text file with one task ID per line, or a directory of eval "
+                   "scripts. Default: the tasks the agent has answers for.")
+
+
 def add_task_selection(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--task-list", type=Path, default=None,
-                        help="Tasks of the split: a CSV with a task_id column (dev_set.csv / test_set.csv "
-                             "from the Hugging Face dataset), a text file with one task ID per line, or a "
-                             "directory of eval scripts. Default: the tasks the agent has answers for.")
+    parser.add_argument("--task-list", type=Path, default=None, help=_TASK_LIST_HELP)
     parser.add_argument("--num-runs", type=positive_int, default=None,
                         help="Runs per task (the leaderboard uses 3). Default: the highest run index found.")
+
+
+def add_task_filter(parser: argparse.ArgumentParser) -> None:
+    """``--task-list`` or ``--task``: which of the agent's tasks a command processes."""
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--task-list", type=Path, default=None, help=_TASK_LIST_HELP)
+    group.add_argument("--task", dest="tasks", action="append", metavar="TASK_ID", default=None,
+                       help="Process only this task; repeat the option for several tasks.")
+
+
+def answer_task_ids(agent_dir: Path) -> list[str]:
+    """The task directories under an agent's answers directory, sorted; empty if it does not exist."""
+    if not agent_dir.is_dir():
+        return []
+    return sorted(p.name for p in agent_dir.iterdir() if p.is_dir() and not p.name.startswith("."))
+
+
+def selected_tasks(args: argparse.Namespace, discovered: list[str]) -> list[TaskInfo]:
+    """The tasks given with ``--task``, else those of ``--task-list``, else the ``discovered`` task IDs."""
+    if args.tasks:
+        return [TaskInfo(task_id) for task_id in dict.fromkeys(args.tasks)]
+    return resolve_tasks(args.task_list, discovered)
 
 
 def resolve_tasks(task_list: Path | None, discovered: list[str]) -> list[TaskInfo]:

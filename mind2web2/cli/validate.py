@@ -29,11 +29,8 @@ def register(subparsers) -> None:
 
 def run(args: argparse.Namespace) -> int:
     agent_dir = args.answers_dir / args.agent
-    discovered = sorted(
-        p.name for p in agent_dir.iterdir() if p.is_dir() and not p.name.startswith(".")
-    ) if agent_dir.is_dir() else []
     try:
-        tasks = _common.resolve_tasks(args.task_list, discovered)
+        tasks = _common.resolve_tasks(args.task_list, _common.answer_task_ids(agent_dir))
     except (OSError, ValueError) as exc:
         print(f"Cannot read the task list: {exc}", file=sys.stderr)
         return 1

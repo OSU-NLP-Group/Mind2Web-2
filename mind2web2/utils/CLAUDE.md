@@ -36,12 +36,6 @@ task_dir/
 - Reported as failures without retrying: pages that did not load (DNS or connection errors, a download instead of a page, no response within `navigation_timeout`), refusals (`detect_block`), and HTTP 429 and 5xx error pages. Both apply only to pages with less than 3000 characters of text (`SHORT_PAGE_CHARS`): such a page is a refusal if its status is 401/403/407/999 or it reads like a bot check or access-denied notice, and an error page if its status is 429 or 5xx. A rate limit (429) is therefore an ordinary failure, which the crawler retries at the end of its run, not a refusal. A longer page is captured whatever its status, since some sites send real content with such statuses. A page still loading after `navigation_timeout` is captured as far as it loaded; pages with other statuses, such as 404, are captured as they render.
 - Waits up to 15 s for a JavaScript bot check ("Just a moment...") to pass by itself, scrolls to trigger lazy loading, and captures through CDP (a screenshot up to 6000 CSS pixels tall, and `outerHTML`).
 
-### path_config.py — Centralized Path Management
-`PathConfig` dataclass holding all project-relative directories:
-- `project_root`, `answers_root`, `eval_scripts_root`, `eval_results_root`, `cache_root`
-- `default_script_for(task_id)` → `eval_scripts/<version>/<task_id>.py`
-- `apply_overrides()`: Override any path via CLI args
-
 ### logging_setup.py — Structured Logging
 `create_logger(name, log_folder)` creates loggers with multiple handlers:
 - **JSONL file**: Machine-readable structured logs

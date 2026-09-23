@@ -1,6 +1,6 @@
 """On-disk layout of evaluation results.
 
-For every evaluated answer, ``run_eval.py`` writes::
+For every evaluated answer, evaluation (``mind2web2 evaluate``) writes::
 
     <results_root>/<agent_name>/<task_id>/<answer_base>/
     ├── <answer_name>                               # copy of the evaluated answer
@@ -37,8 +37,8 @@ def answer_output_dir(results_root: Path, agent_name: str, task_id: str, answer_
     return Path(results_root) / agent_name / task_id / answer_base(answer_name)
 
 
-def result_file_name(timestamp: str, answer_name: str, *, debug: bool = False) -> str:
-    return f"{timestamp}_{answer_name}{'_debug' if debug else ''}.json"
+def result_file_name(timestamp: str, answer_name: str) -> str:
+    return f"{timestamp}_{answer_name}.json"
 
 
 def _timestamp_of(path: Path) -> datetime:

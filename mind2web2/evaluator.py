@@ -68,8 +68,12 @@ class Evaluator:
         self._parent_child_map: dict[str, str] = {}  # Optimize parent-child relationship lookup
 
     async def close(self):
-        """Clean up resources (browser manager). Call when evaluation is done."""
-        if self.extractor and self.extractor.browser_manager:
+        """Stop the browser this evaluator created for live captures, if it created one.
+
+        A browser that was passed in, or shared through
+        :func:`mind2web2.eval_toolkit.shared_browser`, keeps running: its creator stops it.
+        """
+        if self.extractor and self.extractor.owns_browser:
             await self.extractor.browser_manager.stop()
 
     def initialize(
