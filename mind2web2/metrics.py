@@ -24,12 +24,17 @@ evaluation result, and a missing answer file does not.
 The metrics record which tasks they cover (``task_selection``), and they
 include a ``leaderboard_entry`` only when they are computed over a task list
 with exactly 3 runs, the leaderboard's setting; otherwise it is ``None``.
+
+Scores are comparable only when one judge model produced them all, so the
+metrics count the results per judge model and the report warns when there is
+more than one.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import statistics
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -54,6 +59,8 @@ class AnswerRecord:
 
     ``score`` is ``None`` when there is no answer or the answer has no
     evaluation result; ``word_count`` is ``None`` when there is no answer.
+    ``judge_model`` is the model that scored the answer, ``"unknown"`` for a
+    result that does not record it, and ``None`` without a result.
     """
 
     task_id: str
@@ -62,6 +69,7 @@ class AnswerRecord:
     score: float | None = None
     word_count: int | None = None
     time_seconds: float | None = None
+    judge_model: str | None = None
 
 
 def _mean_std(values: list[float]) -> dict:
@@ -163,8 +171,14 @@ def collect_records(
                 score=score,
                 word_count=count_words(text),
                 time_seconds=metadata.time_seconds if metadata else None,
+                judge_model=_judge_model(result) if score is not None else None,
             ))
     return records, num_runs
+
+
+def _judge_model(result: dict) -> str:
+    """The judge model recorded in a result: ``judge.model``, else ``judge_model``, else ``"unknown"``."""
+    return (result.get("judge") or {}).get("model") or result.get("judge_model") or "unknown"
 
 
 def compute_metrics(
@@ -226,6 +240,8 @@ def compute_metrics(
         "answer_length_words": (
             {**_mean_std(measured_runs), "per_run": length_per_run} if measured_runs else None
         ),
+        "judge_models": dict(sorted(Counter(
+            rec.judge_model for rec in records if rec.judge_model is not None).items())),
         "missing_answers": [
             {"task_id": rec.task_id, "run": rec.run} for rec in records if not rec.answer_present
         ],
@@ -302,8 +318,10 @@ def format_report(metrics: dict, max_listed: int = 20) -> str:
     selection = metrics["task_selection"]
     source = (f"from {selection['path']}" if selection["source"] == "task_list"
               else "that have answers")
+    judges = metrics["judge_models"]
     lines = [
-        f"Agent {metrics['agent_name']!r}: {metrics['num_tasks']} tasks ({source}) x {metrics['num_runs']} runs",
+        f"Agent {metrics['agent_name']!r}: {metrics['num_tasks']} tasks ({source}) x {metrics['num_runs']} runs, "
+        f"judged by {', '.join(judges) if judges else 'no results'}",
         f"  Partial Completion  {mean_std(metrics['partial_completion'], '.4f')}"
         f"    per run: {per_run(metrics['partial_completion']['per_run'], '.4f')}",
         f"  Success Rate        {mean_std(metrics['success_rate'], '.4f')}"
@@ -319,6 +337,11 @@ def format_report(metrics: dict, max_listed: int = 20) -> str:
     length = metrics["answer_length_words"]
     if length:
         lines.append(f"  Answer Length       {mean_std(length, '.0f')} words")
+
+    if len(judges) > 1:
+        counts = ", ".join(f"{model}: {n}" for model, n in judges.items())
+        lines.append(f"  WARNING: results come from different judge models ({counts}); "
+                     f"re-evaluate with one judge before comparing scores")
 
     if metrics["by_domain"]:
         lines.append("  By domain (Partial Completion / Success Rate):")

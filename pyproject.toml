@@ -16,8 +16,7 @@ authors = [
 
 # ── Runtime dependencies ───────────────────────────────────────────────
 dependencies = [
-    "openai",
-    "backoff",
+    "openai>=3",
     "pydantic>=2",
     "tqdm",
     "patchright>=1.58.0",
@@ -40,12 +39,6 @@ dependencies = [
 
 [project.scripts]
 mind2web2 = "mind2web2.cli:main"
-
-# ── Optional: Code generation dependencies ─────────────────────────────
-[project.optional-dependencies]
-code-gen = [
-    "anthropic[bedrock]" # Only required for code generation users
-]
 
 [dependency-groups]
 dev = [

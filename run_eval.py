@@ -11,7 +11,7 @@ from tqdm import tqdm
 from mind2web2.eval_runner import evaluate_task
 from mind2web2.metrics import collect_records, compute_metrics, format_report, save_metrics
 from mind2web2.submission import TaskInfo
-from mind2web2.llm_client.base_client import LLMClient
+from mind2web2.llm_client import DEFAULT_JUDGE_MODEL, JudgeConfig, LLMClient
 from mind2web2.utils.path_config import PathConfig
 
 
@@ -41,9 +41,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--eval_version", default="2025_07_14",
                    help="Version of evaluation scripts to use (default: 2025_07_14)")
 
-    # LLM configuration
+    # Judge configuration
     p.add_argument("--llm_provider", choices=["openai", "azure_openai"],
                    default="openai", help="LLM provider to use")
+    p.add_argument("--judge_model", default=DEFAULT_JUDGE_MODEL,
+                   help=f"Judge model; every judge request uses it (default: {DEFAULT_JUDGE_MODEL})")
+    p.add_argument("--judge_reasoning_effort", default=None,
+                   help="reasoning_effort sent with every judge request, for reasoning models "
+                        "(default: the model's own default)")
+    p.add_argument("--judge_temperature", type=float, default=None,
+                   help="temperature sent with every judge request, for non-reasoning models "
+                        "(default: not sent)")
+    p.add_argument("--judge_base_url", default=None,
+                   help="OpenAI-compatible endpoint for the openai provider, e.g. a LiteLLM proxy "
+                        "(default: $OPENAI_BASE_URL, else the OpenAI API)")
 
     # Runtime options - Concurrency control
     p.add_argument("--max_concurrent_tasks", type=int, default=3,
@@ -194,8 +205,10 @@ async def evaluate_all_tasks(
 
 async def run_evaluation(args: argparse.Namespace, paths: PathConfig):
     """Main evaluation runner."""
-    # Build async client
-    client = LLMClient(provider=args.llm_provider, is_async=True)
+    # Build async client; every judge request goes to the configured judge model
+    judge = JudgeConfig(model=args.judge_model, reasoning_effort=args.judge_reasoning_effort,
+                        temperature=args.judge_temperature)
+    client = LLMClient(provider=args.llm_provider, is_async=True, judge=judge, base_url=args.judge_base_url)
 
     # Create separate semaphores for webpage retrieval and LLM requests
     webpage_semaphore = asyncio.Semaphore(args.max_webpage_retrieval)
@@ -271,6 +284,8 @@ def main() -> None:
     logging.info(f"Eval results root: {paths.eval_results_root}")
     logging.info(f"Cache root: {paths.cache_root}")
     logging.info(f"LLM Provider: {args.llm_provider}")
+    logging.info(f"Judge: model={args.judge_model}, reasoning_effort={args.judge_reasoning_effort}, "
+                 f"temperature={args.judge_temperature}")
     logging.info("Concurrency Settings:")
     if not args.task_id:
         logging.info(f"  • Max concurrent tasks: {args.max_concurrent_tasks}")

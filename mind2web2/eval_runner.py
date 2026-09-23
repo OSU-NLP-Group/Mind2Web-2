@@ -10,6 +10,7 @@ from typing import Dict, List, Union, Optional
 from tqdm import tqdm
 
 from . import results
+from .llm_client.judge import DEFAULT_JUDGE_MODEL, JudgeError
 from .metrics import is_success
 from .submission import answer_run, list_answer_files, metadata_path
 from .utils.cache_filesys import CacheFileSys
@@ -112,8 +113,14 @@ async def _eval_one_answer(
             cache=cache,
             semaphore=dual_semaphore,
             logger=logger,
-            model="o4-mini",
+            model=_judge_model(client),
         )
+
+        # A judge request that failed for good leaves the score undetermined, even if
+        # the eval script caught the error and carried on.
+        failed_requests = (result.get("judge_usage") or {}).get("failed_requests", 0)
+        if failed_requests:
+            raise JudgeError(f"{failed_requests} judge request(s) failed; the answer is not scored")
 
         logger.info(
             f"✅ Evaluation completed with score: {result.get('final_score', 'unknown')}",
@@ -148,6 +155,12 @@ async def _eval_one_answer(
         return e
 
     return result
+
+
+def _judge_model(client) -> str:
+    """The model eval scripts are told to use: the client's judge model, if it has one."""
+    judge = getattr(client, "judge", None)
+    return judge.model if judge is not None else DEFAULT_JUDGE_MODEL
 
 
 def _save_result_json(result: Dict, agent_task_out_dir: Path, ts: str, is_debug: bool):

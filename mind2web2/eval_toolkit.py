@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 from .api_tools import tool_pdf
 from .llm_client.base_client import LLMClient
+from .llm_client.judge import DEFAULT_JUDGE_MODEL, JudgeError, JudgeUsage
 from .utils.cache_filesys import CacheFileSys
 from .utils.misc import (
     text_dedent, normalize_url_markdown
@@ -54,9 +55,10 @@ class BaseEvaluator:
             global_cache: CacheFileSys,
             global_semaphore: asyncio.Semaphore,
             logger: logging.Logger,
-            model="o4-mini",
+            model: str = DEFAULT_JUDGE_MODEL,
             config: Optional[EvaluatorConfig] = None,
             browser_manager: Optional[BatchBrowserManager] = None,
+            usage: Optional[JudgeUsage] = None,
     ) -> None:
         self.client = client
         self.task_description = task_description
@@ -66,18 +68,28 @@ class BaseEvaluator:
         self.logger = logger
         self.pdf_parser = tool_pdf.PDFParser()
         self.MODEL_NAME = model
+        self.usage = usage if usage is not None else JudgeUsage()
         self.config = config or EvaluatorConfig()
         self.browser_manager = browser_manager or BatchBrowserManager(
             headless=False, max_concurrent_pages=50, max_retries=1
         )
 
     async def call_llm_with_semaphore(self, **kwargs):
-        if "o" not in kwargs["model"]:
-            kwargs["temperature"] = 0.0
+        """Send one judge request under the LLM semaphore and record it in ``self.usage``.
+
+        Raises :class:`JudgeError` when the request fails for good; callers let it
+        propagate so that the answer is reported as not scored.
+        """
         # Use LLM semaphore if available, fallback to default semaphore
         semaphore_to_use = getattr(self.semaphore, 'llm', self.semaphore)
         async with semaphore_to_use:
-            return await self.client.async_response(**kwargs)
+            try:
+                result, tokens = await self.client.async_response(count_token=True, **kwargs)
+            except JudgeError:
+                self.usage.failed_requests += 1
+                raise
+        self.usage.record(tokens)
+        return result
 
     def _build_message_content(self, prompt: str, screenshot_b64: List[str], use_screenshot: bool = True):
         """Build message content"""
@@ -324,6 +336,11 @@ class Extractor(BaseEvaluator):
             )
 
             return result
+
+        except JudgeError as e:
+            self.logger.error(f"❌ [{op_id}] Extraction aborted, judge request failed: {e}",
+                              extra={**extract_context, "status": "judge_error", "error": str(e)})
+            raise
 
         except Exception as e:
             self.logger.error(
@@ -739,6 +756,11 @@ class Verifier(BaseEvaluator):
                 node.status = status
             raise
 
+        except JudgeError as e:
+            self.logger.error(f"[{op_id}] ❌ Verification aborted, judge request failed: {e}",
+                              extra={**verify_context, "status": "judge_error", "error": str(e)})
+            raise
+
         except Exception as e:
             status = "error"
             description = node.desc if node else "Verification failed"
@@ -899,6 +921,8 @@ class Verifier(BaseEvaluator):
             except asyncio.CancelledError:
                 self.logger.debug(f"     ⏭️ [{sub_op_id}] Verification cancelled")
                 return url, False
+            except JudgeError:
+                raise
             except Exception as e:
                 self.logger.error(f"     ❌ [{sub_op_id}] Error verifying URL: {e}")
                 return url, False
@@ -933,6 +957,12 @@ class Verifier(BaseEvaluator):
                         return True
                 except asyncio.CancelledError:
                     pass
+        except JudgeError:
+            # A failed judge request leaves the whole answer unscored; stop the other checks.
+            cancellation_event.set()
+            for t in tasks:
+                t.cancel()
+            raise
         finally:
             # Ensure all tasks are completed
             await asyncio.gather(*tasks, return_exceptions=True)
@@ -960,7 +990,7 @@ def create_evaluator(
         global_cache: CacheFileSys,
         global_semaphore: asyncio.Semaphore,
         logger: logging.Logger,
-        default_model: str = "o4-mini",
+        default_model: str = DEFAULT_JUDGE_MODEL,
         extract_model: Optional[str] = None,
         verify_model: Optional[str] = None,
         config: Optional[EvaluatorConfig] = None,
@@ -984,6 +1014,7 @@ def create_evaluator(
         "logger": logger,
         "config": config,
         "browser_manager": shared_browser,
+        "usage": JudgeUsage(),  # one answer's judge requests, shared by Extractor and Verifier
     }
 
     extractor = Extractor(**common_kwargs, model=extract_model)

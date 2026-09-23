@@ -28,8 +28,7 @@ from tqdm import tqdm
 # -------------------------------------------------------------------- #
 # Mind2Web2 imports
 # -------------------------------------------------------------------- #
-from mind2web2.llm_client.azure_openai_client import AsyncAzureOpenAIClient
-from mind2web2.llm_client.openai_client import AsyncOpenAIClient
+from mind2web2.llm_client import DEFAULT_JUDGE_MODEL, LLMClient
 from mind2web2.utils.page_info_retrieval import BatchBrowserManager
 from mind2web2.api_tools.tool_pdf import is_pdf, PDFParser
 from mind2web2.utils.cache_filesys import CacheFileSys
@@ -49,7 +48,7 @@ MAX_LLM_CONCURRENCY = 30  # Concurrent LLM calls for URL extraction
 # -------------------------------------------------------------------- #
 
 async def llm_extract_urls_with_model(
-    client: AsyncAzureOpenAIClient | AsyncOpenAIClient,
+    client: LLMClient,
     answer_text: str,
     model: str,
     llm_semaphore: asyncio.Semaphore,
@@ -58,7 +57,7 @@ async def llm_extract_urls_with_model(
     """Extract URLs using specified LLM model with enhanced prompt."""
     try:
         async with llm_semaphore:
-            result: URLs = await client.response(
+            result: URLs = await client.async_response(
                 model=model,
                 messages=[{"role": "system", "content": llm_extraction_prompts}, {"role": "user", "content": answer_text}],
                 response_format=URLs,
@@ -70,7 +69,7 @@ async def llm_extract_urls_with_model(
 
 
 async def llm_extract_urls_multi_model(
-    client: AsyncAzureOpenAIClient | AsyncOpenAIClient,
+    client: LLMClient,
     answer_text: str,
     llm_semaphore: asyncio.Semaphore,
     logger: Logger,
@@ -78,7 +77,7 @@ async def llm_extract_urls_multi_model(
 ) -> List[str]:
     """Extract URLs using multiple LLM models concurrently and merge results."""
     if models is None:
-        models = ["o4-mini", "gpt-4.1"]
+        models = [DEFAULT_JUDGE_MODEL, "gpt-4.1"]
 
     # Run all models concurrently
     tasks = [
@@ -135,7 +134,7 @@ def filter_url_variants(urls: List[str], priorities: Dict[str, int] | None = Non
 
 
 async def extract_from_file(
-    client: AsyncAzureOpenAIClient | AsyncOpenAIClient | None,
+    client: LLMClient | None,
     ans_path: Path,
     rel_source: str,
     llm_semaphore: asyncio.Semaphore,
@@ -309,13 +308,7 @@ async def process_cache(
         all_unique_urls: List[str] = data["all_unique_urls"]
         meta_data = data
     else:
-        # Initialize LLM client based on provider
-        if llm_provider == "openai":
-            client = AsyncOpenAIClient()
-        elif llm_provider == "azure_openai":
-            client = AsyncAzureOpenAIClient()
-        else:
-            raise ValueError(f"Unsupported LLM provider: {llm_provider}")
+        client = LLMClient(provider=llm_provider, is_async=True)
         url_meta: Dict[str, List[str]] = {}
 
         # All .md answer files

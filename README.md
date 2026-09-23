@@ -118,11 +118,14 @@ Each `answer_<k>.md` file contains your agent's response for run `k` (1, 2, 3, .
 
 ### 2. Set up API Keys
 
-Configure the necessary API keys for evaluation:
+The judge is an OpenAI model, `gpt-6-luna` by default (see `--judge_model` below). Configure the necessary API keys for evaluation:
 
 ```bash
 # Set up environment variables for OpenAI API
 export OPENAI_API_KEY="YOUR_OPENAI_KEY"
+
+# (Optional) Send judge requests to an OpenAI-compatible server instead, e.g. a LiteLLM proxy
+export OPENAI_BASE_URL="http://localhost:4000"
 
 # (Optional) Environment variables for Azure OpenAI
 export AZURE_OPENAI_API_KEY="YOUR_AZURE_OPENAI_API_KEY"
@@ -188,6 +191,10 @@ python run_eval.py --agent_name example --task_id yu_lineage
 - `--eval_version`: Version of evaluation scripts to use (default: `2025_07_14`)
 - `--task_id`: Specific task to evaluate (optional, evaluates all tasks if not provided)
 - `--llm_provider`: LLM provider (`openai` or `azure_openai`, default: `openai`)
+- `--judge_model`: Judge model; every judge request uses it, whatever model an eval script names (default: `gpt-6-luna`). The paper's results were judged by `o4-mini`; scores from different judges are not directly comparable.
+- `--judge_reasoning_effort`: `reasoning_effort` for reasoning-model judges (default: the model's own default)
+- `--judge_temperature`: `temperature` for non-reasoning judges such as `gpt-4.1` (default: not sent)
+- `--judge_base_url`: OpenAI-compatible endpoint for the `openai` provider (default: `$OPENAI_BASE_URL`, else the OpenAI API)
 - `--max_concurrent_tasks`: Maximum concurrent task evaluations (default: 2)
 - `--max_concurrent_answers`: Maximum concurrent answer evaluations per task (default: 3)
 - `--max_webpage_retrieval`: Maximum concurrent webpage retrievals (default: 5)
@@ -207,7 +214,7 @@ uv run mind2web2 metrics <your_agent_name>
 uv run mind2web2 metrics <your_agent_name> --task-list test_set.csv --num-runs 3
 ```
 
-The command reports the metrics of the paper and the leaderboard. Run `k` consists of the `answer_<k>.md` files, and a task's score is the root score of its rubric tree, between 0 and 1.
+The command reports the metrics of the paper and the leaderboard. Run `k` consists of the `answer_<k>.md` files, and a task's score is the root score of its rubric tree, between 0 and 1. Scores are comparable only when one judge model produced them all; every result records its judge, and the report warns when the results mix judges.
 
 | Metric | Definition |
 | --- | --- |
@@ -217,7 +224,7 @@ The command reports the metrics of the paper and the leaderboard. Run `k` consis
 | Time (min) | Mean inference time in minutes, from `time_seconds` in `answer_<k>.meta.json`, over the answers of a run that report it |
 | Answer Length | Mean number of words (whitespace-separated tokens) in the answers of a run |
 
-Every metric except Pass@k is computed per run and reported as the mean ± population standard deviation over runs. The number of runs k is the highest run index among the answers unless `--num-runs` is given. An answer that is missing, or that has no evaluation result (for example because its evaluation failed), counts as a score of 0 in Partial Completion, Success Rate, and Pass@k, and the report lists each one so that it can be fixed and re-evaluated; Time and Answer Length are averaged over the answers that exist. The metrics are also saved to `eval_results/<agent_name>/metrics.json`, together with the tasks they cover, per-run, per-task, and per-domain breakdowns (domains come from the CSV task list), and a `leaderboard_entry` block in the leaderboard's format. The leaderboard entry is written only for metrics over a task list with 3 runs; without `--task-list` the metrics cover the tasks the agent has answers for, and the entry is `null`.
+Every metric except Pass@k is computed per run and reported as the mean ± population standard deviation over runs. The number of runs k is the highest run index among the answers unless `--num-runs` is given. An answer that is missing, or that has no evaluation result, counts as a score of 0 in Partial Completion, Success Rate, and Pass@k, and the report lists each one so that it can be fixed and re-evaluated; Time and Answer Length are averaged over the answers that exist. An answer has no result when its evaluation failed, including when a judge request still failed after retries: such an answer is left unscored rather than marked wrong, and running `run_eval.py` again evaluates it. The metrics are also saved to `eval_results/<agent_name>/metrics.json`, together with the tasks they cover, per-run, per-task, and per-domain breakdowns (domains come from the CSV task list), and a `leaderboard_entry` block in the leaderboard's format. The leaderboard entry is written only for metrics over a task list with 3 runs; without `--task-list` the metrics cover the tasks the agent has answers for, and the entry is `null`.
 
 ## 🧪 Development
 

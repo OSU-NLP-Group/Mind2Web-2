@@ -8,6 +8,7 @@ from typing import List, Optional, Union, Type, Tuple, Any
 from pydantic import BaseModel
 
 from .eval_toolkit import create_evaluator, Extractor, Verifier
+from .llm_client.judge import DEFAULT_JUDGE_MODEL
 from .verification_tree import VerificationNode, AggregationStrategy
 
 class SourceKind(Enum):
@@ -56,6 +57,7 @@ class Evaluator:
         self._answer_name: Optional[str] = None
         self._judge_model: Optional[str] = None
         self._extract_model: Optional[str] = None
+        self._judge_config: Optional[dict] = None
         self._extraction_results: List[dict] = []
         self._ground_truth_info: List[dict] = []
         self._custom_info: List[dict] = []
@@ -113,10 +115,16 @@ class Evaluator:
         # Create extractor and verifier
         self.extractor, self.verifier = create_evaluator(**evaluator_kwargs)
 
-        # Record model information
-        default_model = evaluator_kwargs.get('default_model', 'o4-mini')
-        self._judge_model = evaluator_kwargs.get('verify_model', default_model)
-        self._extract_model = evaluator_kwargs.get('extract_model', default_model)
+        # Record model information.  A client with a judge configuration sends every
+        # request to the judge model, whatever model the eval script names.
+        judge = getattr(evaluator_kwargs.get('client'), 'judge', None)
+        if judge is not None:
+            self._judge_model = self._extract_model = judge.model
+            self._judge_config = judge.describe()
+        else:
+            default_model = evaluator_kwargs.get('default_model', DEFAULT_JUDGE_MODEL)
+            self._judge_model = evaluator_kwargs.get('verify_model', default_model)
+            self._extract_model = evaluator_kwargs.get('extract_model', default_model)
 
         return self.root
 
@@ -752,6 +760,9 @@ class Evaluator:
             "final_score": self.score(),
             "judge_model": self._judge_model,
             "extract_model": self._extract_model,
+            "judge": self._judge_config,
+            # Judge requests made for this answer (Extractor and Verifier share one record)
+            "judge_usage": self.extractor.usage.as_dict(),
             "eval_breakdown": [
                 {
                     "info": info_list,
