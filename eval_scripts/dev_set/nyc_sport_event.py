@@ -160,11 +160,18 @@ async def verify_event(
     index: int,
 ) -> None:
     """
-    Verify all aspects of a single event using the new pattern.
-    Each event_node is parallel with one critical node for essential checks 
-    and four non-critical nodes for location, time, ticket, and travel info.
+    Verify all aspects of a single event.
+
+    The event node is sequential with two steps. The first step holds the
+    essential checks, all critical: the event has a name and source URLs, is a
+    sports or music event, is within the next two months, and is in New York
+    City. The second step holds four non-critical categories, each passed or
+    failed as a whole: location, date and time, tickets, and travel time.
+    The second step counts only when every essential check passes, so an event
+    scores 0 when an essential check fails, and otherwise 0.5 plus half the
+    fraction of the four categories that pass.
     """
-    # Create a parallel parent for this event
+    # A sequential parent: the categories count only after the essential checks pass
     event_node = evaluator.add_sequential(
         id=f"event_{index}",
         desc=f"Event #{index+1}: {event.name or 'Unnamed event'} - All required information is correct and substantiated",
