@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from mind2web2.utils.url_tools import normalize_url_simple, regex_find_urls
+from mind2web2.utils.url_tools import normalize_url_keep_case, normalize_url_simple, regex_find_urls
 
 
 @pytest.mark.parametrize("text, expected", [
@@ -65,3 +65,16 @@ def test_normalized_form_ignores_surface_differences():
     ]
     assert {normalize_url_simple(u) for u in forms} == {"https://example.com/page"}
     assert normalize_url_simple("https://example.com/p?id=1&utm_medium=x") == "https://example.com/p?id=1"
+
+
+def test_the_crawl_form_ignores_the_same_differences_but_keeps_letter_case():
+    same_page = [
+        "https://example.com/Page",
+        "http://www.example.com/Page/",
+        "https://example.com/Page?utm_source=chatgpt.com#section",
+        "https://example.com/%50age",
+    ]
+    assert {normalize_url_keep_case(u) for u in same_page} == {"https://example.com/Page"}
+    assert normalize_url_keep_case("https://example.com/page?q=A") == "https://example.com/page?q=A"
+    for url in same_page + ["https://EXAMPLE.com/p?Q=A#Top"]:
+        assert normalize_url_simple(url) == normalize_url_keep_case(url).lower()

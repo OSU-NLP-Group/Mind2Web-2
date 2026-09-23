@@ -179,6 +179,7 @@ def test_evaluate_scores_every_answer_and_saves_the_metrics(tmp_path, run_evalua
     judge_x = ("--judge-model", "judge-x", "--judge-reasoning-effort", "low")
     assert run_evaluate(*judge_x, "--max-pages", "2") == 0
     out = capsys.readouterr().out
+    assert "(judge: judge-x, reasoning_effort: low, temperature: not sent)" in out
     assert "t1: 2/2 answers scored, mean score 1.000" in out and "t2: 2/2 answers scored" in out
     assert FakeJudge.instances[-1].kwargs["judge"] == JudgeConfig(model="judge-x", reasoning_effort="low")
     [browser] = [b for b in RecordingBrowser.instances if b.kwargs.get("max_concurrent_pages") == 2]
@@ -229,9 +230,51 @@ def test_evaluate_without_a_task_selection_skips_tasks_without_eval_scripts(tmp_
     assert "None of the 2 tasks that agent 'agent' has answers for has an eval script" in capsys.readouterr().err
 
 
-def test_evaluate_exits_with_2_when_the_task_list_cannot_be_read(tmp_path, run_evaluate, capsys):
-    assert run_evaluate("--task-list", str(tmp_path / "missing.csv")) == 2
+def test_evaluate_leaves_directories_without_answer_files_out_of_the_default_selection(tmp_path, run_evaluate,
+                                                                                      capsys):
+    old_layout = tmp_path / "answers" / "agent" / "t3"
+    old_layout.mkdir()
+    (old_layout / "answer1.md").write_text("Source: https://a.example/1")
+    (tmp_path / "scripts" / "2025_10_23" / "t3.py").write_text(TOY_SCRIPT)
+    assert run_evaluate() == 0
+    assert "Skipping 1 tasks that have no answer_<k>.md files" in capsys.readouterr().out
+    metrics = json.loads((tmp_path / "results" / "agent" / "metrics.json").read_text())
+    assert (metrics["num_tasks"], metrics["missing_answers"]) == (2, [])
+
+
+def test_evaluate_scores_the_given_number_of_runs(tmp_path, run_evaluate, capsys):
+    assert run_evaluate() == 0
+    assert "Scored 2 runs, the highest run index found; pass --num-runs 3" in capsys.readouterr().out
+    assert run_evaluate("--num-runs", "3") == 0
+    assert "--num-runs" not in capsys.readouterr().out
+    metrics = json.loads((tmp_path / "results" / "agent" / "metrics.json").read_text())
+    assert (metrics["num_runs"], metrics["missing_answers"]) == (3, [{"task_id": "t1", "run": 3},
+                                                                    {"task_id": "t2", "run": 3}])
+
+
+def test_evaluate_exits_with_1_when_the_task_list_cannot_be_read(tmp_path, run_evaluate, capsys):
+    assert run_evaluate("--task-list", str(tmp_path / "missing.csv")) == 1
     assert "Cannot read the task list" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("option", ["--max-tasks", "--max-answers", "--max-pages", "--max-llm-requests",
+                                    "--num-runs"])
+def test_evaluate_counts_must_be_at_least_1(option, capsys):
+    with pytest.raises(SystemExit) as exc:
+        cli.build_parser().parse_args(["evaluate", "agent", option, "0"])
+    assert exc.value.code == 2 and "must be at least 1" in capsys.readouterr().err
+
+
+def test_each_command_states_its_default_task_selection(capsys):
+    helps = {}
+    for command in ("validate", "cache", "evaluate", "metrics"):
+        with pytest.raises(SystemExit):
+            cli.main([command, "--help"])
+        helps[command] = " ".join(capsys.readouterr().out.split())
+    assert "Default: the task directories under <answers-dir>/<agent>/." in helps["validate"]
+    assert "Default: the tasks the agent has answers for (task directories" in helps["cache"]
+    assert "with answer_<k>.md files) that have an eval script in the eval-script version." in helps["evaluate"]
+    assert "or under <results-dir>/<agent>/ when the agent has no answers directory." in helps["metrics"]
 
 
 def test_evaluate_selects_tasks(tmp_path, run_evaluate, capsys):
@@ -242,7 +285,7 @@ def test_evaluate_selects_tasks(tmp_path, run_evaluate, capsys):
     task_list = tmp_path / "split.csv"
     task_list.write_text("task_id,task_description,domain,subdomain\nt1,d,A,x\nt2,d,A,x\nt3,d,B,y\n")
     assert run_evaluate("--task-list", str(task_list)) == 0
-    assert "Skipping 1 selected tasks that have no answers" in capsys.readouterr().out
+    assert "Skipping 1 tasks that have no answer_<k>.md files" in capsys.readouterr().out
     metrics = json.loads((tmp_path / "results" / "agent" / "metrics.json").read_text())
     assert metrics["num_tasks"] == 3 and metrics["missing_answers"] == [{"task_id": "t3", "run": 1},
                                                                        {"task_id": "t3", "run": 2}]

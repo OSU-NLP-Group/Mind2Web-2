@@ -49,7 +49,8 @@ Custom formatters:
 - `CompactJsonFormatter`: Compact JSONL for machine parsing
 
 ### url_tools.py — URL Normalization & Extraction
-- `normalize_url_simple(url)`: The form under which two URLs are the same page, for cache lookups and crawl deduplication (UTM parameters and fragment removed, percent-decoded, trailing slash removed, `https`, no `www.`, lowercased)
+- `normalize_url_simple(url)`: The form under which two URLs are the same page for cache lookups (UTM parameters and fragment removed, percent-decoded, trailing slash removed, `https`, no `www.`, lowercased)
+- `normalize_url_keep_case(url)`: The same form without the lowercasing, under which the crawler merges spellings of one page; paths that differ in letter case can be different pages
 - `remove_utm_parameters(url)`: Strip all `utm_*` query params
 - `normalize_url_for_browser(url)`: Ensure URL has protocol for navigation
 - `regex_find_urls(text)`: `http(s)://` and `www.` URLs in Markdown or plain text, in order of appearance; keeps balanced parentheses and brackets (Wikipedia titles, `?filter[type]=x`) and `|`, removes Markdown escapes, emphasis delimiters, and trailing punctuation, stops at CJK punctuation

@@ -37,21 +37,29 @@ def add_cache_dir(parser: argparse.ArgumentParser) -> None:
                         help="Directory of the page caches, one per <agent>/<task_id> (default: %(default)s).")
 
 
-_TASK_LIST_HELP = ("Tasks of the split: a CSV with a task_id column (dev_set.csv / test_set.csv from the "
-                   "Hugging Face dataset), a text file with one task ID per line, or a directory of eval "
-                   "scripts. Default: the tasks the agent has answers for.")
+def _task_list_help(default: str) -> str:
+    return ("Tasks of the split: a CSV with a task_id column (dev_set.csv / test_set.csv from the Hugging Face "
+            "dataset), a text file with one task ID per line, or a directory of eval scripts. "
+            f"Default: {default}.")
 
 
-def add_task_selection(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--task-list", type=Path, default=None, help=_TASK_LIST_HELP)
+def add_task_selection(parser: argparse.ArgumentParser, default: str) -> None:
+    """``--task-list`` and ``--num-runs``.
+
+    ``default`` says which tasks the command processes without ``--task-list``.
+    """
+    parser.add_argument("--task-list", type=Path, default=None, help=_task_list_help(default))
     parser.add_argument("--num-runs", type=positive_int, default=None,
                         help="Runs per task (the leaderboard uses 3). Default: the highest run index found.")
 
 
-def add_task_filter(parser: argparse.ArgumentParser) -> None:
-    """``--task-list`` or ``--task``: which of the agent's tasks a command processes."""
+def add_task_filter(parser: argparse.ArgumentParser, default: str) -> None:
+    """``--task-list`` or ``--task``: which of the agent's tasks a command processes.
+
+    ``default`` says which tasks the command processes without either option.
+    """
     group = parser.add_mutually_exclusive_group()
-    group.add_argument("--task-list", type=Path, default=None, help=_TASK_LIST_HELP)
+    group.add_argument("--task-list", type=Path, default=None, help=_task_list_help(default))
     group.add_argument("--task", dest="tasks", action="append", metavar="TASK_ID", default=None,
                        help="Process only this task; repeat the option for several tasks.")
 

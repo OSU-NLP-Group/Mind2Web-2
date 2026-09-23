@@ -1,4 +1,4 @@
-"""URL extraction from answer text, and the URL normalization shared by the page cache and the crawler."""
+"""URL extraction from answer text, and the URL normalizations of the page cache and the crawler."""
 import re
 from typing import List, Optional
 from urllib.parse import urldefrag, unquote, urlparse, parse_qs, urlencode, urlunparse
@@ -42,12 +42,24 @@ def remove_utm_parameters(url: str) -> str:
 
 
 def normalize_url_simple(url: str) -> str:
-    """The form under which two URLs count as the same page for cache lookups and crawl deduplication.
+    """The form under which two URLs count as the same page for cache lookups.
 
     UTM parameters and the fragment are removed, the URL is percent-decoded,
     a trailing slash is removed, ``http`` becomes ``https``, ``www.`` is
-    dropped, and the result is lowercased.  UTM parameters are removed both
-    before and after decoding, so encoded ones are removed too.
+    dropped, and the result is lowercased: it is
+    :func:`normalize_url_keep_case`, lowercased.
+    """
+    return normalize_url_keep_case(url).lower()
+
+
+def normalize_url_keep_case(url: str) -> str:
+    """The form under which the crawler merges spellings of one page; it keeps the letter case of the URL.
+
+    UTM parameters and the fragment are removed, the URL is percent-decoded,
+    a trailing slash is removed, ``http`` becomes ``https``, and ``www.`` is
+    dropped.  UTM parameters are removed both before and after decoding, so
+    encoded ones are removed too.  Letter case is kept because a server may
+    serve different pages for paths that differ only in case.
     """
 
     url=remove_utm_parameters(url)
@@ -86,7 +98,7 @@ def normalize_url_simple(url: str) -> str:
     if '://www.' in decoded:
         decoded = decoded.replace('://www.', '://')
 
-    return decoded.lower()
+    return decoded
 
 
 

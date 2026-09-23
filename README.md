@@ -50,10 +50,10 @@ If you choose to submit your agent's answer, please arrange your agent's respons
    └── ...
    ```
 
-Each `answer_<k>.md` is one independent run of your agent on the task; the leaderboard uses three runs, `answer_1.md` to `answer_3.md`. The optional `answer_<k>.meta.json` records the wall-clock time the run took, in seconds. Check the layout before submitting (the task lists `dev_set.csv` and `test_set.csv` come with the [dataset](https://huggingface.co/datasets/osunlp/Mind2Web-2)):
+Each `answer_<k>.md` is one independent run of your agent on the task; the leaderboard uses three runs, `answer_1.md` to `answer_3.md`. The optional `answer_<k>.meta.json` records the wall-clock time the run took, in seconds. Check the layout before submitting (the task lists `dev_set.csv` and `test_set.csv` come with the [dataset](https://huggingface.co/datasets/osunlp/Mind2Web-2); the commands in this README expect it in `osunlp/Mind2Web-2/`, where the download command in [Run Evaluation](#4-run-evaluation) puts it):
 
    ```bash
-   uv run mind2web2 validate <agent_name> --task-list test_set.csv --num-runs 3
+   uv run mind2web2 validate <agent_name> --task-list osunlp/Mind2Web-2/test_set.csv --num-runs 3
    ```
 
 It reports tasks or runs without an answer, empty answers, answers that cite no URL, files that evaluation would ignore, and invalid metadata. It looks for `<agent_name>` under `answers/`; pass `--answers-dir <dir>` if the directory is elsewhere.
@@ -146,7 +146,7 @@ The commands below run as `uv run mind2web2 <command>`; in an activated environm
 uv run mind2web2 cache <your_agent_name>
 ```
 
-The command extracts the URLs of every answer with a regular expression and two LLMs (`gpt-6-luna` and `gpt-4.1`, which recover URLs written without a scheme or split across lines; `--no-llm` uses the regular expression alone and needs no API key). It stores each page in `cache/<your_agent_name>/<task_id>/`, as text and a screenshot, or as the PDF. URLs are merged across a task's answers, so a page that several answers cite, even spelled differently, is captured once. Each task's URL list is saved in `cache/<your_agent_name>/<task_id>.json` and reused while the task's answers and the URL-extraction models are unchanged; a list made while an LLM request failed is extracted again on the next run, and `--refresh-urls` forces a new extraction. All tasks share one browser with at most five pages open (`--max-pages`). At the end it prints, for each task, how many URLs were already cached, newly stored, or could not be captured. The command can be run again at any time, for example after adding answers: cached URLs are skipped, and a URL whose capture failed is recorded and tried again only with `--retry-failed`. Run `uv run mind2web2 cache --help` for all options.
+The command extracts the URLs of every answer with a regular expression and two LLMs (`gpt-6-luna` and `gpt-4.1`, which recover URLs written without a scheme or split across lines; `--no-llm` uses the regular expression alone and needs no API key). It stores each page in `cache/<your_agent_name>/<task_id>/`, as text and a screenshot, or as the PDF. Spellings of a URL that differ only in scheme, `www.`, a trailing slash, the fragment, or UTM parameters are merged across a task's answers, so a page that several answers cite is captured once, and if its capture fails, its other spellings are tried; spellings that differ in letter case are captured separately, since they can be different pages. Each task's URL list is saved in `cache/<your_agent_name>/<task_id>.json` and reused while the task's answers and the URL-extraction models are unchanged; a list made while an LLM request failed is extracted again on the next run, and `--refresh-urls` forces a new extraction. Task directories without `answer_<k>.md` files are skipped. All tasks share one browser with at most five pages open (`--max-pages`). At the end it prints, for each task, how many URLs were already cached, newly stored, or could not be captured, and it marks tasks whose URL extraction was incomplete. The command can be run again at any time, for example after adding answers: cached URLs are skipped, and a URL whose capture failed is recorded and tried again only with `--retry-failed`. Run `uv run mind2web2 cache --help` for all options.
 
 Some pages may fail to cache automatically due to CAPTCHAs, anti-bot protection, or login walls. We provide a **[Cache Manager](cache_manager_web/)** web tool to review and **batch-fix** these issues — it auto-detects problematic pages and lets you recapture all flagged URLs in one click using a Chrome Extension.
 
@@ -178,13 +178,14 @@ uv run mind2web2 evaluate <your_agent_name>
 
 # Test-set tasks, with the downloaded scripts; the metrics cover the whole split
 uv run mind2web2 evaluate <your_agent_name> \
-    --eval-scripts-dir osunlp/Mind2Web-2/evaluation_scripts --task-list osunlp/Mind2Web-2/test_set.csv
+    --eval-scripts-dir osunlp/Mind2Web-2/evaluation_scripts \
+    --task-list osunlp/Mind2Web-2/test_set.csv --num-runs 3
 
 # A single task
 uv run mind2web2 evaluate example --task yu_lineage
 ```
 
-Each task's eval script scores every `answer_<k>.md` of the task, and each result is saved under `eval_results/<your_agent_name>/<task_id>/`. Eval scripts are released in version directories named by date, such as `evaluation_scripts/2025_10_23/`; the newest version is used unless `--eval-version` names another. Without `--task-list` or `--task`, the command evaluates the tasks that have both answers and an eval script, and says how many answered tasks it skipped for lack of a script; with either option, a selected task without an eval script leaves its answers unscored. Pages come from the cache, and a page missing from it is captured live and added to it. An answer whose latest result scored the same answer file with the same judge configuration is not evaluated again unless `--overwrite`, so after an interruption or a failure, running the command again evaluates only the answers without such a result. The command ends with one line per task (answers scored, mean score) and the metrics of the next section, and it exits with status 1 if some answer has no result.
+Each task's eval script scores every `answer_<k>.md` of the task, and each result is saved under `eval_results/<your_agent_name>/<task_id>/`. Eval scripts are released in version directories named by date, such as `evaluation_scripts/2025_10_23/`; the newest version is used unless `--eval-version` names another. Without `--task-list` or `--task`, the command evaluates the tasks that have both answers and an eval script, and says how many answered tasks it skipped for lack of a script; with either option, a selected task without an eval script leaves its answers unscored. Pages come from the cache, and a page missing from it is captured live and added to it. An answer whose latest result scored the same answer file with the same judge configuration, eval script, and evaluator settings is not evaluated again unless `--overwrite`, so after an interruption or a failure, running the command again evaluates only the answers without such a result. The command ends with one line per task (answers scored, mean score) and the metrics of the next section, and it exits with status 1 if some answer has no result.
 
 The main options; run `uv run mind2web2 evaluate --help` for all options and their defaults:
 
@@ -192,6 +193,7 @@ The main options; run `uv run mind2web2 evaluate --help` for all options and the
 - `--judge-reasoning-effort`: `reasoning_effort` for reasoning-model judges (default: the model's own default)
 - `--judge-temperature`: `temperature` for non-reasoning judges such as `gpt-4.1` (default: not sent)
 - `--llm-provider`: `openai` or `azure_openai`; `--judge-base-url` sends the `openai` provider's requests to an OpenAI-compatible endpoint (default: `$OPENAI_BASE_URL`, else the OpenAI API)
+- `--num-runs`: runs per task in the metrics printed at the end (default: the highest run index found; the leaderboard uses 3). Every answer is evaluated regardless.
 - `--max-tasks`, `--max-answers`, `--max-pages`, `--max-llm-requests`: tasks, answers per task, live page captures, and judge requests processed at once
 - `--headless`: capture live pages in a browser without a window
 - `--answers-dir`, `--cache-dir`, `--results-dir`, `--eval-scripts-dir`: where answers, the cache, results, and eval-script versions are (default: `answers/`, `cache/`, `eval_results/`, `eval_scripts/`)
@@ -206,7 +208,7 @@ The main options; run `uv run mind2web2 evaluate --help` for all options and the
 uv run mind2web2 metrics <your_agent_name>
 
 # Over a full split with the leaderboard's three runs: missing answers and results count as 0
-uv run mind2web2 metrics <your_agent_name> --task-list test_set.csv --num-runs 3
+uv run mind2web2 metrics <your_agent_name> --task-list osunlp/Mind2Web-2/test_set.csv --num-runs 3
 ```
 
 The command reports the metrics of the paper and the leaderboard. Run `k` consists of the `answer_<k>.md` files, and a task's score is the root score of its rubric tree, between 0 and 1. Scores are comparable only when one judge model produced them all; every result records its judge, and the report warns when the results mix judges.

@@ -23,7 +23,7 @@ def register(subparsers) -> None:
     )
     _common.add_agent(parser)
     _common.add_answers_dir(parser)
-    _common.add_task_selection(parser)
+    _common.add_task_selection(parser, default="the task directories under <answers-dir>/<agent>/")
     parser.set_defaults(run=run)
 
 

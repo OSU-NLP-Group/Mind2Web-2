@@ -9,23 +9,25 @@ fills; a page missing from the cache is captured live and stored.  All live
 captures of a run share one browser with at most ``--max-pages`` pages open.
 
 An answer is not evaluated again when its latest result scored the same
-answer file with the same judge configuration, unless ``--overwrite``; before
-an answer is evaluated again, its earlier results move to
-``results/superseded/``.  Selected tasks without answers are skipped.
+answer file with the same judge configuration, the same eval script, and the
+same evaluator settings, unless ``--overwrite``; changes to the cached pages
+are not detected.  Before an answer is evaluated again, its earlier results
+move to ``results/superseded/``.  Selected tasks without answers are skipped.
 
 Without ``--task-list`` or ``--task``, the tasks are those the agent has
-answers for and the eval-script version has scripts for; the others are
-counted and skipped, since an agent's answers may cover tasks whose scripts
-are not available locally.  With either option, a selected task without an
-eval script is an error.  Unless ``--task`` selects tasks, the run ends by
-printing and saving the metrics over the selected tasks, exactly as
-``mind2web2 metrics`` computes them.
+answers for (task directories with ``answer_<k>.md`` files) and the
+eval-script version has scripts for; the others are counted and skipped, since
+an agent's answers may cover tasks whose scripts are not available locally.
+With either option, a selected task without an eval script is an error.
+Unless ``--task`` selects tasks, the run ends by printing and saving the
+metrics over the selected tasks with ``--num-runs`` runs per task (by default
+the highest run index found), exactly as ``mind2web2 metrics`` computes them.
 
 Exits with status 0 when every answer of the selected tasks has a result; 1
 when some answer has none, because its evaluation raised, a judge request
-failed for good, or its task has no eval script; and 2 when the task list
-cannot be read, no eval-script version matches, or the judge client cannot be
-created.
+failed for good, or its task has no eval script, and when no selected task has
+answers or the task list cannot be read; and 2 when no eval-script version
+matches or the judge client cannot be created.
 """
 from __future__ import annotations
 
@@ -62,7 +64,12 @@ def register(subparsers) -> None:
     parser.add_argument("--eval-version", default=None,
                         help="Version (subdirectory) of the eval scripts. Default: the newest dated version "
                              "(YYYY_MM_DD), or the only version if none is dated.")
-    _common.add_task_filter(parser)
+    _common.add_task_filter(parser, default="the tasks the agent has answers for (task directories under "
+                                            "<answers-dir>/<agent>/ with answer_<k>.md files) that have an "
+                                            "eval script in the eval-script version")
+    parser.add_argument("--num-runs", type=_common.positive_int, default=None,
+                        help="Runs per task in the metrics printed at the end (the leaderboard uses 3); every "
+                             "answer is evaluated regardless. Default: the highest run index found.")
 
     judge = parser.add_argument_group("judge")
     judge.add_argument("--llm-provider", choices=["openai", "azure_openai"], default="openai",
@@ -81,19 +88,20 @@ def register(subparsers) -> None:
                             "(default: $OPENAI_BASE_URL, else the OpenAI API).")
 
     runtime = parser.add_argument_group("runtime")
-    runtime.add_argument("--max-tasks", type=int, default=3,
+    runtime.add_argument("--max-tasks", type=_common.positive_int, default=3,
                          help="Tasks evaluated at once (default: %(default)s).")
-    runtime.add_argument("--max-answers", type=int, default=3,
+    runtime.add_argument("--max-answers", type=_common.positive_int, default=3,
                          help="Answers of one task evaluated at once (default: %(default)s).")
-    runtime.add_argument("--max-pages", type=int, default=5,
+    runtime.add_argument("--max-pages", type=_common.positive_int, default=5,
                          help="Pages captured live at once, across the run (default: %(default)s).")
-    runtime.add_argument("--max-llm-requests", type=int, default=30,
+    runtime.add_argument("--max-llm-requests", type=_common.positive_int, default=30,
                          help="Judge requests in flight at once (default: %(default)s).")
     runtime.add_argument("--headless", action="store_true",
                          help="Capture live pages in a browser without a window.")
     runtime.add_argument("--overwrite", action="store_true",
                          help="Evaluate answers again even if their latest result scored the same answer "
-                              "with the same judge (earlier results move to results/superseded/).")
+                              "file with the same judge, eval script, and evaluator settings (earlier "
+                              "results move to results/superseded/).")
     parser.set_defaults(run=run)
 
 
@@ -108,29 +116,29 @@ def run(args: argparse.Namespace) -> int:
         tasks = _common.selected_tasks(args, _common.answer_task_ids(agent_dir))
     except (OSError, ValueError) as exc:
         print(f"Cannot read the task list: {exc}", file=sys.stderr)
-        return 2
+        return 1
+    answered = [t.task_id for t in tasks if list_answer_files(agent_dir / t.task_id)]
+    unanswered = len(tasks) - len(answered)
     without_script = 0
     if args.task_list is None and not args.tasks:
-        with_script = [t for t in tasks if (scripts_dir / f"{t.task_id}.py").is_file()]
-        without_script, tasks = len(tasks) - len(with_script), with_script
-    answered = [t.task_id for t in tasks if list_answer_files(agent_dir / t.task_id)]
+        # The default selection, over which the metrics are computed: the tasks with answers and an eval script.
+        tasks = [t for t in tasks if t.task_id in answered and (scripts_dir / f"{t.task_id}.py").is_file()]
+        without_script, answered = len(answered) - len(tasks), [t.task_id for t in tasks]
     if not answered:
         if without_script:
             print(f"None of the {without_script} tasks that agent {args.agent!r} has answers for has an eval "
                   f"script in {scripts_dir}.", file=sys.stderr)
         else:
-            print(f"No answers found for the selected tasks of agent {args.agent!r} under {args.answers_dir}.",
-                  file=sys.stderr)
+            print(f"No answer_<k>.md files found for the selected tasks of agent {args.agent!r} under "
+                  f"{args.answers_dir}.", file=sys.stderr)
         return 1
     missing = [task_id for task_id in answered if not (scripts_dir / f"{task_id}.py").is_file()]
     scripts = {task_id: scripts_dir / f"{task_id}.py" for task_id in answered if task_id not in missing}
 
+    judge = JudgeConfig(model=args.judge_model, reasoning_effort=args.judge_reasoning_effort,
+                        temperature=args.judge_temperature)
     try:
-        client = LLMClient(
-            provider=args.llm_provider, is_async=True, base_url=args.judge_base_url,
-            judge=JudgeConfig(model=args.judge_model, reasoning_effort=args.judge_reasoning_effort,
-                              temperature=args.judge_temperature),
-        )
+        client = LLMClient(provider=args.llm_provider, is_async=True, base_url=args.judge_base_url, judge=judge)
     except Exception as exc:
         print(f"Cannot create the {args.llm_provider} judge client: {exc}", file=sys.stderr)
         return 2
@@ -139,12 +147,12 @@ def run(args: argparse.Namespace) -> int:
                         datefmt="%Y-%m-%d %H:%M:%S")
     logging.getLogger("httpx").setLevel(logging.WARNING)  # one INFO line per judge request otherwise
     print(f"Evaluating {len(scripts)} tasks of {args.agent!r} with the eval scripts in {scripts_dir} "
-          f"(judge: {args.judge_model}); results go to {args.results_dir / args.agent}")
+          f"(judge: {_describe_judge(judge)}); results go to {args.results_dir / args.agent}")
     if without_script:
         print(f"Skipping {without_script} tasks that have answers but no eval script in {scripts_dir}; "
               f"pass --task-list or --task to evaluate a given set of tasks.")
-    if len(answered) < len(tasks):
-        print(f"Skipping {len(tasks) - len(answered)} selected tasks that have no answers.")
+    if unanswered:
+        print(f"Skipping {unanswered} tasks that have no answer_<k>.md files.")
     results = asyncio.run(_evaluate(args, client, scripts)) if scripts else {}
 
     unscored = 0
@@ -181,11 +189,21 @@ async def _evaluate(args: argparse.Namespace, client: LLMClient, scripts: dict[s
         await browser.stop()
 
 
+def _describe_judge(judge: JudgeConfig) -> str:
+    """The judge model and the request parameters it is called with, as the start line shows them."""
+    effort = judge.reasoning_effort if judge.reasoning_effort is not None else "not sent"
+    temperature = judge.temperature if judge.temperature is not None else "not sent"
+    return f"{judge.model}, reasoning_effort: {effort}, temperature: {temperature}"
+
+
 def _report_metrics(args: argparse.Namespace, tasks: list[TaskInfo]) -> None:
-    """Print and save the metrics over the selected tasks, as ``mind2web2 metrics`` computes them."""
+    """Print and save the metrics over the selected tasks, as ``mind2web2 metrics`` computes them.
+
+    The runs per task are ``--num-runs``, by default the highest run index found.
+    """
     try:
         records, num_runs = collect_records(args.agent, [t.task_id for t in tasks], args.answers_dir,
-                                            args.results_dir)
+                                            args.results_dir, args.num_runs)
     except (OSError, ValueError) as exc:  # includes MetadataError and answers that are not UTF-8
         print(f"Metrics not computed: {exc}", file=sys.stderr)
         return
@@ -194,4 +212,7 @@ def _report_metrics(args: argparse.Namespace, tasks: list[TaskInfo]) -> None:
     if args.task_list is None:
         print("Scored over the evaluated tasks; pass --task-list to score a full split, where tasks "
               "without answers count as 0.")
+    if args.num_runs is None and num_runs != 3:
+        print(f"Scored {num_runs} runs, the highest run index found; pass --num-runs 3 to score the "
+              f"leaderboard's three runs.")
     print(f"Saved {save_metrics(metrics, args.results_dir, args.agent)}")
