@@ -81,8 +81,8 @@ def _new_browser() -> BatchBrowserManager:
 class EvaluatorConfig:
     """Evaluator configuration settings"""
     max_text_chars: int = 400_000
-    image_max_width: int = 1100
-    image_max_height: int = 10000
+    image_max_width: int = 1100   # pixels; a wider screenshot is scaled down to this width
+    image_max_height: int = 6000  # pixels, after that scaling; a taller screenshot is cut off at the bottom
     jpeg_quality: int = 85
     default_num_trials: int = 3
     default_majority_vote: bool = True
@@ -205,7 +205,13 @@ class BaseEvaluator:
         an earlier evaluation) is unavailable, and it is not captured again,
         so that its result does not depend on when the evaluation runs.  Any
         other URL is fetched live and stored (see :meth:`_fetch_live`).
-        Screenshots are resized JPEGs; text longer than
+
+        Screenshots are JPEGs of at most ``config.image_max_width`` by
+        ``config.image_max_height`` pixels (1100 by 6000 by default): a wider
+        screenshot is scaled down to that width, and a taller one is then cut
+        off at that height, so the judge sees the top of a long page.  A
+        screenshot that cannot be processed this way, such as a corrupt file,
+        is left out rather than sent unchecked.  Text longer than
         ``config.max_text_chars`` is truncated.
         """
 
@@ -240,7 +246,7 @@ class BaseEvaluator:
             )
         images = screenshot_b64 if isinstance(screenshot_b64, list) else [screenshot_b64]
 
-        def _resize_b64_image(b64_str: str) -> str:
+        def _resize_b64_image(b64_str: str) -> Optional[str]:
             try:
                 data = base64.b64decode(b64_str)
                 with Image.open(io.BytesIO(data)) as im:
@@ -260,13 +266,13 @@ class BaseEvaluator:
                     return base64.b64encode(buf.getvalue()).decode()
 
             except Exception as e:
-                # If error, record and return original image to ensure no interruption
-                self.logger.warning("Image resize failed: %s", e)
-                return b64_str
+                # Sent unchanged, the image could exceed the size limits above
+                self.logger.warning("Left out a screenshot of %s that could not be processed: %s", url, e)
+                return None
 
         # Re-encoding large screenshots in the event loop would stall concurrent evaluations
         resized = await asyncio.to_thread(lambda: [_resize_b64_image(b64) for b64 in images])
-        return resized, page_text
+        return [b64 for b64 in resized if b64 is not None], page_text
 
 
 class Extractor(BaseEvaluator):

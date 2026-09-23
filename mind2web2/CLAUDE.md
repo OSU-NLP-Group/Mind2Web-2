@@ -31,7 +31,7 @@ Two classes that do the actual LLM-based work:
 - `verify_by_urls()`: Check claim against multiple URLs (first-success short-circuit)
 - Uses majority vote (default 3 trials) for robustness
 
-**`BaseEvaluator`**: Shared parent with page retrieval, image processing, LLM call management. `call_llm_with_semaphore()` records each judge request in the answer's `JudgeUsage` (shared by Extractor and Verifier). A `JudgeError` is never converted into a failed verification or an empty extraction; it propagates, and `eval_runner` refuses to save a result for an answer with any failed judge request.
+**`BaseEvaluator`**: Shared parent with page retrieval, image processing, LLM call management. `get_page_info()` gives the judge a page's text and its screenshots (for a PDF, one per page, up to 50), each scaled down to at most 1100 pixels wide and cut off at 6000 pixels tall (`EvaluatorConfig`); a screenshot that cannot be processed is left out. `call_llm_with_semaphore()` records each judge request in the answer's `JudgeUsage` (shared by Extractor and Verifier). A `JudgeError` is never converted into a failed verification or an empty extraction; it propagates, and `eval_runner` refuses to save a result for an answer with any failed judge request.
 
 **`create_evaluator()`**: Factory function to create paired Extractor + Verifier instances
 

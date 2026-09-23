@@ -135,6 +135,52 @@ def test_evaluation_stores_live_captures_and_pdf_downloads(tmp_path):
     assert browser.urls == [urls["/article"], urls["/landing.pdf"]]  # the fake PDF was loaded in the browser
 
 
+def red_png(width: int, height: int) -> bytes:
+    """A red PNG whose bottom 500 rows are green."""
+    image = Image.new("RGB", (width, height), (220, 0, 0))
+    image.paste((0, 160, 0), (0, height - 500, width, height))
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def test_evaluation_gives_the_judge_screenshots_of_at_most_1100_by_6000_pixels(tmp_path):
+    cache = CacheFileSys(str(tmp_path))
+    for url, size in {"https://example.com/wide": (1400, 9000), "https://example.com/long": (1000, 8000),
+                      "https://example.com/short": (1000, 3000)}.items():
+        cache.put_web(url, "text", red_png(*size))
+    doc = pymupdf.open()
+    doc.new_page(width=600, height=4000)  # rendered at 144 DPI: 1200 x 8000 pixels
+    cache.put_pdf("https://example.com/poster.pdf", doc.tobytes())
+    doc.close()
+    v = verifier(cache, StubBrowser(Capture(error="must not be used")))
+
+    judged = {}
+    for url in ("https://example.com/wide", "https://example.com/long", "https://example.com/short",
+                "https://example.com/poster.pdf"):
+        (shot,), _ = asyncio.run(v.get_page_info(url))
+        judged[url.rsplit("/", 1)[1]] = Image.open(io.BytesIO(base64.b64decode(shot)))
+    assert {name: image.size for name, image in judged.items()} == {
+        "wide": (1100, 6000),  # scaled to 1100 x 7071, then cut off
+        "long": (1000, 6000),
+        "short": (1000, 3000),
+        "poster.pdf": (1100, 6000),
+    }
+    # A long screenshot loses its bottom: the green rows of the short one are kept, those of the long one are not
+    assert judged["short"].getpixel((500, 2999))[1] > 100
+    assert judged["long"].getpixel((500, 5999))[1] < 60
+
+
+def test_evaluation_leaves_out_a_screenshot_that_cannot_be_decoded(tmp_path):
+    cache = CacheFileSys(str(tmp_path))
+    cache.put_web("https://example.com/a", "Page text", png_b64())
+    (stored,) = tmp_path.glob("*.jpg")
+    stored.write_bytes(b"not an image")
+    v = verifier(cache, StubBrowser(Capture(error="must not be used")))
+
+    assert asyncio.run(v.get_page_info("https://example.com/a")) == ([], "Page text")
+
+
 # ------------------------------------------------------------------ crawler
 
 def crawl(cache: CacheFileSys, browser: StubBrowser, url: str, retry_failed: bool = False) -> str:
