@@ -30,3 +30,9 @@ def test_extract_rejects_non_pdf_bytes():
     images, text = asyncio.run(PDFParser().extract(b"<html>not a pdf</html>"))
     assert text.startswith("PDF extraction failed")
     assert len(images) == 1
+
+
+def test_extract_rejects_bytes_that_only_start_like_a_pdf():
+    images, text = asyncio.run(PDFParser().extract(b"%PDF-1.4 junk"))
+    assert text == "PDF extraction failed: Unable to parse PDF file"
+    assert len(images) == 1
