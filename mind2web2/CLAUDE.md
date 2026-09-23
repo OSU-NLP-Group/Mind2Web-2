@@ -31,7 +31,7 @@ Two classes that do the actual LLM-based work:
 - `verify_by_urls()`: Check claim against multiple URLs (first-success short-circuit)
 - Uses majority vote (default 3 trials) for robustness
 
-**`BaseEvaluator`**: Shared parent with page retrieval, image processing, LLM call management
+**`BaseEvaluator`**: Shared parent with page retrieval, image processing, LLM call management. `call_llm_with_semaphore()` records each judge request in the answer's `JudgeUsage` (shared by Extractor and Verifier). A `JudgeError` is never converted into a failed verification or an empty extraction; it propagates, and `eval_runner` refuses to save a result for an answer with any failed judge request.
 
 **`create_evaluator()`**: Factory function to create paired Extractor + Verifier instances
 
@@ -73,4 +73,4 @@ Each task's eval script must define:
 ```python
 async def evaluate_answer(client, answer, agent_name, answer_name, cache, semaphore, logger, model="o4-mini") -> dict
 ```
-It typically creates an `Evaluator`, builds a verification tree, runs extractions/verifications, and returns `evaluator.get_summary()`.
+It typically creates an `Evaluator`, builds a verification tree, runs extractions/verifications, and returns `evaluator.get_summary()`. `eval_runner` always passes `model` (the configured judge model), so the default in the signature is not used.

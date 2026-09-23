@@ -25,7 +25,7 @@ mind2web2/                   # Core Python package
 ├── metrics.py               # Leaderboard metrics (Partial Completion, Success Rate, Pass@k, Time, Answer Length)
 ├── cli/                     # The `mind2web2` command (validate, metrics)
 ├── api_tools/               # External API integrations (arXiv, Google Maps, PDF)
-├── llm_client/              # LLM provider abstraction (OpenAI, Azure, Bedrock)
+├── llm_client/              # Judge LLM client (OpenAI, Azure OpenAI, OpenAI-compatible servers)
 ├── utils/                   # Shared utilities (caching, logging, browser, paths)
 └── prompts/                 # Prompt templates for LLM extraction
 
@@ -104,6 +104,6 @@ uv run mind2web2 metrics example --task-list <split.csv> --num-runs 3
 
 - `cache_manager/` is deprecated and scheduled for removal. Do not invest effort there.
 - Eval scripts are per-task Python files downloaded from HuggingFace; they are not part of this repo's source.
-- The default judge model is `o4-mini` (OpenAI reasoning model).
+- The default judge model is `gpt-6-luna` (`DEFAULT_JUDGE_MODEL`, set with `run_eval.py --judge_model`); the paper used `o4-mini`. The judge client sends every request to the configured judge, and each result records the judge and its token usage.
 - URL matching is complex due to variants (utm params, www prefix, encoding, trailing slashes); see `CacheFileSys._find_url()` and `url_tools.py`.
-- All LLM calls use exponential backoff retry via the `backoff` library.
+- Judge requests retry transient errors (rate limits, timeouts, 5xx) within a time budget; any other failure raises `JudgeError`, which must propagate so the answer is left unscored instead of losing points.
