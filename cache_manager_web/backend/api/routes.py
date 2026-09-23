@@ -16,6 +16,7 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 from mind2web2.utils.cache_filesys import storage_key
+from mind2web2.utils.page_info_retrieval import html_to_markdown
 from mind2web2.utils.url_tools import normalize_url_simple
 
 from ..models import CacheManager, KeywordDetector
@@ -83,8 +84,9 @@ class LoadRequest(BaseModel):
 class CaptureRequest(BaseModel):
     task_id: str
     url: str
-    text: str
-    screenshot_base64: str  # JPEG base64
+    screenshot_base64: str  # PNG or JPEG, base64; stored as JPEG
+    html: Optional[str] = None  # the page's HTML, converted to text as the crawler converts it
+    text: str = ""  # the page's text, stored when no HTML is sent
     actual_url: Optional[str] = None  # URL after redirects (may differ from url)
 
 class ReviewRequest(BaseModel):
@@ -374,9 +376,12 @@ async def get_capture_target():
 async def receive_capture(req: CaptureRequest):
     """Store a page captured by the Chrome extension, for ``url`` and, after a redirect, for ``actual_url`` too.
 
-    Each stored page's flag is cleared and its review status set to
-    "recaptured" during a batch capture (a person still has to look at it)
-    and "fixed" otherwise.  Returns the URL the task lists the page under.
+    With ``html``, the stored text is ``html_to_markdown(html)``, the text the
+    crawler stores for the pages it captures, so a page's text has the same
+    form whichever of the two captured it.  Each stored page's flag is
+    cleared and its review status set to "recaptured" during a batch capture
+    (a person still has to look at it) and "fixed" otherwise.  Returns the
+    URL the task lists the page under.
     """
     _require_loaded()
     cache = _cm.get_task_cache(req.task_id)
@@ -388,7 +393,7 @@ async def receive_capture(req: CaptureRequest):
     except Exception:
         raise HTTPException(400, "Invalid base64 screenshot data")
 
-    text = req.text or ""
+    text = await asyncio.to_thread(html_to_markdown, req.html) if req.html else (req.text or "")
     stored = _cm.store_page(req.task_id, req.url, text=text, screenshot=screenshot_bytes)
     if stored is None:
         raise HTTPException(500, "Failed to save capture")

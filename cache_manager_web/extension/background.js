@@ -4,10 +4,21 @@
  * Handles:
  * - Keyboard shortcut (Alt+Shift+C) to capture current page
  * - Batch auto-capture mode with CAPTCHA detection
- * - Communication with the local backend at localhost:8000
+ * - Communication with the Cache Manager backend, whose URL is set in the popup
+ *
+ * A capture sends the page's HTML, which the backend converts to text as the
+ * crawler does, and a screenshot taken as the crawler takes it (see captureFullPage).
  */
 
-const BACKEND = 'http://127.0.0.1:8000';
+importScripts('settings.js');  // getBackend(), isCacheManagerUrl()
+
+const MAX_VIEWPORT_HEIGHT = 6000;  // CSS pixels, as in the crawler; limits the viewport, not the screenshot
+const SETTLE_AFTER_RESIZE_MS = 750;  // the crawler waits 0.5-1 s after resizing the viewport
+
+/** fetch() a backend path such as '/api/status'. */
+async function api(path, options) {
+    return fetch(`${await getBackend()}${path}`, options);
+}
 
 // ---------------------------------------------------------------------------
 // Batch mode state
@@ -27,8 +38,8 @@ const MIN_BODY_LENGTH = 200;  // pages shorter than this get retried
 // Rich batch status (for popup display)
 let batchState = {
     total: 0,
-    completed: 0,
-    skipped: 0,
+    completed: 0,     // pages this batch captured
+    skipped: 0,       // pages this batch skipped
     currentUrl: '',
     status: '',       // 'loading', 'retrying', 'captcha', 'capturing', 'advancing', 'done'
     log: [],          // [{time, msg, type}] — last 20 entries
@@ -135,7 +146,7 @@ async function capturePage(tab, opts = {}) {
             url = opts.url;
         } else {
             // Fetch capture target from backend
-            const targetRes = await fetch(`${BACKEND}/api/capture/target`);
+            const targetRes = await api('/api/capture/target');
             const target = await targetRes.json();
 
             if (!target.active) {
@@ -164,36 +175,36 @@ async function capturePage(tab, opts = {}) {
             return { success: true };
         }
 
-        // Extract text from the page
-        const textResults = await chrome.scripting.executeScript({
+        // The page's HTML; the backend converts it to text as the crawler does
+        const htmlResults = await chrome.scripting.executeScript({
             target: { tabId: tab.id },
-            func: () => document.body?.innerText || '',
+            func: () => document.documentElement.outerHTML,
         });
-        const text = textResults?.[0]?.result || '';
+        const html = htmlResults?.[0]?.result || '';
 
         // Ensure the target tab is active/visible before screenshot
         await chrome.tabs.update(tab.id, { active: true });
         await sleep(150);
 
-        // Capture visible tab as screenshot
-        const screenshotDataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
-            format: 'jpeg',
-            quality: 85,
-        });
-        const base64 = screenshotDataUrl.replace(/^data:image\/jpeg;base64,/, '');
+        let screenshot = await captureFullPage(tab.id);
+        if (!screenshot) {
+            if (batchMode) batchLog('Full-page screenshot unavailable; captured the visible part only', 'warn');
+            const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'jpeg', quality: 85 });
+            screenshot = dataUrl.replace(/^data:image\/jpeg;base64,/, '');
+        }
 
         // Detect redirect: tab.url may differ from the original URL
         const actual_url = tab.url && tab.url !== url ? tab.url : undefined;
 
         // Send to backend
-        const captureRes = await fetch(`${BACKEND}/api/capture`, {
+        const captureRes = await api('/api/capture', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 task_id,
                 url,
-                text,
-                screenshot_base64: base64,
+                html,
+                screenshot_base64: screenshot,
                 ...(actual_url ? { actual_url } : {}),
             }),
         });
@@ -219,13 +230,56 @@ async function capturePage(tab, opts = {}) {
     }
 }
 
+/**
+ * A screenshot of the whole page in a tab, as base64 PNG, taken as the crawler takes it.
+ *
+ * Through the DevTools protocol, the viewport is resized to the page's width
+ * and content height, at most MAX_VIEWPORT_HEIGHT CSS pixels, and after
+ * SETTLE_AFTER_RESIZE_MS the page is captured with captureBeyondViewport,
+ * which covers the whole page, including any part below that viewport.  Only
+ * Page and Emulation commands are sent; the Runtime domain, which some bot
+ * checks detect, is never enabled.  Chrome shows a "started debugging this
+ * browser" bar while the debugger is attached.  Returns null when the
+ * debugger cannot attach, as on chrome:// pages, or when a command fails.
+ */
+async function captureFullPage(tabId) {
+    const target = { tabId };
+    try {
+        await chrome.debugger.attach(target, '1.3');
+    } catch (e) {
+        console.warn('debugger.attach failed:', e);
+        return null;
+    }
+    try {
+        const metrics = await chrome.debugger.sendCommand(target, 'Page.getLayoutMetrics');
+        await chrome.debugger.sendCommand(target, 'Emulation.setDeviceMetricsOverride', {
+            mobile: false,
+            width: Math.round(metrics.cssVisualViewport.clientWidth),
+            height: Math.round(Math.min(metrics.cssContentSize.height, MAX_VIEWPORT_HEIGHT)),
+            deviceScaleFactor: Math.round(metrics.visualViewport?.scale || 1),
+        });
+        await sleep(SETTLE_AFTER_RESIZE_MS);
+        const shot = await chrome.debugger.sendCommand(target, 'Page.captureScreenshot', {
+            format: 'png',
+            captureBeyondViewport: true,
+        });
+        return shot.data;
+    } catch (e) {
+        console.warn('Full-page screenshot failed:', e);
+        return null;
+    } finally {
+        await chrome.debugger.sendCommand(target, 'Emulation.clearDeviceMetricsOverride').catch(() => {});
+        await chrome.debugger.detach(target).catch(() => {});
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Batch mode orchestration
 // ---------------------------------------------------------------------------
 
 async function startBatch(opts = {}) {
     try {
-        const res = await fetch(`${BACKEND}/api/capture/batch/status`);
+        const res = await api('/api/capture/batch/status');
         const status = await res.json();
 
         if (!status.active || !status.current) {
@@ -258,7 +312,7 @@ async function startBatch(opts = {}) {
 async function advanceBatch() {
     try {
         setBatchStatus('advancing');
-        const res = await fetch(`${BACKEND}/api/capture/batch/status`);
+        const res = await api('/api/capture/batch/status');
         const status = await res.json();
 
         if (!status.active || !status.current) {
@@ -267,9 +321,8 @@ async function advanceBatch() {
             return;
         }
 
-        batchState.completed = status.completed;
         batchState.total = status.total;
-        setBadge(`${status.completed}/${status.total}`, '#2563eb');
+        setBadge(`${batchState.completed + batchState.skipped}/${status.total}`, '#2563eb');
 
         // Navigate existing tab to the next URL
         if (batchTabId) {
@@ -304,7 +357,7 @@ async function endBatch() {
 
 async function stopBatch() {
     try {
-        await fetch(`${BACKEND}/api/capture/batch/stop`, { method: 'POST' });
+        await api('/api/capture/batch/stop', { method: 'POST' });
     } catch {}
     await endBatch();
 }
@@ -346,7 +399,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
         setBadge('⏳', '#f59e0b');
 
         try {
-            await fetch(`${BACKEND}/api/capture/batch/captcha`, {
+            await api('/api/capture/batch/captcha', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ type: captchaType }),
@@ -455,8 +508,8 @@ async function capturePdfAndUpload(taskId, url, actualUrl) {
         const form = new FormData();
         form.append('file', blob, 'page.pdf');
 
-        const uploadRes = await fetch(
-            `${BACKEND}/api/upload-pdf/${encodeURIComponent(taskId)}?url=${encodeURIComponent(url)}`,
+        const uploadRes = await api(
+            `/api/upload-pdf/${encodeURIComponent(taskId)}?url=${encodeURIComponent(url)}`,
             { method: 'POST', body: form }
         );
         if (!uploadRes.ok) throw new Error(`Upload failed: ${uploadRes.status}`);
@@ -474,7 +527,7 @@ async function capturePdfAndUpload(taskId, url, actualUrl) {
 async function autoCaptureAndAdvance(tabId, retryCount = 0) {
     try {
         // Get current batch target
-        const statusRes = await fetch(`${BACKEND}/api/capture/batch/status`);
+        const statusRes = await api('/api/capture/batch/status');
         const status = await statusRes.json();
 
         if (!status.active || !status.current) {
@@ -492,6 +545,7 @@ async function autoCaptureAndAdvance(tabId, retryCount = 0) {
             const actual_url = tab.url && tab.url !== status.current.url ? tab.url : undefined;
             const ok = await capturePdfAndUpload(status.current.task_id, status.current.url, actual_url);
             if (ok) {
+                batchState.completed++;
                 batchLog(`PDF saved OK`, 'success');
                 setBadge('✓', '#22c55e', 1000);
             } else {
@@ -545,6 +599,7 @@ async function autoCaptureAndAdvance(tabId, retryCount = 0) {
             return;
         }
 
+        batchState.completed++;
         batchLog(`Captured OK`, 'success');
         // Wait briefly then advance
         await sleep(500);
@@ -563,7 +618,7 @@ async function autoCaptureAndAdvance(tabId, retryCount = 0) {
 async function skipAndAdvance() {
     try {
         batchState.skipped++;
-        await fetch(`${BACKEND}/api/capture/batch/skip`, { method: 'POST' });
+        await api('/api/capture/batch/skip', { method: 'POST' });
         await sleep(300);
         await advanceBatch();
     } catch (err) {
@@ -606,14 +661,12 @@ function clearPageTimeout() {
 
 async function switchToCacheManager(capturedTabId) {
     try {
+        const backend = await getBackend();
         const capturedTab = await chrome.tabs.get(capturedTabId);
-        const isCM = capturedTab.url?.startsWith(BACKEND);
-        if (!isCM) {
+        if (!isCacheManagerUrl(capturedTab.url, backend)) {
             await chrome.tabs.remove(capturedTabId);
         }
-        const cmTabs = await chrome.tabs.query({
-            url: ['http://127.0.0.1:8000/*', 'http://localhost:8000/*'],
-        });
+        const cmTabs = (await chrome.tabs.query({})).filter(t => isCacheManagerUrl(t.url, backend));
         if (cmTabs.length > 0) {
             await chrome.tabs.update(cmTabs[0].id, { active: true });
             await chrome.windows.update(cmTabs[0].windowId, { focused: true });

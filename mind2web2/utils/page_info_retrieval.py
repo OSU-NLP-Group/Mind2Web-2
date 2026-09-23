@@ -313,7 +313,13 @@ async def _wait_for_js_challenge(page: Page) -> None:
 
 
 async def _capture_screenshot_and_html(context: BrowserContext, page: Page) -> tuple[str, str]:
-    """A screenshot of the page up to 6000 CSS pixels tall, and its HTML, via the DevTools protocol."""
+    """A screenshot of the whole page, and its HTML, via the DevTools protocol.
+
+    The viewport is first resized to the page's width and content height, at
+    most 6000 CSS pixels, and the page gets 0.5-1 s to settle.  The screenshot
+    is then taken with ``captureBeyondViewport``, which covers the whole page,
+    so a page taller than 6000 CSS pixels is captured in full as well.
+    """
     cdp = await context.new_cdp_session(page)
     await cdp.send("Page.enable")
     await cdp.send("DOM.enable")

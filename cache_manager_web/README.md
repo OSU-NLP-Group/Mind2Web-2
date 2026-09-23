@@ -32,6 +32,11 @@ The server has no authentication, so it answers only requests addressed to `127.
 1. Open `chrome://extensions` and enable **Developer mode**
 2. Click **Load unpacked** and select the `cache_manager_web/extension/` folder
 3. Pin the extension icon for easy access
+4. If the Cache Manager does not run at `http://127.0.0.1:8000` (for example, with another `--port`), open the extension popup, expand **Settings**, and enter the address of the Cache Manager page
+
+After pulling a new version of the extension, click its reload button in `chrome://extensions`.
+
+A capture stores the page the way the crawler does: a screenshot of the whole page, and the page's HTML converted to text by the crawler's converter. For the full-page screenshot, the extension briefly attaches Chrome's debugger to the tab, so Chrome shows a "Cache Manager Capture started debugging this browser" bar during each capture. Clicking **Cancel** on that bar during a capture, or capturing a page the debugger cannot attach to (such as a `chrome://` page), stores a screenshot of only the visible part of the tab instead. Starting Chrome with `--silent-debugger-extension-api` hides the bar.
 
 ### 3. Review & Fix
 
