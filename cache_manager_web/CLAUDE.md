@@ -34,10 +34,11 @@ cache_manager_web/
 
 ## Key Design Decisions
 
-- **Evaluation reads only captured content**: evaluation uses a task's stored pages (`index.json`) and failure records (`failures.json`). The Cache Manager's own state is `flags.json` (URLs that need a (re)capture) and `reviewed.json` (review statuses), which evaluation never reads. No action stores content that was not captured: Flag writes only `flags.json`; Reset deletes the stored page or failure record and flags the URL; Add URL only flags it. A flagged URL with neither a stored page nor a failure record is `pending` (listed as "not captured yet").
-- **Request guard, no CORS**: the API has no authentication, and the reviewer's browser opens arbitrary pages while recapturing. `LocalRequestGuard` (app.py) answers only `Host` names in `CM_ALLOWED_HOSTS` (default: the loopback names; `run.py --host` extends it) and refuses non-GET requests whose `Origin` is neither the app's own origin nor a `chrome-extension://` origin. No CORS headers are sent; the extension does not need them because of its `host_permissions`.
-- **Issue severity**: definite for pending, failed, and flagged URLs, empty text, and pages shorter than `SHORT_PAGE_CHARS` (3,000 characters, shared with the crawler's `detect_block()`) that match a definite keyword or pattern or `detect_block()`; possible for other keyword matches. `_issue_entry()` in routes.py computes a URL's issues; every edit recomputes that URL's entry with `_refresh_issue()`.
-- **Load and scan off the event loop**: `/api/load` reads and scans the folder in a worker thread into a new `CacheManager`, which replaces the current one only when complete; `/api/scan` also runs in a worker thread.
+- **Evaluation reads only captured content**: evaluation uses a task's stored pages (`index.json`) and failure records (`failures.json`). The Cache Manager's own state is `pending.json` (URLs to capture that have neither a stored page nor a failure record, listed as `pending`, "not captured yet"), `flags.json` (stored pages that need a recapture), and `reviewed.json` (review statuses), which evaluation never reads. No action stores content that was not captured: Flag writes only `flags.json`; Reset deletes the stored page or failure record and makes the URL pending; Add URL only makes it pending; an MHTML upload without text, a PDF upload without the `%PDF-` signature, and a rename whose stored page cannot be read are refused. A flag on a URL with neither a stored page nor a failure record has no effect.
+- **One entry per page, whatever the spelling**: `CacheManager.canonical_url()` maps a URL to the URL the task lists for its page (the stored page's URL from `CacheFileSys.lookup`, else the failure record's URL from `failure_url`, else a pending URL with the same `_page_form`), and every edit and every review-state file uses that URL. A page is stored under it, so a capture of another spelling, or of the URL after a redirect, updates the listed entry; `store_page()` moves the flag and review status when the cache stores the page under a different spelling (e.g. without a trailing slash), and Add answers 409 for another spelling of a listed page.
+- **Request guard, no CORS**: the API has no authentication, and the reviewer's browser opens arbitrary pages while recapturing. `LocalRequestGuard` (app.py) answers only `Host` names in `CM_ALLOWED_HOSTS` (default: the loopback names; `run.py --host` extends it, and a wildcard bind adds `*`, which admits any IP address but no other name, so DNS rebinding is refused) and refuses non-GET requests whose `Origin` is neither the app's own origin nor a `chrome-extension://` origin. No CORS headers are sent; the extension does not need them because of its `host_permissions`. `FrameGuard` adds `frame-ancestors 'self'` and `X-Frame-Options: SAMEORIGIN` to every response, so other sites cannot frame the UI. Answers, written by the agents under review, are rendered with a pinned `marked` and sanitized with `DOMPurify` (both loaded with SRI hashes).
+- **Issue severity**: definite for pending, failed, and flagged URLs, empty text, and pages shorter than `SHORT_PAGE_CHARS` (3,000 characters, shared with the crawler's `detect_block()`) that match a definite keyword or pattern or `detect_block()`; possible for other keyword matches. `_issue_entry()` in routes.py computes a URL's issues; every edit recomputes the entries of the URLs it changed, and drops those of URLs no longer listed, with `_refresh_issues()`.
+- **Load and scan off the event loop**: `/api/load` reads and scans the folder in a worker thread into a new `CacheManager`, which replaces the current one only when complete, and then stops a running batch and clears the capture target; `/api/scan` also runs in a worker thread.
 - **No build step**: Vanilla JS with ES modules. Files are served directly by FastAPI's StaticFiles.
 - **No circular imports**: Components import shared actions from `actions.js`, NOT from `main.js`. This is critical — `main.js` imports components, so components must not import from `main.js`.
 - **Selective state subscriptions**: `subscribe(fn, ['key1', 'key2'])` — components only re-render when their relevant keys change.
@@ -80,17 +81,17 @@ This project uses `uv`, not pip. Use `uv run`, `uv sync`, `uv add`.
 | POST | /api/capture/batch/captcha | CAPTCHA detected notification |
 | POST | /api/capture | Receive capture from extension |
 | POST | /api/flag/{id} | Flag URL for recapture (flags.json only; the stored page is kept) |
-| POST | /api/reset/{id} | Delete the stored page or failure record and flag the URL (it becomes `pending`) |
+| POST | /api/reset/{id} | Delete the stored page or failure record; the URL becomes `pending` |
 | GET | /api/review/{id} | Get review statuses for a task |
 | POST | /api/review/{id} | Set review status |
 | GET | /api/review-progress | Overall progress |
 | GET | /api/answers/{id} | Answer markdown files |
-| POST | /api/urls/{id} | Add URL to task as `pending` (409 if the task already has it) |
-| POST | /api/urls/{id}/rename | Rename/edit URL link (moves a stored page; a failed or pending URL leaves the new URL `pending`) |
+| POST | /api/urls/{id} | Add URL to task as `pending` (409 if the task already lists its page, in any spelling) |
+| POST | /api/urls/{id}/rename | Rename/edit URL link (moves a stored page with its flag and review status; a failed or pending URL leaves the new URL `pending`); returns the new URL as listed |
 | POST | /api/urls/{id}/pdf | Add PDF URL to task |
-| DELETE | /api/urls/{id} | Delete URL: stored page, failure record, flag, review status |
-| POST | /api/upload-mhtml/{id} | Upload MHTML |
-| POST | /api/upload-pdf/{id} | Upload PDF (replaces content, switches type) |
+| DELETE | /api/urls/{id} | Delete URL: stored page, failure record, pending entry, flag, review status |
+| POST | /api/upload-mhtml/{id} | Upload MHTML: its text, with a 1x1 placeholder screenshot (422 if it has no text) |
+| POST | /api/upload-pdf/{id} | Upload PDF (replaces content, switches type; 422 without the `%PDF-` signature) |
 | POST | /api/scan | Re-scan all tasks for issues |
 | GET | /api/events | SSE stream |
 
@@ -116,8 +117,8 @@ Key state fields:
 | `N` | Previous issue (cross-task) |
 | `r` / `Ctrl+Enter` | Mark as reviewed |
 | `f` | Flag for recapture (red) |
-| `d` / `Backspace` | Delete URL (asks first if a page is stored) |
-| `x` | Reset: delete the stored page & flag (asks first if a page is stored) |
+| `d` / `Backspace` | Delete URL (asks first if a page or failure record is stored) |
+| `x` | Reset: delete the stored page or failure record; the URL becomes pending (asks first) |
 | `e` | Edit URL link |
 | `a` | Add new URL |
 | `o` | Open in browser |

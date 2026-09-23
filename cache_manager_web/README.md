@@ -25,7 +25,7 @@ uv run python3 cache_manager_web/run.py <agent_name> --cache-dir /data/cache --a
 
 The web UI opens automatically in your browser. The Answer view reads `<answers-dir>/<agent_name>/<task_id>/answer_*.md`; without `--answers-dir`, it uses the `answers` directory next to the cache directory.
 
-The server has no authentication, so it answers only requests addressed to `127.0.0.1`, `localhost`, or `::1`, and it refuses requests that change data when they come from any web page other than the Cache Manager itself (the Chrome extension is allowed). Pages you open while recapturing therefore cannot read or change the cache. `--host` binds another interface and serves that host name too; a wildcard such as `0.0.0.0` serves every host, so use it only on a trusted network.
+The server has no authentication, so it answers only requests addressed to `127.0.0.1`, `localhost`, or `::1`, and it refuses requests that change data when they come from any web page other than the Cache Manager itself (the Chrome extension is allowed). Pages you open while recapturing therefore cannot read or change the cache. `--host` binds another interface and serves that host name too; a wildcard such as `0.0.0.0` serves every interface, reached by this machine's IP address (other host names are refused), and anyone who can reach the port can use it, so use it only on a trusted network.
 
 ### 2. Install the Chrome Extension
 
@@ -36,7 +36,7 @@ The server has no authentication, so it answers only requests addressed to `127.
 ### 3. Review & Fix
 
 1. **Browse tasks** — select a task from the left panel to see its URLs
-2. **Check issues** — red = definite issue, yellow = possible issue, green = reviewed OK. URLs the crawler could not capture are listed as `failed`, with the reason; URLs you added or reset are listed as `pending` (not captured yet). Both are definite issues, as are flagged URLs, pages with no text, and short pages (under 3,000 characters) with bot-check or access-denied wording. Longer pages with such wording are only possible issues, since articles may quote it. Capturing a URL with the extension (or uploading a PDF or MHTML file) stores its page and clears its failure record and flag
+2. **Check issues** — red = definite issue, yellow = possible issue, green = reviewed OK. URLs the crawler could not capture are listed as `failed`, with the reason; URLs you added or reset are listed as `pending` (not captured yet). Both are definite issues, as are flagged URLs, pages with no text, and short pages (under 3,000 characters) with bot-check or access-denied wording. Longer pages with such wording are only possible issues, since articles may quote it. Capturing a URL with the extension (or uploading a PDF or MHTML file) stores its page under the listed URL and clears its failure record and flag
 3. **Navigate quickly** — use `j`/`k` to move between URLs, `n`/`N` to jump across issues in all tasks
 4. **Preview** — toggle between screenshot (`1`), extracted text (`2`), and agent answer (`3`) views
 
@@ -63,15 +63,15 @@ For pages that need manual intervention (login walls, complex anti-bot):
 ## URL Management
 
 - **Flag** (`f`) — mark a URL for recapture (red). Its stored page is kept, and evaluation keeps using it, until a capture replaces it
-- **Reset** (`x`) — delete the URL's stored page (or its failure record) and flag it; it is listed as `pending` until captured again. Asks first when a page is stored
-- **Edit** (`e`) — change the URL link. A stored page moves to the new URL; a failed or pending URL leaves the new URL `pending`
-- **Add** (`a`) — add a URL the crawl missed; it is listed as `pending` until you capture it or upload a file
-- **Delete** (`d`) — remove a URL: its stored page, failure record, and flag. Asks first when a page is stored
-- **Upload** — drag-and-drop `.pdf` or `.mhtml` files onto the preview panel
+- **Reset** (`x`) — delete the URL's stored page (or its failure record); it is listed as `pending` until captured again. Asks first
+- **Edit** (`e`) — change the URL link. A stored page moves to the new URL, with its flag and review status; a failed or pending URL leaves the new URL `pending`
+- **Add** (`a`) — add a URL the crawl missed; it is listed as `pending` until you capture it or upload a file. A URL the task already lists, in any spelling, is refused
+- **Delete** (`d`) — remove a URL: its stored page, failure record, and flag. Asks first when a page or failure record is stored
+- **Upload** — drag-and-drop `.pdf` or `.mhtml` files onto the preview panel. A file that is not a PDF, or an MHTML file without text, is refused
 
 ### What evaluation sees
 
-Evaluation reads only the stored pages (`index.json` and their files) and the failure records (`failures.json`) of each task: a stored page is used as it is, a URL with a failure record counts as unavailable, and any other URL is captured live. The Cache Manager's own state, flags (`flags.json`) and review statuses (`reviewed.json`), is never read by evaluation, and no Cache Manager action stores content that was not captured. So a flagged page is still evaluated from its stored content, and a `pending` URL is captured live until you capture it.
+Evaluation reads only the stored pages (`index.json` and their files) and the failure records (`failures.json`) of each task: a stored page is used as it is, a URL with a failure record counts as unavailable, and any other URL is captured live. The Cache Manager's own state, pending URLs (`pending.json`), flags (`flags.json`), and review statuses (`reviewed.json`), is never read by evaluation, and no Cache Manager action stores content that was not captured. So a flagged page is still evaluated from its stored content, and a `pending` URL is captured live until you capture it.
 
 ## Keyboard Shortcuts
 
@@ -83,8 +83,8 @@ Evaluation reads only the stored pages (`index.json` and their files) and the fa
 | `N` | Previous issue (cross-task) |
 | `r` | Mark as reviewed |
 | `f` | Flag for recapture |
-| `d` | Delete URL (asks first if a page is stored) |
-| `x` | Reset: delete the stored page and flag (asks first) |
+| `d` | Delete URL (asks first if a page or failure record is stored) |
+| `x` | Reset: delete the stored page or failure record (asks first) |
 | `e` | Edit URL |
 | `a` | Add new URL |
 | `o` | Open in browser |
