@@ -1,7 +1,6 @@
 """Enhanced cache management with better organization and performance."""
 
 from __future__ import annotations
-import os
 import json
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Set
@@ -208,21 +207,17 @@ class CacheManager:
 
         try:
             # Prefer updating the canonical stored URL if it exists
-            stored_url = cache._find_url(url)
-            target_url = stored_url if stored_url else url
+            target_url = cache.lookup(url) or url
             old_type = cache.has(target_url)
 
-            # Clean up old PDF file if switching from pdf to web
             if old_type == "pdf":
-                self._cleanup_old_files(task_id, target_url, "pdf")
                 summary = self.task_summaries.get(task_id)
                 if summary:
                     summary.pdf_urls -= 1
                     summary.web_urls += 1
 
-            cache.put_web(target_url, text, screenshot)
-            cache.save()
-            
+            cache.put_web(target_url, text, screenshot)  # also removes the files of a replaced PDF
+
             # Update index if it's a new URL
             if target_url not in [info.url for info in self.get_task_urls(task_id)]:
                 self._index_single_url(task_id, target_url, "web")
@@ -249,8 +244,7 @@ class CacheManager:
                 content_type = "web"
             else:
                 return False
-            
-            cache.save()
+
             self._index_single_url(task_id, url, content_type)
             
             # Update task summary
@@ -290,32 +284,11 @@ class CacheManager:
             return False
         
         try:
-            # Get URL hash for file deletion
-            url_hash = cache._get_url_hash(url)
-            cache_dir = cache.task_dir
-            content_type = cache.has(url)
-            
-            # Delete files
-            files_to_delete = []
-            if content_type == "web":
-                files_to_delete.extend([
-                    os.path.join(cache_dir, f"{url_hash}.txt"),
-                    os.path.join(cache_dir, f"{url_hash}.jpg")
-                ])
-            elif content_type == "pdf":
-                files_to_delete.append(os.path.join(cache_dir, f"{url_hash}.pdf"))
-            
-            for file_path in files_to_delete:
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-            
-            # Remove from index
-            stored_url = cache._find_url(url)
-            if stored_url and stored_url in cache.urls:
-                del cache.urls[stored_url]
-            
-            cache.save()
-            
+            content_type = cache.remove(url)
+            if content_type is None:
+                logger.warning(f"Cannot delete {url} from task {task_id}: it is not cached")
+                return False
+
             # Update our indexes
             if url in self._url_index:
                 self._url_index[url] = [
@@ -467,21 +440,10 @@ class CacheManager:
             return False
 
         try:
-            stored_url = cache._find_url(url)
-            target_url = stored_url if stored_url else url
-            url_hash = cache._get_url_hash(target_url)
-            cache_dir = cache.task_dir
+            target_url = cache.lookup(url) or url
             old_type = cache.has(target_url)
 
-            # Clean up old web files if switching from web to pdf
-            if old_type == "web":
-                for ext in (".txt", ".jpg"):
-                    p = os.path.join(cache_dir, f"{url_hash}{ext}")
-                    if os.path.exists(p):
-                        os.remove(p)
-
-            cache.put_pdf(target_url, pdf_bytes)
-            cache.save()
+            cache.put_pdf(target_url, pdf_bytes)  # also removes the files of a replaced web page
 
             # Update summary counts
             if old_type and old_type != "pdf":
@@ -511,31 +473,16 @@ class CacheManager:
             return None
 
         try:
-            stored_url = cache._find_url(url)
-            target_url = stored_url if stored_url else url
+            target_url = cache.lookup(url) or url
             content_type = cache.has(target_url)
             if not content_type:
                 return None
 
-            url_hash = cache._get_url_hash(target_url)
-            cache_dir = cache.task_dir
-
+            # Replace the content with a placeholder so the URL stays recognized
             if content_type == "web":
-                # Delete existing files
-                for ext in (".txt", ".jpg"):
-                    p = os.path.join(cache_dir, f"{url_hash}{ext}")
-                    if os.path.exists(p):
-                        os.remove(p)
-                # Write placeholder so URL stays recognized
                 cache.put_web(target_url, "access denied", self._placeholder_jpeg_bytes())
-                cache.save()
             elif content_type == "pdf":
-                p = os.path.join(cache_dir, f"{url_hash}.pdf")
-                if os.path.exists(p):
-                    os.remove(p)
-                # Write minimal placeholder PDF
                 cache.put_pdf(target_url, self._placeholder_pdf_bytes())
-                cache.save()
 
             logger.info(f"Reset {target_url} ({content_type}) in task {task_id}")
             return content_type
@@ -580,20 +527,3 @@ class CacheManager:
             b"trailer<</Size 4/Root 1 0 R>>\n"
             b"startxref\n183\n%%EOF"
         )
-
-    def _cleanup_old_files(self, task_id: str, url: str, old_type: str):
-        """Remove files for old content type when switching types."""
-        cache = self.get_task_cache(task_id)
-        if not cache:
-            return
-        url_hash = cache._get_url_hash(url)
-        cache_dir = cache.task_dir
-        if old_type == "web":
-            for ext in (".txt", ".jpg"):
-                p = os.path.join(cache_dir, f"{url_hash}{ext}")
-                if os.path.exists(p):
-                    os.remove(p)
-        elif old_type == "pdf":
-            p = os.path.join(cache_dir, f"{url_hash}.pdf")
-            if os.path.exists(p):
-                os.remove(p)

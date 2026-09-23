@@ -3,30 +3,29 @@
 ## Modules
 
 ### cache_filesys.py — File-Based Webpage Cache
-`CacheFileSys`: One instance per task, stores cached webpage content on disk.
+`CacheFileSys`: the cached pages of one task (one instance per task directory).
 
 **Directory layout:**
 ```
 task_dir/
-├── index.json      # {url: "web"|"pdf"}
-├── <md5_hash>.txt  # page text content
-├── <md5_hash>.jpg  # page screenshot
-├── <md5_hash>.pdf  # PDF content
+├── index.json      # {storage key: "web"|"pdf"}
+├── <md5(key)>.txt  # web page text (Markdown)
+├── <md5(key)>.jpg  # web page screenshot
+├── <md5(key)>.pdf  # PDF
 ```
 
 **Key methods:**
-- `put_web(url, text, screenshot)`: Store webpage (converts screenshot to JPG)
-- `put_pdf(url, pdf_bytes)`: Store PDF
-- `get_web(url)` → `(text, screenshot_bytes)`
-- `get_pdf(url)` → `pdf_bytes`
-- `has(url)` → `"web"` | `"pdf"` | `None`
-- `save()`: Persist index.json to disk
+- `put_web(url, text, screenshot)` / `put_pdf(url, pdf_bytes)`: store a page, replacing any page under the same key whatever its type; return the key. The key is `storage_key(url)` (fragment removed, percent-decoded, trailing slash removed), or `url` itself when it is already stored.
+- `get_web(url)` → `(text, jpeg_bytes)`; `get_pdf(url)` → `pdf_bytes`; `has(url)` → `"web"` | `"pdf"` | `None`
+- `lookup(url)` → the stored URL that `url` refers to, or `None`; `remove(url)` deletes a page and its files
 
-**URL matching** is the most complex part. `_find_url()` tries:
-1. Direct lookup
-2. Normalized form (`normalize_url_simple`)
-3. Reverse normalized comparison against all stored URLs
-4. Full variant expansion (`_get_url_variants`) — generates 100+ variants per URL by combining scheme swaps, encoding variants, www prefix, utm params, trailing slashes
+**Persistence:** every put and remove is on disk when it returns. Files are replaced atomically, and `index.json` is re-read and merged under an `flock` on the task directory, so the crawler, an eval run, and the Cache Manager can write to one task at the same time, and an interrupted crawl keeps the pages it stored. There is no separate save step.
+
+**URL matching** (`lookup`), first hit wins:
+1. `url` is stored
+2. `normalize_url_simple(url)` is stored
+3. a stored URL has the same normalized form (dictionary index; the earliest stored wins)
+4. a surface variant of `url` is stored (scheme, `www.`, UTM suffixes, percent-encoding forms, trailing slash). Runs only when 1-3 miss; it finds keys whose normalized form changes under percent-decoding, such as an encoded `#` or `%`.
 
 ### page_info_retrieval.py — Browser-Based Web Capture
 **`BatchBrowserManager`**: Manages a shared Chromium browser (via patchright) for concurrent page capture.
@@ -58,10 +57,10 @@ Custom formatters:
 - `CompactJsonFormatter`: Compact JSONL for machine parsing
 
 ### url_tools.py — URL Normalization & Extraction
-- `normalize_url_simple(url)`: Normalize for comparison (lowercase, remove www/utm/fragments/trailing slash, force https)
+- `normalize_url_simple(url)`: The form under which two URLs are the same page, for cache lookups and crawl deduplication (UTM parameters and fragment removed, percent-decoded, trailing slash removed, `https`, no `www.`, lowercased)
 - `remove_utm_parameters(url)`: Strip all `utm_*` query params
 - `normalize_url_for_browser(url)`: Ensure URL has protocol for navigation
-- `regex_find_urls(text)`: Extract URLs from markdown text using multiple regex patterns
+- `regex_find_urls(text)`: `http(s)://` and `www.` URLs in Markdown or plain text, in order of appearance; keeps balanced parentheses (Wikipedia titles), removes Markdown escapes and trailing punctuation, stops at CJK punctuation
 - `URLs` Pydantic model: For LLM structured output of URL lists
 
 ### load_eval_script.py — Dynamic Script Loading

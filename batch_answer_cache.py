@@ -378,8 +378,6 @@ async def process_cache(
 
         logger.info(f"[{agent_name}/{task_id}] Browser manager will be cleaned up automatically")
 
-    cache.save()
-
     # Update metadata with cached content types
     try:
         url_types: Dict[str, str] = {}

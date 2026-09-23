@@ -506,11 +506,8 @@ async def evaluate_task(
                 )
 
         # ------------------------------------------------------------------
-        # 7. Persist cache & save summary
+        # 7. Save summary for this agent/task combination
         # ------------------------------------------------------------------
-        cache.save()
-
-        # Save summary for this agent/task combination
         _save_agent_task_summary(output_root / agent_name / task_id, ok_results)
         main_logger.info("📊 Summary saved successfully")
 

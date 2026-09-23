@@ -1,3 +1,4 @@
+"""URL extraction from answer text, and the URL normalization shared by the page cache and the crawler."""
 import re
 from typing import List
 from urllib.parse import urldefrag, unquote, urlparse, parse_qs, urlencode, urlunparse
@@ -41,7 +42,13 @@ def remove_utm_parameters(url: str) -> str:
 
 
 def normalize_url_simple(url: str) -> str:
-    """Simple URL normalization for variant detection."""
+    """The form under which two URLs count as the same page for cache lookups and crawl deduplication.
+
+    UTM parameters and the fragment are removed, the URL is percent-decoded,
+    a trailing slash is removed, ``http`` becomes ``https``, ``www.`` is
+    dropped, and the result is lowercased.  UTM parameters are removed both
+    before and after decoding, so encoded ones are removed too.
+    """
 
     url=remove_utm_parameters(url)
     # Remove fragment
@@ -53,11 +60,6 @@ def normalize_url_simple(url: str) -> str:
     # Remove trailing slash (except for root)
     if decoded.endswith('/') and len(decoded) > 1 and not decoded.endswith('://'):
         decoded = decoded[:-1]
-
-    # # Remove common tracking parameters
-    # if decoded.endswith('?utm_source=chatgpt.com'):
-    #     decoded = decoded[:-len('?utm_source=chatgpt.com')]
-
 
     # Remove all UTM parameters
     parsed = urlparse(decoded)
@@ -89,63 +91,51 @@ def normalize_url_simple(url: str) -> str:
 
 
 def normalize_url_for_browser(url: str) -> str:
-    """Simple URL normalization for variant detection."""
-
-
+    """``url`` without UTM parameters, with ``https://`` prepended if it has no ``http``, ``https``, or ``ftp`` scheme."""
     url=remove_utm_parameters(url)
-    # Remove fragment
     if not url.startswith(('http://', 'https://', 'ftp://')):
         return f'https://{url}'
     return url
 
+# A URL runs until whitespace, a delimiter that cannot appear unencoded in a URL,
+# or CJK / typographic punctuation.  A backslash may escape ASCII punctuation
+# (Markdown), e.g. ``some\_page``; the escape is removed after matching.
+_URL_CHAR = (
+    r"(?:\\[!-/:-@\[-`{-~]"
+    r"|[^\s<>\"`{}|\\^\[\]\u3000-\u303f\uff01-\uff0f\uff1a-\uff20\uff3b-\uff40\uff5b-\uff65"
+    r"\u201c\u201d\u00ab\u00bb\u2026])"
+)
+_URL_RE = re.compile(rf"(?:https?://|(?<![\w/.@-])www\.){_URL_CHAR}+", re.IGNORECASE)
+_MARKDOWN_ESCAPE_RE = re.compile(r"\\([!-/:-@\[-`{-~])")
+_TRAILING_PUNCTUATION = ".,;:!?*'"
+
+
+def _trim_url(url: str) -> str:
+    """Strip sentence punctuation and unbalanced closing parentheses from the end of a matched URL."""
+    while url:
+        if url[-1] in _TRAILING_PUNCTUATION:
+            url = url[:-1]
+        elif url[-1] == ")" and url.count("(") < url.count(")"):
+            url = url[:-1]
+        else:
+            break
+    return url
+
+
 def regex_find_urls(text: str) -> List[str]:
-    """Enhanced regex extraction for comprehensive URL discovery."""
-    urls = set()
+    """Every ``http(s)://`` and ``www.`` URL in ``text`` (Markdown or plain), in order of first appearance.
 
-    # 1. Standard markdown links: [text](url)
-    urls.update(
-        m for m in re.findall(r"\[.*?\]\((https?://[^\s)]+)\)", text)
-        if _is_valid_url(m)
-    )
-
-    # 2. Standard full URLs with protocol
-    urls.update(
-        m for m in re.findall(
-            r"\bhttps?://[A-Za-z0-9\-.]+\.[A-Za-z]{2,}(?:/[^\s<>\"'`{}|\\^\[\]]*)?\b",
-            text
-        )
-        if _is_valid_url(m)
-    )
-
-    # 3. URLs without protocol (www.example.com)
-    www_matches = re.findall(
-        r"\bwww\.[A-Za-z0-9\-.]+\.[A-Za-z]{2,}(?:/[^\s<>\"'`{}|\\^\[\]]*)?\b",
-        text
-    )
-    for match in www_matches:
-        # Always prefer https for www domains
-        urls.add(f"https://{match}")
-
-
-    # 4. URLs in quotes or parentheses
-    quote_patterns = [
-        r'"(https?://[^"\s]+)"',
-        r"'(https?://[^'\s]+)'",
-        r"\((https?://[^)\s]+)\)",
-        r"<(https?://[^>\s]+)>"
-    ]
-    for pattern in quote_patterns:
-        urls.update(
-            m for m in re.findall(pattern, text)
-            if _is_valid_url(m)
-        )
-
-    # Clean URLs by removing trailing punctuation
-    cleaned_urls = set()
-    for url in urls:
-        # Remove trailing punctuation that might be captured accidentally
-        cleaned_url = re.sub(r'[.,;:!?\)\]}>"\'\u201d\u201c]*$', '', url)
-        if cleaned_url and _is_valid_url(cleaned_url):
-            cleaned_urls.add(cleaned_url)
-
-    return list(cleaned_urls)
+    Handles Markdown links and autolinks, parentheses inside URLs (kept when
+    balanced, as in Wikipedia titles), Markdown backslash escapes, trailing
+    sentence punctuation, and URLs followed directly by CJK punctuation.
+    ``www.`` URLs get an ``https://`` scheme.  Only URLs that
+    ``validators.url`` accepts are returned.
+    """
+    urls: List[str] = []
+    for match in _URL_RE.finditer(text):
+        url = _trim_url(_MARKDOWN_ESCAPE_RE.sub(r"\1", match.group()))
+        if url.lower().startswith("www."):
+            url = "https://" + url
+        if _is_valid_url(url):
+            urls.append(url)
+    return list(dict.fromkeys(urls))

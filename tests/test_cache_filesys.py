@@ -1,0 +1,177 @@
+"""CacheFileSys: storage, lookup rules, and writers sharing a task directory."""
+from __future__ import annotations
+
+import base64
+import io
+import json
+import logging
+import random
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from pathlib import Path
+
+import pytest
+from PIL import Image
+
+from mind2web2.utils.cache_filesys import CacheFileSys, _surface_variants, storage_key
+from mind2web2.utils.url_tools import normalize_url_simple
+
+
+def png_bytes(color=(255, 0, 0, 128)) -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGBA", (4, 3), color).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def index_on_disk(task_dir: Path) -> dict:
+    return json.loads((task_dir / "index.json").read_text(encoding="utf-8"))
+
+
+def test_pages_are_readable_from_a_new_instance(tmp_path):
+    cache = CacheFileSys(str(tmp_path))
+    assert cache.put_web("https://example.com/a/#top", "text A", png_bytes()) == "https://example.com/a"
+    cache.put_web("https://example.com/b", "text B", base64.b64encode(png_bytes()).decode())
+    cache.put_web("https://example.com/c", "text C", "data:image/png;base64," + base64.b64encode(png_bytes()).decode())
+    cache.put_pdf("https://example.com/doc.pdf", b"%PDF-1.4 fake")
+
+    reopened = CacheFileSys(str(tmp_path))  # no save step: every put is already on disk
+    assert reopened.get_all_urls() == ["https://example.com/a", "https://example.com/b",
+                                       "https://example.com/c", "https://example.com/doc.pdf"]
+    assert reopened.summary() == {"total_urls": 4, "web_pages": 3, "pdf_pages": 1}
+    text, screenshot = reopened.get_web("http://www.example.com/a")
+    assert text == "text A"
+    assert Image.open(io.BytesIO(screenshot)).format == "JPEG"
+    assert reopened.get_web("https://example.com/b", get_screenshot=False) == ("text B", None)
+    assert reopened.get_pdf("https://example.com/doc.pdf") == b"%PDF-1.4 fake"
+    assert reopened.has("https://example.com/doc.pdf") == "pdf"
+    assert reopened.has("https://example.com/missing") is None
+    with pytest.raises(KeyError):
+        reopened.get_pdf("https://example.com/a")
+
+
+@pytest.mark.parametrize("url", [
+    "https://example.com/a%23b",      # stored under ".../a#b"
+    "https://example.com/a%2520b",    # stored under ".../a%20b"
+    "https://example.com/q?x=a%26b",  # stored under "...?x=a&b"
+])
+def test_pages_whose_storage_key_changes_when_normalized_again_stay_readable(tmp_path, url):
+    """Keys that percent-decoding would change again are read from the files named by the key itself."""
+    CacheFileSys(str(tmp_path)).put_web(url, "content", png_bytes())
+    reopened = CacheFileSys(str(tmp_path))
+    assert reopened.get_all_urls() == [storage_key(url)]
+    assert reopened.get_web(url)[0] == "content"
+
+
+def reference_lookup(stored: list[str], url: str):
+    """CacheFileSys.lookup's documented rules, applied by scanning every stored URL."""
+    if url in stored:
+        return url
+    match = normalize_url_simple(url)
+    if match in stored:
+        return match
+    for key in stored:
+        try:
+            if normalize_url_simple(key) == match:
+                return key
+        except ValueError:
+            pass
+    return next((variant for variant in _surface_variants(url) if variant in stored), None)
+
+
+def surface_forms(url: str) -> set[str]:
+    forms = {url, url + "/", url.replace("https://", "http://"), url.replace("://", "://www."),
+             url.upper(), url + "?utm_source=chatgpt.com", url + "#part"}
+    return forms | {url.replace("%23", "#"), url.replace("#", "%23")}
+
+
+def test_lookup_follows_its_rules_as_pages_are_added_replaced_and_removed(tmp_path):
+    urls = [f"https://site{i % 7}.org/Page{i % 5}/{p}" for i in range(40)
+            for p in ("", "a%23b", "x y", "q?id=3", "Wiki_(x)")]
+    rng = random.Random(0)
+    cache = CacheFileSys(str(tmp_path))
+    stored: list[str] = []
+    for step in range(300):
+        url = rng.choice(urls)
+        action = rng.random()
+        if action < 0.6:
+            key = cache.put_web(rng.choice(sorted(surface_forms(url))), "t", png_bytes())
+            if key not in stored:
+                stored.append(key)
+        elif action < 0.8:
+            removed = reference_lookup(stored, url)
+            assert (cache.remove(url) is not None) == (removed is not None)
+            if removed is not None:
+                stored.remove(removed)
+        for query in surface_forms(rng.choice(urls)):
+            assert cache.lookup(query) == reference_lookup(stored, query), query
+    assert CacheFileSys(str(tmp_path)).get_all_urls() == stored
+
+
+def test_storing_a_page_of_the_other_type_replaces_its_files(tmp_path):
+    cache = CacheFileSys(str(tmp_path))
+    key = cache.put_web("https://example.com/report", "html", png_bytes())
+    cache.put_pdf(key, b"%PDF-1.4")
+    assert sorted(p.suffix for p in tmp_path.iterdir()) == [".json", ".pdf"]
+    cache.put_web(key, "html again", png_bytes())
+    assert sorted(p.suffix for p in tmp_path.iterdir()) == [".jpg", ".json", ".txt"]
+    assert index_on_disk(tmp_path) == {key: "web"}
+
+
+def test_a_stored_url_passed_to_put_replaces_that_entry(tmp_path):
+    cache = CacheFileSys(str(tmp_path))
+    key = cache.put_web("https://example.com/a%23b", "old", png_bytes())  # key ".../a#b"
+    assert cache.put_web(cache.lookup("https://example.com/a%23b"), "new", png_bytes()) == key
+    assert cache.get_all_urls() == [key]
+    assert cache.get_web("https://example.com/a%23b")[0] == "new"
+
+
+def test_remove_deletes_the_entry_and_its_files(tmp_path):
+    cache = CacheFileSys(str(tmp_path))
+    cache.put_web("https://example.com/a", "a", png_bytes())
+    cache.put_pdf("https://example.com/b.pdf", b"%PDF")
+    assert cache.remove("http://www.example.com/a/") == "web"
+    assert cache.remove("https://example.com/a") is None
+    assert index_on_disk(tmp_path) == {"https://example.com/b.pdf": "pdf"}
+    assert sorted(p.suffix for p in tmp_path.iterdir()) == [".json", ".pdf"]
+
+
+def test_instances_sharing_a_task_keep_each_others_entries(tmp_path):
+    crawler, manager = CacheFileSys(str(tmp_path)), CacheFileSys(str(tmp_path))
+    crawler.put_web("https://example.com/1", "1", png_bytes())
+    manager.put_web("https://example.com/2", "2", png_bytes())
+    crawler.put_pdf("https://example.com/3.pdf", b"%PDF")
+    manager.remove("https://example.com/2")
+    assert index_on_disk(tmp_path) == {"https://example.com/1": "web", "https://example.com/3.pdf": "pdf"}
+
+
+def test_threads_sharing_an_instance_lose_no_entries(tmp_path):
+    cache = CacheFileSys(str(tmp_path))
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(lambda i: cache.put_pdf(f"https://example.com/{i}.pdf", b"%PDF"), range(200)))
+    assert len(cache.get_all_urls()) == len(index_on_disk(tmp_path)) == 200
+
+
+def _store_pages(task_dir: str, worker: int, count: int) -> None:
+    cache = CacheFileSys(task_dir)
+    for i in range(count):
+        cache.put_pdf(f"https://example.com/{worker}/{i}.pdf", b"%PDF")
+
+
+def test_processes_sharing_a_task_lose_no_entries(tmp_path):
+    with ProcessPoolExecutor(max_workers=4) as pool:
+        list(pool.map(_store_pages, [str(tmp_path)] * 4, range(4), [40] * 4))
+    assert len(index_on_disk(tmp_path)) == len(CacheFileSys(str(tmp_path)).get_all_urls()) == 160
+
+
+def test_index_entries_without_their_files_are_ignored(tmp_path, caplog):
+    cache = CacheFileSys(str(tmp_path))
+    key = cache.put_web("https://example.com/a", "a", png_bytes())
+    cache.put_pdf("https://example.com/b.pdf", b"%PDF")
+    next(tmp_path.glob("*.jpg")).unlink()
+    index = index_on_disk(tmp_path)
+    index["https://example.com/c"] = "mhtml"
+    (tmp_path / "index.json").write_text(json.dumps(index), encoding="utf-8")
+    with caplog.at_level(logging.WARNING):
+        reopened = CacheFileSys(str(tmp_path))
+    assert reopened.get_all_urls() == ["https://example.com/b.pdf"]
+    assert f"Ignoring index entry for {key}: its files are missing" in caplog.text
+    assert "unknown content type 'mhtml'" in caplog.text

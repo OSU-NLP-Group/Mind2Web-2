@@ -1,359 +1,384 @@
+"""Per-task store of the webpages and PDFs that answers cite.
+
+One :class:`CacheFileSys` holds the pages cached for one task of one agent::
+
+    <task_dir>/
+    ├── index.json      # {"<storage key>": "web" | "pdf", ...}
+    ├── <stem>.txt      # web page: text (Markdown)
+    ├── <stem>.jpg      # web page: screenshot
+    └── <stem>.pdf      # PDF document
+
+A page is stored under the :func:`storage_key` of its URL, and its files are
+named by the MD5 hex digest of that key (``<stem>``).  Lookups accept other
+surface forms of a stored URL; see :meth:`CacheFileSys.lookup`.
+
+Every change is on disk when the call returns.  Content files and
+``index.json`` are replaced atomically, and ``index.json`` is re-read and
+merged under a lock before each write.  Several processes (the crawler, an
+evaluation run, the Cache Manager) can therefore write to the same task
+without dropping each other's entries, and a process that is interrupted
+keeps every page it finished storing.
+"""
 from __future__ import annotations
 
+import base64
+import functools
+import hashlib
+import io
+import json
 import logging
 import os
-import json
-import hashlib
-import base64
-from typing import Literal, List, Dict, Any, Optional, Tuple
-from urllib.parse import urldefrag, quote, unquote, quote_plus
+import secrets
+import threading
+from contextlib import contextmanager
+from typing import Any, Dict, Iterator, List, Literal, Optional, Tuple
+from urllib.parse import quote, quote_plus, unquote, urldefrag
+
 from PIL import Image
-import io
+
 from .url_tools import normalize_url_simple, remove_utm_parameters
+
+try:
+    import fcntl
+except ImportError:  # Windows: index updates are serialized within one process only.
+    fcntl = None
 
 ContentType = Literal["web", "pdf"]
 
+FILE_EXTENSIONS: Dict[str, Tuple[str, ...]] = {"web": (".txt", ".jpg"), "pdf": (".pdf",)}
+"""The files that make up a cached page of each content type."""
+
+logger = logging.getLogger(__name__)
+
+
+def storage_key(url: str) -> str:
+    """The key a page fetched from ``url`` is stored under: fragment removed, percent-decoded, trailing slash removed."""
+    url_no_frag, _ = urldefrag(url)
+    decoded = unquote(url_no_frag)
+    if decoded.endswith('/') and len(decoded) > 1 and not decoded.endswith('://'):
+        decoded = decoded[:-1]
+    return decoded
+
 
 class CacheFileSys:
-    """Single-task file system cache with lazy loading.
-    
-    Each instance handles one task's cached content. URLs are stored as either
-    'web' (text + screenshot) or 'pdf'. Files are named using URL hashes.
-    
-    Directory structure:
-    task_dir/
-    ├── index.json          # {"url1": "web", "url2": "pdf"}
-    ├── <hash1>.txt         # text content
-    ├── <hash1>.jpg         # screenshot
-    ├── <hash2>.pdf         # pdf content
-    └── ...
+    """The cached web pages (text and screenshot) and PDFs of one task, looked up by URL.
+
+    ``task_dir`` is created if missing.  The index is read once, at
+    construction; an entry whose files are missing or whose content type is
+    unknown is ignored with a warning.  Pages that other processes store later
+    become visible to a new instance.
     """
 
     def __init__(self, task_dir: str):
-        """Initialize cache for a single task.
-        
-        Args:
-            task_dir: Directory path for this specific task's cache
-        """
         self.task_dir = os.path.abspath(task_dir)
         self.index_file = os.path.join(self.task_dir, "index.json")
-        self.urls: Dict[str, ContentType] = {}  # url -> "web"/"pdf"
-        self._variant_cache: Dict[str, List[str]] = {}  # url -> variants
-
-        # Create task directory if it doesn't exist
+        self._types: Dict[str, ContentType] = {}
+        self._keys_by_match: Dict[str, List[str]] = {}  # normalize_url_simple(key) -> keys, oldest first
+        self._lock = threading.Lock()
         os.makedirs(self.task_dir, exist_ok=True)
-        
-        # Load index immediately
-        self._load_index()
-    
-    def _get_url_hash(self, url: str) -> str:
-        """Generate consistent hash for URL to use as filename."""
-        normalized_url = self._remove_frag_and_slash(url)
-        return hashlib.md5(normalized_url.encode('utf-8')).hexdigest()
-    
-    def _remove_frag_and_slash(self, url: str) -> str:
-        """Normalize URL to a consistent format for storage"""
-        url_no_frag, _ = urldefrag(url)
-        decoded = unquote(url_no_frag)
-        if decoded.endswith('/') and len(decoded) > 1 and not decoded.endswith('://'):
-            decoded = decoded[:-1]
-        return decoded
-
-    def _get_url_variants(self, url: str) -> List[str]:
-        """Generate all possible variants of URL for matching."""
-        if url in self._variant_cache:
-            return self._variant_cache[url]
-
-        def swap_scheme(u: str):
-            if u.startswith("http://"):
-                return "https://" + u[7:]
-            if u.startswith("https://"):
-                return "http://" + u[8:]
-            return None
-
-        url_no_frag, _ = urldefrag(url)
-        base_urls: set[str] = {
-            url, url_no_frag, remove_utm_parameters(url), remove_utm_parameters(url_no_frag),
-            f"{url}?utm_source=chatgpt.com", f"{url_no_frag}?utm_source=chatgpt.com",
-            f"{url}?utm_source=openai.com", f"{url_no_frag}?utm_source=openai.com",
-        }
-
-        if not url.endswith("/"):
-            base_urls.add(f"{url}/?utm_source=chatgpt.com")
-        if not url_no_frag.endswith("/"):
-            base_urls.add(f"{url_no_frag}/?utm_source=chatgpt.com")
-
-        if not url.endswith("/"):
-            base_urls.add(f"{url}/?utm_source=openai.com")
-        if not url_no_frag.endswith("/"):
-            base_urls.add(f"{url_no_frag}/?utm_source=openai.com")
-
-        if url.startswith("http://www."):
-            base_urls.add("http://" + url[11:])
-        elif url.startswith("https://www."):
-            base_urls.add("https://" + url[12:])
-        else: #TODO: how do we handle this?
-            pass
-
-        for u in list(base_urls):
-            swapped = swap_scheme(u)
-            if swapped:
-                base_urls.add(swapped)
-
-        variants = []
-        for base_url in base_urls:
-            try:
-                original = base_url
-                encoded_default = quote(base_url)
-                encoded_basic = quote(base_url, safe=':/?#')
-                encoded_common = quote(base_url, safe=':/?#@!$&\'*+,;=')
-                encoded_brackets = quote(base_url, safe=':/?#[]@!$&\'*+,;=')
-                encoded_rfc = quote(base_url, safe=':/?#[]@!$&\'()*+,;=')
-                encoded_minimal = quote(base_url, safe=':/')
-                encoded_plus = quote_plus(base_url, safe=':/?#[]@!$&\'()*+,;=')
-                decoded_url = unquote(base_url)
-
-                encoding_variants = [
-                    original, encoded_default, encoded_basic, encoded_common,
-                    encoded_brackets, encoded_rfc, encoded_minimal, encoded_plus, decoded_url
-                ]
-
-                for url_variant in encoding_variants:
-                    variants.append(url_variant)
-                    if url_variant.endswith("/") and len(url_variant) > 1 and not url_variant.endswith('://'):
-                        variants.append(url_variant[:-1])
-                    elif not url_variant.endswith('/'):
-                        variants.append(url_variant + "/")
-            except Exception:
-                variants.append(base_url)
-                if base_url.endswith("/") and len(base_url) > 1 and not base_url.endswith('://'):
-                    variants.append(base_url[:-1])
-                elif not base_url.endswith('/'):
-                    variants.append(base_url + "/")
-
-        # Deduplicate while maintaining order
-        seen = set()
-        unique_variants = []
-        for variant in variants:
-            if variant not in seen:
-                seen.add(variant)
-                unique_variants.append(variant)
-
-        self._variant_cache[url] = unique_variants
-        return unique_variants
-
-    def _load_index(self):
-        """Load the index file and verify file integrity."""
-        if os.path.exists(self.index_file):
-            try:
-                with open(self.index_file, 'r', encoding='utf-8') as f:
-                    loaded_urls = json.load(f)  # Direct load: {url: type}
-            except (IOError, json.JSONDecodeError) as e:
-                logging.getLogger(__name__).warning(f"Failed to load index: {e}. Starting with empty index.")
-                loaded_urls = {}
-        else:
-            loaded_urls = {}
-        
-        # Verify file integrity and keep only URLs with existing files
-        self.urls = {}
-        for url, content_type in loaded_urls.items():
-            url_hash = self._get_url_hash(url)
-            files_exist = True
-            
-            if content_type == "web":
-                text_file = os.path.join(self.task_dir, f"{url_hash}.txt")
-                screenshot_file = os.path.join(self.task_dir, f"{url_hash}.jpg")
-                if not (os.path.exists(text_file) and os.path.exists(screenshot_file)):
-                    files_exist = False
-            elif content_type == "pdf":
-                pdf_file = os.path.join(self.task_dir, f"{url_hash}.pdf")
-                if not os.path.exists(pdf_file):
-                    files_exist = False
-            
-            if files_exist:
-                self.urls[url] = content_type
+        for key, content_type in self._read_index().items():
+            if content_type not in FILE_EXTENSIONS:
+                logger.warning("Ignoring index entry for %s: unknown content type %r", key, content_type)
+            elif not all(os.path.exists(path) for path in self._paths(key, content_type)):
+                logger.warning("Ignoring index entry for %s: its files are missing", key)
             else:
-                logging.getLogger(__name__).warning(f"Missing files for URL {url}, removing from index")
+                self._add(key, content_type)
 
-    def _find_url(self, url: str) -> Optional[str]:
-        """Find stored URL that matches input URL (handling variants)."""
-        
-        # Direct lookup
-        if url in self.urls:
+    # ------------------------------------------------------------------ lookup
+
+    def lookup(self, url: str) -> Optional[str]:
+        """The stored URL that ``url`` refers to, or ``None`` if its page is not cached.
+
+        The rules are tried in order and the first hit wins:
+
+        1. ``url`` itself is stored.
+        2. Its normalized form (:func:`~mind2web2.utils.url_tools.normalize_url_simple`)
+           is stored.
+        3. A stored URL has the same normalized form; the one stored first wins.
+        4. One of its surface variants (:func:`_surface_variants`) is stored.
+           This finds stored URLs whose normalized form differs from the
+           query's because percent-decoding changed their structure, as with
+           an encoded ``#`` or ``%``.
+
+        Rules 1-3 are dictionary lookups; rule 4 runs only when they miss.
+        Raises ``ValueError`` if ``url`` cannot be parsed.
+        """
+        if url in self._types:
             return url
-        
-        # Try normalized
-        normalized = normalize_url_simple(url)
-        if normalized in self.urls:
-            return normalized
-        
-
-        # Reverse search - check if any stored URL normalizes to same as input
-        normalized_input = normalize_url_simple(url)
-        for stored_url in self.urls:
-            try:
-                if normalize_url_simple(stored_url) == normalized_input:
-                    return stored_url
-            except Exception:
-                continue
-
-        # Try all variants
-        variants = self._get_url_variants(url)
-        for variant in variants:
-            if variant in self.urls:
-                return variant
-        
-        return None
-
-    def _convert_image_to_jpg(self, image_data: str | bytes, quality: int = 85) -> bytes:
-        """Convert image data to JPG format for storage efficiency."""
-        try:
-            if isinstance(image_data, str):
-                if image_data.startswith('data:image/'):
-                    image_data = image_data.split(',', 1)[1]
-                image_bytes = base64.b64decode(image_data)
-            else:
-                image_bytes = image_data
-                
-            image = Image.open(io.BytesIO(image_bytes))
-            
-            # Convert to RGB if necessary
-            if image.mode in ('RGBA', 'LA', 'P'):
-                background = Image.new('RGB', image.size, (255, 255, 255))
-                if image.mode == 'P':
-                    image = image.convert('RGBA')
-                if image.mode in ('RGBA', 'LA'):
-                    background.paste(image, mask=image.split()[-1])
-                image = background
-            elif image.mode != 'RGB':
-                image = image.convert('RGB')
-                
-            jpg_buffer = io.BytesIO()
-            image.save(jpg_buffer, format='JPEG', quality=quality, optimize=True)
-            return jpg_buffer.getvalue()
-            
-        except Exception as e:
-            logging.getLogger(__name__).warning(f"Error converting image to JPG: {e}")
-            if isinstance(image_data, str):
-                if image_data.startswith('data:image/'):
-                    image_data = image_data.split(',', 1)[1]
-                return base64.b64decode(image_data)
-            return image_data
-
-    # Public API methods
-    def put_web(self, url: str, text: str, screenshot: str | bytes):
-        """Store web page content (text + screenshot)."""
-        url_hash = self._get_url_hash(url)
-        
-        # Save text file
-        text_file = os.path.join(self.task_dir, f"{url_hash}.txt")
-        with open(text_file, 'w', encoding='utf-8') as f:
-            f.write(text)
-        
-        # Convert and save screenshot as JPG
-        jpg_data = self._convert_image_to_jpg(screenshot)
-        screenshot_file = os.path.join(self.task_dir, f"{url_hash}.jpg")
-        with open(screenshot_file, 'wb') as f:
-            f.write(jpg_data)
-        
-        # Update index (safe because each async handles different URLs)
-        self.urls[self._remove_frag_and_slash(url)] = "web"
-
-    def put_pdf(self, url: str, pdf_bytes: bytes):
-        """Store PDF content."""
-        url_hash = self._get_url_hash(url)
-        
-        # Save PDF file
-        pdf_file = os.path.join(self.task_dir, f"{url_hash}.pdf")
-        with open(pdf_file, 'wb') as f:
-            f.write(pdf_bytes)
-        
-        # Update index (safe because each async handles different URLs)
-        self.urls[self._remove_frag_and_slash(url)] = "pdf"
-
-    def get_web(self, url: str, get_screenshot=True) -> Tuple[str, bytes]:
-        """Get web page content (text, screenshot_bytes). Raises error if not found."""
-        stored_url = self._find_url(url)
-        if not stored_url or self.urls[stored_url] != "web":
-            raise KeyError(f"No web content found for URL: {url}")
-        
-        url_hash = self._get_url_hash(stored_url)
-        
-        # Load text (files are guaranteed to exist due to integrity check)
-        text_file = os.path.join(self.task_dir, f"{url_hash}.txt")
-        with open(text_file, 'r', encoding='utf-8') as f:
-            text = f.read()
-        
-        # Load screenshot
-        if get_screenshot:
-            screenshot_file = os.path.join(self.task_dir, f"{url_hash}.jpg")
-            with open(screenshot_file, 'rb') as f:
-                screenshot_bytes = f.read()
-        else:
-            screenshot_bytes = None
-        
-        return text, screenshot_bytes
-
-    def get_pdf(self, url: str) -> bytes:
-        """Get PDF content. Raises error if not found."""
-        stored_url = self._find_url(url)
-        if not stored_url or self.urls[stored_url] != "pdf":
-            raise KeyError(f"No PDF content found for URL: {url}")
-        
-        url_hash = self._get_url_hash(stored_url)
-        
-        # Load PDF (file is guaranteed to exist due to integrity check)
-        pdf_file = os.path.join(self.task_dir, f"{url_hash}.pdf")
-        with open(pdf_file, 'rb') as f:
-            return f.read()
+        match = normalize_url_simple(url)
+        if match in self._types:
+            return match
+        keys = self._keys_by_match.get(match)
+        if keys:
+            return keys[0]
+        return next((variant for variant in _surface_variants(url) if variant in self._types), None)
 
     def has(self, url: str) -> ContentType | None:
-        """Check what type of content exists for URL.
-        
-        Returns:
-            "web" if web content exists
-            "pdf" if PDF content exists  
-            None if no content exists
-        """
-        stored_url = self._find_url(url)
-        if stored_url is not None:
-            return self.urls[stored_url]
-        return None
+        """The content type cached for ``url`` ("web" or "pdf"), or ``None`` if it is not cached."""
+        key = self.lookup(url)
+        return self._types[key] if key is not None else None
 
     def has_web(self, url: str) -> bool:
-        """Check if web content exists for URL."""
         return self.has(url) == "web"
 
     def has_pdf(self, url: str) -> bool:
-        """Check if PDF content exists for URL."""
         return self.has(url) == "pdf"
 
     def get_all_urls(self) -> List[str]:
-        """Get all stored URLs."""
-        return list(self.urls.keys())
+        """Every stored URL, in the order it was first stored."""
+        return list(self._types)
 
     def summary(self) -> Dict[str, Any]:
-        """Get cache summary."""
-        web_count = sum(1 for content_type in self.urls.values() if content_type == "web")
-        pdf_count = sum(1 for content_type in self.urls.values() if content_type == "pdf")
-        
-        return {
-            "total_urls": len(self.urls),
-            "web_pages": web_count,
-            "pdf_pages": pdf_count,
-        }
+        types = list(self._types.values())
+        return {"total_urls": len(types), "web_pages": types.count("web"), "pdf_pages": types.count("pdf")}
 
-    def save(self):
-        """Save the index to disk."""
-        with open(self.index_file, 'w', encoding='utf-8') as f:
-            json.dump(self.urls, f, indent=2, ensure_ascii=False)  # Direct save: {url: type}
+    # ------------------------------------------------------------------ read
 
-    def clear(self):
-        """Clear all cached content."""
-        if os.path.exists(self.task_dir):
-            import shutil
-            shutil.rmtree(self.task_dir)
-            os.makedirs(self.task_dir, exist_ok=True)
-        
-        self.urls.clear()
-        self._variant_cache.clear()
+    def get_web(self, url: str, get_screenshot: bool = True) -> Tuple[str, Optional[bytes]]:
+        """The cached text and JPEG screenshot of a web page (screenshot ``None`` if not requested).
+
+        Raises ``KeyError`` if no web page is cached for ``url``.
+        """
+        key = self.lookup(url)
+        if key is None or self._types[key] != "web":
+            raise KeyError(f"No web content found for URL: {url}")
+        with open(self._path(key, ".txt"), 'r', encoding='utf-8') as f:
+            text = f.read()
+        screenshot = None
+        if get_screenshot:
+            with open(self._path(key, ".jpg"), 'rb') as f:
+                screenshot = f.read()
+        return text, screenshot
+
+    def get_pdf(self, url: str) -> bytes:
+        """The cached PDF bytes; raises ``KeyError`` if no PDF is cached for ``url``."""
+        key = self.lookup(url)
+        if key is None or self._types[key] != "pdf":
+            raise KeyError(f"No PDF content found for URL: {url}")
+        with open(self._path(key, ".pdf"), 'rb') as f:
+            return f.read()
+
+    # ------------------------------------------------------------------ write
+
+    def put_web(self, url: str, text: str, screenshot: str | bytes) -> str:
+        """Store a web page's text and screenshot; returns the key it is stored under.
+
+        The key is ``url`` itself if that is already a stored URL (so passing
+        the result of :meth:`lookup` replaces that entry), otherwise
+        ``storage_key(url)``.  A page already stored under the key is replaced,
+        whatever its content type.  ``screenshot`` is image bytes or a base64
+        string (optionally a ``data:image/...`` URL) and is saved as JPEG.
+        """
+        return self._put(url, "web", {".txt": text.encode("utf-8"), ".jpg": _to_jpeg(screenshot)})
+
+    def put_pdf(self, url: str, pdf_bytes: bytes) -> str:
+        """Store a PDF, keyed and replacing like :meth:`put_web`; returns the key it is stored under."""
+        return self._put(url, "pdf", {".pdf": pdf_bytes})
+
+    def remove(self, url: str) -> ContentType | None:
+        """Delete the cached page ``url`` refers to; returns its content type, or ``None`` if nothing was cached."""
+        key = self.lookup(url)
+        if key is None:
+            return None
+        with self._index_lock():
+            self._commit(key, None)
+            content_type = self._types.get(key)
+            self._discard(key)
+        if content_type is not None:
+            self._delete_files(key, content_type)
+        return content_type
+
+    def _put(self, url: str, content_type: ContentType, files: Dict[str, bytes]) -> str:
+        key = url if url in self._types else storage_key(url)
+        for ext, data in files.items():
+            _write_atomic(self._path(key, ext), data)
+        with self._index_lock():
+            previous = self._commit(key, content_type) or self._types.get(key)
+            self._add(key, content_type)
+        if previous in FILE_EXTENSIONS and previous != content_type:
+            self._delete_files(key, previous)
+        return key
+
+    # ------------------------------------------------------------------ internals
+
+    def _path(self, key: str, ext: str) -> str:
+        return os.path.join(self.task_dir, hashlib.md5(key.encode('utf-8')).hexdigest() + ext)
+
+    def _paths(self, key: str, content_type: str) -> List[str]:
+        return [self._path(key, ext) for ext in FILE_EXTENSIONS[content_type]]
+
+    def _delete_files(self, key: str, content_type: str) -> None:
+        for path in self._paths(key, content_type):
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
+
+    def _add(self, key: str, content_type: ContentType) -> None:
+        if key not in self._types:
+            match = _match_key(key)
+            if match is not None:
+                self._keys_by_match.setdefault(match, []).append(key)
+        self._types[key] = content_type
+
+    def _discard(self, key: str) -> None:
+        if self._types.pop(key, None) is None:
+            return
+        match = _match_key(key)
+        keys = self._keys_by_match.get(match, [])
+        if key in keys:
+            keys.remove(key)
+            if not keys:
+                del self._keys_by_match[match]
+
+    def _read_index(self) -> Dict[str, str]:
+        try:
+            with open(self.index_file, 'r', encoding='utf-8') as f:
+                index = json.load(f)
+        except FileNotFoundError:
+            return {}
+        except (OSError, json.JSONDecodeError) as e:
+            logger.warning("Failed to read %s: %s. Treating it as empty.", self.index_file, e)
+            return {}
+        if not isinstance(index, dict):
+            logger.warning("Ignoring %s: expected a JSON object", self.index_file)
+            return {}
+        return index
+
+    def _commit(self, key: str, content_type: ContentType | None) -> Optional[str]:
+        """Write one entry change to ``index.json``, keeping the entries other writers committed.
+
+        ``content_type=None`` removes the entry.  Returns the entry's previous
+        content type on disk.  Must be called under :meth:`_index_lock`.
+        """
+        index = self._read_index()
+        previous = index.get(key)
+        if content_type is None:
+            index.pop(key, None)
+        else:
+            index[key] = content_type  # a replaced entry keeps its position
+        _write_atomic(self.index_file, json.dumps(index, indent=2, ensure_ascii=False).encode('utf-8'))
+        return previous
+
+    @contextmanager
+    def _index_lock(self) -> Iterator[None]:
+        """Serialize index updates across threads and, on POSIX, across processes.
+
+        The cross-process lock is an advisory ``flock`` on the task directory,
+        so no lock file is left in it.
+        """
+        with self._lock:
+            if fcntl is None:
+                yield
+                return
+            fd = os.open(self.task_dir, os.O_RDONLY)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                yield
+            finally:
+                os.close(fd)  # closing the descriptor releases the lock
+
+
+def _match_key(key: str) -> Optional[str]:
+    try:
+        return normalize_url_simple(key)
+    except ValueError:  # unparsable URL: reachable only by exact lookup
+        return None
+
+
+def _write_atomic(path: str, data: bytes) -> None:
+    """Replace ``path`` with ``data``; a concurrent reader sees either the old or the complete new content."""
+    directory, name = os.path.split(path)
+    tmp = os.path.join(directory, f".{name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
+    try:
+        with open(tmp, 'xb') as f:
+            f.write(data)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def _to_jpeg(image_data: str | bytes, quality: int = 85) -> bytes:
+    """Re-encode a screenshot (bytes or base64) as JPEG, flattening transparency onto white.
+
+    Returns the decoded input unchanged if it cannot be read as an image.
+    """
+    if isinstance(image_data, str):
+        if image_data.startswith('data:image/'):
+            image_data = image_data.split(',', 1)[1]
+        image_data = base64.b64decode(image_data)
+    try:
+        image = Image.open(io.BytesIO(image_data))
+        if image.mode in ('RGBA', 'LA', 'P'):
+            background = Image.new('RGB', image.size, (255, 255, 255))
+            if image.mode == 'P':
+                image = image.convert('RGBA')
+            background.paste(image, mask=image.split()[-1])
+            image = background
+        elif image.mode != 'RGB':
+            image = image.convert('RGB')
+        buffer = io.BytesIO()
+        image.save(buffer, format='JPEG', quality=quality, optimize=True)
+        return buffer.getvalue()
+    except Exception as e:
+        logger.warning("Error converting image to JPG: %s", e)
+        return image_data
+
+
+_UTM_SUFFIXES = ("?utm_source=chatgpt.com", "?utm_source=openai.com")
+# ``safe`` characters of the percent-encoding forms a URL may have been written in.
+_QUOTE_SAFE_SETS = ("/", ":/?#", ":/?#@!$&'*+,;=", ":/?#[]@!$&'*+,;=", ":/?#[]@!$&'()*+,;=", ":/")
+
+
+@functools.lru_cache(maxsize=4096)
+def _surface_variants(url: str) -> Tuple[str, ...]:
+    """Other ways ``url`` may have been written, for exact comparison with stored URLs.
+
+    Combines: with or without the fragment and UTM parameters; with a
+    ``utm_source=chatgpt.com`` / ``openai.com`` suffix; without ``www.``;
+    with either scheme; in several percent-encoded forms and decoded; with the
+    trailing slash toggled.
+    """
+    url_no_frag, _ = urldefrag(url)
+    bases = [url, url_no_frag, remove_utm_parameters(url), remove_utm_parameters(url_no_frag)]
+    for u in (url, url_no_frag):
+        for suffix in _UTM_SUFFIXES:
+            bases.append(u + suffix)
+            if not u.endswith('/'):
+                bases.append(u + '/' + suffix)
+    for prefix in ("http://www.", "https://www."):
+        if url.startswith(prefix):
+            bases.append(prefix[:-len("www.")] + url[len(prefix):])
+    bases += [swapped for swapped in map(_swap_scheme, bases) if swapped]
+
+    variants: List[str] = []
+    for base in dict.fromkeys(bases):
+        try:
+            forms = [base, *(quote(base, safe=safe) for safe in _QUOTE_SAFE_SETS),
+                     quote_plus(base, safe=_QUOTE_SAFE_SETS[4]), unquote(base)]
+        except (TypeError, UnicodeError):
+            forms = [base]
+        for form in forms:
+            variants.append(form)
+            toggled = _toggle_trailing_slash(form)
+            if toggled is not None:
+                variants.append(toggled)
+    return tuple(dict.fromkeys(variants))
+
+
+def _swap_scheme(url: str) -> Optional[str]:
+    if url.startswith("http://"):
+        return "https://" + url[len("http://"):]
+    if url.startswith("https://"):
+        return "http://" + url[len("https://"):]
+    return None
+
+
+def _toggle_trailing_slash(url: str) -> Optional[str]:
+    if url.endswith('/'):
+        return url[:-1] if len(url) > 1 and not url.endswith('://') else None
+    return url + '/'
