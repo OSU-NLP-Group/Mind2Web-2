@@ -21,6 +21,7 @@ PROVIDERS = ("openai", "azure_openai")
 DEFAULT_RETRY_SECONDS = 900.0
 DEFAULT_TIMEOUT_SECONDS = 600.0
 MAX_RETRY_DELAY_SECONDS = 120.0
+MIN_ATTEMPT_SECONDS = 1.0
 
 _REQUEST_ERRORS = (openai.OpenAIError, pydantic.ValidationError, json.JSONDecodeError)
 _JUDGE_PARAMS = ("model", "reasoning_effort", "temperature")
@@ -50,6 +51,14 @@ class LLMClient:
     or that outlasts the retry budget, raises :class:`JudgeError`, as does a
     response without the requested structured output.
 
+    The first attempt may take up to ``timeout`` seconds, and each retry's
+    timeout is cut to the time left in the budget, so a request takes at most
+    ``max(timeout, retry_seconds)`` in total: 15 minutes with the defaults.
+    Once one request has spent its whole budget unable to connect to the
+    server, later requests that cannot connect fail after their first attempt,
+    until a request succeeds again, so that an unreachable endpoint does not
+    hold every request for the full budget.
+
     ``response(**kwargs)`` / ``async_response(**kwargs)`` take Chat Completions
     parameters and return the parsed Pydantic object (structured output) or the
     message text; with ``count_token=True`` they return ``(result, tokens)``
@@ -75,8 +84,10 @@ class LLMClient:
         self.judge = judge
         self.retry_seconds = retry_seconds
         self.retry_initial_delay = retry_initial_delay
+        self.timeout = timeout
         self.client = _sdk_client(provider, is_async, base_url, timeout)
         self._overridden_models: set[str] = set()
+        self._unreachable = False  # a request spent its whole retry budget unable to connect
 
     def response(self, count_token: bool = False, **kwargs: Any) -> Any:
         if self.is_async:
@@ -85,16 +96,19 @@ class LLMClient:
         completions = self.client.chat.completions
         call = completions.parse if structured else completions.create
         budget = _RetryBudget(self.retry_seconds, self.retry_initial_delay)
+        options: dict[str, Any] = {}
         while True:
             try:
-                completion = call(**request)
+                completion = call(**request, **options)
                 break
             except _REQUEST_ERRORS as exc:
-                wait = budget.next_wait(exc)
+                wait = self._next_wait(budget, exc)
                 if wait is None:
                     raise _failure(request, exc) from exc
                 _log_retry(request, exc, wait)
                 time.sleep(wait)
+                options = {"timeout": budget.attempt_timeout(self.timeout)}
+        self._unreachable = False
         return _unpack(completion, request, structured, count_token)
 
     async def async_response(self, count_token: bool = False, **kwargs: Any) -> Any:
@@ -104,17 +118,36 @@ class LLMClient:
         completions = self.client.chat.completions
         call = completions.parse if structured else completions.create
         budget = _RetryBudget(self.retry_seconds, self.retry_initial_delay)
+        options: dict[str, Any] = {}
         while True:
             try:
-                completion = await call(**request)
+                completion = await call(**request, **options)
                 break
             except _REQUEST_ERRORS as exc:
-                wait = budget.next_wait(exc)
+                wait = self._next_wait(budget, exc)
                 if wait is None:
                     raise _failure(request, exc) from exc
                 _log_retry(request, exc, wait)
                 await asyncio.sleep(wait)
+                options = {"timeout": budget.attempt_timeout(self.timeout)}
+        self._unreachable = False
         return _unpack(completion, request, structured, count_token)
+
+    def _next_wait(self, budget: _RetryBudget, exc: BaseException) -> float | None:
+        """Seconds to wait before retrying after ``exc``, or ``None`` to give up.
+
+        A failure to connect (not a timeout) gives up at once while the server
+        is marked unreachable, and marks it so when it exhausts the budget.
+        """
+        cannot_connect = isinstance(exc, openai.APIConnectionError) and not isinstance(exc, openai.APITimeoutError)
+        if cannot_connect and self._unreachable:
+            return None
+        wait = budget.next_wait(exc)
+        if wait is None and cannot_connect:
+            self._unreachable = True
+            logger.error("The server could not be reached for the whole retry budget; later requests that "
+                         "cannot connect fail without retrying until a request succeeds")
+        return wait
 
     def _prepare(self, kwargs: dict[str, Any]) -> tuple[dict[str, Any], bool]:
         """Apply the judge configuration and decide between structured and plain requests."""
@@ -135,26 +168,40 @@ class LLMClient:
 
 
 class _RetryBudget:
-    """Wait times for retrying one request, within a total time budget."""
+    """Wait times and timeouts for retrying one request, within a total time budget."""
 
     def __init__(self, seconds: float, initial_delay: float) -> None:
         self.deadline = time.monotonic() + seconds
         self.delay = initial_delay
 
     def next_wait(self, exc: BaseException) -> float | None:
-        """Seconds to wait before retrying after ``exc``, or ``None`` to give up."""
+        """Seconds to wait before retrying after ``exc``, or ``None`` to give up.
+
+        Gives up when ``exc`` is not transient, and when less than
+        ``MIN_ATTEMPT_SECONDS`` of the budget would be left for the retry.
+        """
         if not _is_transient(exc):
             return None
         wait = max(self.delay * (0.5 + random.random()), _retry_after(exc) or 0.0)
         wait = min(wait, MAX_RETRY_DELAY_SECONDS)
-        if time.monotonic() + wait > self.deadline:
+        if time.monotonic() + wait + MIN_ATTEMPT_SECONDS > self.deadline:
             return None
         self.delay = min(self.delay * 2, MAX_RETRY_DELAY_SECONDS)
         return wait
 
+    def attempt_timeout(self, timeout: float) -> float:
+        """The timeout of a retry: ``timeout``, cut to the time left in the budget."""
+        return max(MIN_ATTEMPT_SECONDS, min(timeout, self.deadline - time.monotonic()))
+
 
 def _is_transient(exc: BaseException) -> bool:
-    """Whether a failed request may succeed if sent again, by the rules in the LLMClient docstring."""
+    """Whether a failed request may succeed if sent again.
+
+    Connection errors and timeouts always may.  For an HTTP error response,
+    an ``x-should-retry`` header of ``true`` or ``false`` decides; without it,
+    408, 409, 429, and 5xx responses may.  Exhausted quota (a 429 with code
+    ``insufficient_quota``) and every other failure may not.
+    """
     if isinstance(exc, openai.APIConnectionError):  # includes APITimeoutError
         return True
     if not isinstance(exc, openai.APIStatusError) or exc.code == "insufficient_quota":

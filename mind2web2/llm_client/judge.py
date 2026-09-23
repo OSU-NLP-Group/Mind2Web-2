@@ -51,7 +51,10 @@ class JudgeError(RuntimeError):
     failure: invalid request, authentication, exhausted quota, truncated or
     refused output.  Evaluation code lets it
     propagate instead of scoring the verification as failed, so that a judge
-    outage never lowers an agent's score.
+    outage never lowers an agent's score.  The answer is left without a result
+    and is evaluated again on the next run; a failure that recurs whenever the
+    request is sent, such as a refusal, therefore keeps the answer without a
+    result, and the metrics count an answer without a result as 0.
     """
 
 

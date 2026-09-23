@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from mind2web2 import eval_runner
+from mind2web2 import EvaluatorConfig, eval_runner
 from mind2web2.llm_client import JudgeConfig, JudgeError
 from mind2web2.metrics import collect_records, compute_metrics
 from mind2web2.submission import TaskInfo
@@ -150,31 +150,72 @@ def test_judge_failure_swallowed_by_the_script_still_leaves_the_answer_unscored(
     assert "judge request(s) failed; the answer is not scored" in log
 
 
-def test_a_result_is_reused_only_for_the_same_answer_and_judge(tmp_path, monkeypatch):
+def test_a_result_is_reused_only_for_the_same_answer_judge_and_script(tmp_path, monkeypatch):
     script = toy_script(None, swallow_errors=False)
     first, results_root = evaluate(tmp_path, monkeypatch, JudgedClient(), script)
     [result_file] = saved_results(results_root)
+    assert json.loads(result_file.read_text())["eval_script_sha256"] == hashlib.sha256(script.encode()).hexdigest()
 
     client = JudgedClient()
     again, _ = evaluate(tmp_path, monkeypatch, client, script)
-    assert client.calls == 0 and again == first  # same answer, same judge: reused
+    assert client.calls == 0 and again == first  # same answer, judge, and script: reused
 
-    other_judge = JudgedClient()
-    other_judge.judge = JudgeConfig(model="judge-x", reasoning_effort="high")
-    evaluate(tmp_path, monkeypatch, other_judge, script)
-    assert other_judge.calls > 0
+    def judged_by_other_judge() -> JudgedClient:
+        client = JudgedClient()
+        client.judge = JudgeConfig(model="judge-x", reasoning_effort="high")
+        return client
+
+    client = judged_by_other_judge()
+    evaluate(tmp_path, monkeypatch, client, script)
+    assert client.calls > 0  # only the judge changed
     assert superseded_results(results_root) == [result_file.parent / "superseded" / result_file.name]
 
-    client = JudgedClient()
+    client = judged_by_other_judge()
     evaluate(tmp_path, monkeypatch, client, script, answer="Source: https://b.example/2")
-    assert client.calls > 0  # the answer changed
+    assert client.calls > 0  # only the answer changed
     [latest] = saved_results(results_root)
     assert json.loads(latest.read_text())["answer_sha256"] == hashlib.sha256(b"Source: https://b.example/2").hexdigest()
 
-    client = JudgedClient()
-    evaluate(tmp_path, monkeypatch, client, script, answer="Source: https://b.example/2", overwrite=True)
+    revised = script + "# a revised script\n"
+    client = judged_by_other_judge()
+    evaluate(tmp_path, monkeypatch, client, revised, answer="Source: https://b.example/2")
+    assert client.calls > 0  # only the eval script changed
+
+    monkeypatch.setattr(EvaluatorConfig, "image_max_height", EvaluatorConfig.image_max_height + 1)
+    client = judged_by_other_judge()
+    evaluate(tmp_path, monkeypatch, client, revised, answer="Source: https://b.example/2")
+    assert client.calls > 0  # only the default evaluator settings changed
+
+    client = judged_by_other_judge()
+    evaluate(tmp_path, monkeypatch, client, revised, answer="Source: https://b.example/2", overwrite=True)
     assert client.calls > 0
     assert len(saved_results(results_root)) == 1
+
+
+def test_after_a_failed_judge_request_no_further_requests_are_sent_for_the_answer(tmp_path, monkeypatch):
+    script = "\n".join([
+        "from mind2web2 import Evaluator",
+        "",
+        "async def evaluate_answer(client, answer, agent_name, answer_name, cache, semaphore, logger, model='o4-mini'):",
+        "    evaluator = Evaluator()",
+        "    root = evaluator.initialize(",
+        "        task_id='toy', agent_name=agent_name, answer_name=answer_name, client=client,",
+        "        task_description='Name two sources.', answer=answer, global_cache=cache,",
+        "        global_semaphore=semaphore, logger=logger, default_model=model,",
+        "    )",
+        "    for i, claim in enumerate(['The answer names a source.', 'The answer names a second source.']):",
+        "        leaf = evaluator.add_leaf(id=f'claim_{i}', desc=claim, parent=root)",
+        "        try:",
+        "            await evaluator.verify(claim=claim, node=leaf, sources=None)",
+        "        except Exception as exc:",
+        "            logger.warning(f'The script caught {type(exc).__name__}')",
+        "    return evaluator.get_summary()",
+        "",
+    ])
+    client = BrokenJudgeClient()
+    evaluated, results_root = evaluate(tmp_path, monkeypatch, client, script)
+    assert evaluated == [] and saved_results(results_root) == []
+    assert client.calls == 1  # the second verification sent no request
 
 
 def test_a_failed_evaluation_does_not_leave_an_earlier_result_in_place(tmp_path, monkeypatch):

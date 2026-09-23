@@ -14,7 +14,7 @@ import openai
 import pytest
 from pydantic import BaseModel
 
-from mind2web2.llm_client import DEFAULT_JUDGE_MODEL, JudgeConfig, JudgeError, LLMClient
+from mind2web2.llm_client import DEFAULT_JUDGE_MODEL, JudgeConfig, JudgeError, LLMClient, base_client
 
 # openai>=3 builds on httpx2; earlier releases on httpx.
 hx = importlib.import_module("httpx2" if importlib.util.find_spec("httpx2") else "httpx")
@@ -162,6 +162,67 @@ def test_transient_errors_beyond_the_retry_budget_raise_judge_error(monkeypatch)
         asyncio.run(client.async_response(messages=MESSAGES, response_format=Verdict))
 
 
+def test_retry_after_is_honored(monkeypatch):
+    waits: list[float] = []
+    monkeypatch.setattr(base_client.time, "sleep", waits.append)
+    completions = ScriptedCompletions(
+        status_error(openai.RateLimitError, 429, headers={"retry-after": "7"}),
+        status_error(openai.RateLimitError, 429, headers={"retry-after-ms": "2500"}),
+        completion(content="pong"),
+        is_async=False,
+    )
+    client = make_client(completions, monkeypatch, judge=JudgeConfig())
+    assert client.response(messages=MESSAGES) == "pong"
+    assert waits == [7.0, 2.5]  # the backoff alone would wait about a millisecond
+
+
+def test_each_retry_is_limited_to_the_time_left_in_the_budget(monkeypatch):
+    monkeypatch.setattr(base_client.time, "sleep", lambda seconds: None)
+    completions = ScriptedCompletions(status_error(openai.InternalServerError, 503), completion(content="pong"),
+                                      is_async=False)
+    client = make_client(completions, monkeypatch, judge=JudgeConfig(), retry_seconds=30)
+    assert client.response(messages=MESSAGES) == "pong"
+    (_, first), (_, retry) = completions.calls
+    assert "timeout" not in first  # the first attempt has the client's own timeout
+    assert 29 < retry["timeout"] <= 30
+
+
+class Endpoint:
+    """A server that refuses connections while ``down`` is true, and for the next ``refusals`` requests."""
+
+    is_async = False
+
+    def __init__(self) -> None:
+        self.down, self.refusals, self.calls = True, 0, 0
+
+    def create(self, **kwargs):
+        self.calls += 1
+        if self.down or self.refusals:
+            self.refusals = max(0, self.refusals - 1)
+            raise openai.APIConnectionError(request=REQUEST)
+        return completion(content="pong")
+
+
+def test_an_unreachable_server_fails_later_requests_at_their_first_attempt(monkeypatch):
+    monkeypatch.setattr(base_client.time, "sleep", lambda seconds: None)
+    endpoint = Endpoint()
+    client = make_client(endpoint, monkeypatch, judge=JudgeConfig(), retry_seconds=2)
+    with pytest.raises(JudgeError, match="APIConnectionError"):
+        client.response(messages=MESSAGES)
+    assert endpoint.calls > 1  # retried until the budget ran out
+
+    endpoint.calls = 0
+    with pytest.raises(JudgeError, match="APIConnectionError"):
+        client.response(messages=MESSAGES)
+    assert endpoint.calls == 1  # the server is marked unreachable, so no retry
+
+    endpoint.down = False
+    assert client.response(messages=MESSAGES) == "pong"  # a success clears the mark
+    endpoint.calls, endpoint.refusals = 0, 1
+    assert client.response(messages=MESSAGES) == "pong"
+    assert endpoint.calls == 2
+
+
 def test_missing_structured_output_raises_judge_error(monkeypatch):
     completions = ScriptedCompletions(completion(parsed=None, refusal="I can't help with that."))
     client = make_client(completions, monkeypatch, judge=JudgeConfig())
@@ -174,7 +235,9 @@ def test_synchronous_client_behaves_like_the_async_one(monkeypatch):
                                       is_async=False)
     client = make_client(completions, monkeypatch, judge=JudgeConfig(model="gpt-4.1", temperature=0.0))
     assert client.response(messages=MESSAGES) == "pong"
-    assert completions.calls[-1] == ("create", {"messages": MESSAGES, "model": "gpt-4.1", "temperature": 0.0})
+    method, sent = completions.calls[-1]
+    assert method == "create" and 0 < sent.pop("timeout") <= base_client.DEFAULT_TIMEOUT_SECONDS  # a retry
+    assert sent == {"messages": MESSAGES, "model": "gpt-4.1", "temperature": 0.0}
     with pytest.raises(ValueError, match="synchronous"):
         asyncio.run(client.async_response(messages=MESSAGES))
 
