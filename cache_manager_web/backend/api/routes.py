@@ -88,6 +88,7 @@ class CaptureRequest(BaseModel):
     html: Optional[str] = None  # the page's HTML, converted to text as the crawler converts it
     text: str = ""  # the page's text, stored when no HTML is sent
     actual_url: Optional[str] = None  # URL after redirects (may differ from url)
+    visible_part_only: bool = False  # the full-page screenshot failed; this one shows the visible part of the tab
 
 class ReviewRequest(BaseModel):
     url: str
@@ -383,8 +384,10 @@ async def receive_capture(req: CaptureRequest):
     With ``html``, the stored text is ``html_to_markdown(html)``, the text the
     crawler stores for the pages it captures, so a page's text has the same
     form whichever of the two captured it.  Each stored page's flag is
-    cleared and its review status set to "recaptured" during a batch capture
-    (a person still has to look at it) and "fixed" otherwise.  Returns the
+    cleared and its review status set to "recaptured" when the page is the
+    one a running batch capture waits for (a person still has to look at it),
+    which advances the batch, and "fixed" otherwise.  The capture_complete
+    event carries a warning when ``visible_part_only`` is set.  Returns the
     URL the task lists the page under.
     """
     _require_loaded()
@@ -407,14 +410,17 @@ async def receive_capture(req: CaptureRequest):
         if redirected is not None and redirected != stored:
             stored_urls.append(redirected)
 
-    review_status = "recaptured" if _batch_active else "fixed"
+    batch_item = _batch_waits_for(req.task_id, req.url, stored)
     for url in stored_urls:
         _cm.unflag_url(req.task_id, url)
-        _cm.mark_url_reviewed(req.task_id, url, review_status)
+        _cm.mark_url_reviewed(req.task_id, url, "recaptured" if batch_item else "fixed")
     _refresh_issues(req.task_id, *stored_urls)
 
-    await _push_event("capture_complete", {"task_id": req.task_id, "url": stored})
-    if _batch_active:
+    event = {"task_id": req.task_id, "url": stored}
+    if req.visible_part_only:
+        event["warning"] = "the full-page screenshot failed, so the screenshot shows only the visible part of the page"
+    await _push_event("capture_complete", event)
+    if batch_item:
         await _advance_batch()
 
     return {"ok": True, "task_id": req.task_id, "url": stored}
@@ -504,6 +510,18 @@ async def review_progress():
 # ---------------------------------------------------------------------------
 # Batch Capture
 # ---------------------------------------------------------------------------
+
+def _batch_waits_for(task_id: str, *urls: str) -> bool:
+    """Whether a batch capture is running and its current URL, the head of the queue, is one of ``urls`` of ``task_id``.
+
+    Only a page stored for that URL advances the batch; a page captured or
+    uploaded by hand for another URL while a batch runs leaves the queue as it is.
+    """
+    if not (_batch_active and _batch_queue):
+        return False
+    head = _batch_queue[0]
+    return head["task_id"] == task_id and head["url"] in urls
+
 
 async def _advance_batch():
     """Pop the completed item and advance to the next URL in the batch queue."""
@@ -748,12 +766,13 @@ async def upload_mhtml(task_id: str, url: str = Query(...), file: UploadFile = F
     if stored is None:
         raise HTTPException(500, "Failed to save MHTML content")
 
+    batch_item = _batch_waits_for(task_id, url, stored)
     _cm.unflag_url(task_id, stored)
-    _cm.mark_url_reviewed(task_id, stored, "recaptured" if _batch_active else "fixed")
+    _cm.mark_url_reviewed(task_id, stored, "recaptured" if batch_item else "fixed")
     _refresh_issues(task_id, stored)
 
     await _push_event("capture_complete", {"task_id": task_id, "url": stored})
-    if _batch_active:
+    if batch_item:
         await _advance_batch()
 
     return {"ok": True, "url": stored}
@@ -770,7 +789,8 @@ async def upload_pdf(task_id: str, url: str = Query(...), file: UploadFile = Fil
     A file without the PDF signature (``%PDF-`` in its first 1024 bytes),
     such as a login page saved in place of a paper, is refused with status
     422.  The URL's flag is cleared and its review status set to
-    "recaptured" during a batch capture and "fixed" otherwise.
+    "recaptured" when the page is the one a running batch capture waits for,
+    which advances the batch, and "fixed" otherwise.
     """
     _require_loaded()
     if not _cm.get_task_cache(task_id):
@@ -783,12 +803,13 @@ async def upload_pdf(task_id: str, url: str = Query(...), file: UploadFile = Fil
     if stored is None:
         raise HTTPException(500, "Failed to save PDF")
 
+    batch_item = _batch_waits_for(task_id, url, stored)
     _cm.unflag_url(task_id, stored)
-    _cm.mark_url_reviewed(task_id, stored, "recaptured" if _batch_active else "fixed")
+    _cm.mark_url_reviewed(task_id, stored, "recaptured" if batch_item else "fixed")
     _refresh_issues(task_id, stored)
 
     await _push_event("capture_complete", {"task_id": task_id, "url": stored})
-    if _batch_active:
+    if batch_item:
         await _advance_batch()
 
     return {"ok": True, "url": stored, "content_type": "pdf"}

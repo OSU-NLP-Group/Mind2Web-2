@@ -209,7 +209,7 @@ export function toast(msg, type = '') {
     el.textContent = msg;
     el.className = 'toast visible' + (type ? ' ' + type : '');
     clearTimeout(_toastTimer);
-    _toastTimer = setTimeout(() => { el.className = 'toast'; }, 3000);
+    _toastTimer = setTimeout(() => { el.className = 'toast'; }, type === 'warning' ? 8000 : 3000);
 }
 
 // ---- URL filtering (shared between url-list.js and main.js) ----

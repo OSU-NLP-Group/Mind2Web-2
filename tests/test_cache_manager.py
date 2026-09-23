@@ -472,6 +472,43 @@ def test_edits_served_while_a_load_reads_the_folder_are_kept_and_listed(tmp_path
                                  p: ("web", [], ""), q: ("pending", ["not captured yet"], "definite")}
 
 
+def test_only_the_url_a_batch_waits_for_advances_it(tmp_path):
+    cache = CacheFileSys(str(tmp_path / "agent" / "task"))
+    cache.record_failure(A, "HTTP 503")
+    cache.record_failure(B, "HTTP 503")
+    other = "https://example.com/other"
+    cache.put_web(other, "page other", png_bytes())
+
+    with client() as c:
+        c.post("/api/load", json={"path": str(tmp_path / "agent")})
+        items = [{"task_id": "task", "url": url} for url in (A, B)]
+        assert c.post("/api/capture/batch/start", json={"items": items}).json()["total"] == 2
+        batch = lambda: (lambda s: (s["current"]["url"], s["completed"]))(c.get("/api/capture/batch/status").json())
+
+        assert c.post("/api/capture", json=capture(other)).json()["ok"]  # by hand, while the batch runs
+        assert c.post("/api/upload-pdf/task", params={"url": other}, files={"file": ("f", b"%PDF-1.4")}).json()["ok"]
+        assert batch() == (A, 0)
+        assert c.post("/api/capture", json=capture(A)).json()["ok"]
+        assert batch() == (B, 1)
+        assert url_file(tmp_path, "reviewed.json") == {other: "fixed", A: "recaptured"}
+
+
+def test_a_screenshot_of_the_visible_part_only_is_reported_to_the_ui(tmp_path, monkeypatch):
+    CacheFileSys(str(tmp_path / "agent" / "task")).put_web(A, "page a", png_bytes())
+    events = []
+
+    async def record(event_type, data):
+        events.append((event_type, data))
+
+    monkeypatch.setattr(routes, "_push_event", record)
+    with client() as c:
+        c.post("/api/load", json={"path": str(tmp_path / "agent")})
+        assert c.post("/api/capture", json=capture(A)).json()["ok"]
+        assert c.post("/api/capture", json=capture(B) | {"visible_part_only": True}).json()["ok"]
+    assert [data.get("warning") for event_type, data in events if event_type == "capture_complete"] == [
+        None, "the full-page screenshot failed, so the screenshot shows only the visible part of the page"]
+
+
 def test_a_failed_load_keeps_the_loaded_cache(tmp_path, monkeypatch):
     CacheFileSys(str(tmp_path / "agent" / "task")).put_web(A, "page a", png_bytes())
     (tmp_path / "other").mkdir()
