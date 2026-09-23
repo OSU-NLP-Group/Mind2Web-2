@@ -45,7 +45,7 @@ cache_manager_web/
 - **No circular imports**: Components import shared actions from `actions.js`, NOT from `main.js`. This is critical — `main.js` imports components, so components must not import from `main.js`.
 - **Selective state subscriptions**: `subscribe(fn, ['key1', 'key2'])` — components only re-render when their relevant keys change.
 - **Chrome Extension for capture**: Uses a real browser session (not Playwright/Selenium) so it works on Cloudflare-protected and anti-bot pages.
-- **Extension captures as the crawler does**: `captureFullPage()` in background.js repeats the crawler's capture steps through `chrome.debugger`. The page is laid out in a 1100×750 viewport (the middle of the crawler's window sizes) and scrolled to the end three times and back to the top (the crawler presses End and Home); the viewport is then resized to the page's content height, at most 6000 CSS pixels, and after 750 ms the page's `outerHTML` is read and the screenshot is taken with `captureBeyondViewport`, which covers the whole page. `/api/capture` converts the HTML with the crawler's `html_to_markdown()`. Every DevTools command and content script has a timeout. When the full-page screenshot fails, the extension scrolls the same way and sends a `captureVisibleTab` screenshot (the visible part only) with `visible_part_only`, and the `capture_complete` event carries a warning that the UI shows. The backend URL is a setting in the popup (`settings.js`, default `http://127.0.0.1:8000`).
+- **Extension captures as the crawler does**: `captureFullPage()` in background.js repeats the crawler's capture steps through `chrome.debugger`. The page is laid out in a 1100×750 viewport (the middle of the crawler's window sizes) and scrolled to the end three times and back to the top (the crawler presses End and Home); the viewport is then resized to the page's content height, at most 6000 CSS pixels, and after 750 ms the page's `outerHTML` is read, the tab is brought to the front (`Page.bringToFront`, since Chrome may not render a background tab), and the screenshot is taken with `captureBeyondViewport`, which covers the whole page. `/api/capture` converts the HTML with the crawler's `html_to_markdown()`. Every DevTools command, every content script (including the PDF, CAPTCHA, and page-length checks), and the fallback screenshot has a timeout. When the full-page screenshot fails, the extension scrolls the same way and sends a `captureVisibleTab` screenshot (the visible part only) with `visible_part_only`; `/api/capture` flags such a page and clears its review status, so it stays a definite issue until a full-page capture, and the `capture_complete` event carries a warning that the UI shows. `captureVisiblePart()` makes the tab active again and keeps the screenshot only if the tab is the active tab of its window right before and right after it is taken; otherwise the capture fails. The backend URL is a setting in the popup (`settings.js`, default `http://127.0.0.1:8000`).
 - **SSE for real-time updates**: When the extension captures a page, the frontend updates instantly.
 - **contentVersion cache busting**: Screenshot URLs include `&v={contentVersion}` to force browser to re-fetch after capture.
 - **MHTML parsing without Qt**: Uses Python's `email` module to parse MHTML (MIME format).
@@ -79,10 +79,10 @@ This project uses `uv`, not pip. Use `uv run`, `uv sync`, `uv add`.
 | POST/GET | /api/capture/target | Active capture target for extension |
 | POST | /api/capture/batch/start | Start batch capture with URL queue |
 | GET | /api/capture/batch/status | Batch progress (polled by extension) |
-| POST | /api/capture/batch/skip | Skip current URL (on failure) |
+| POST | /api/capture/batch/skip | Skip the URL the batch waits for (on failure); names `task_id` and `url`, 409 when the batch no longer waits for it |
 | POST | /api/capture/batch/stop | Stop batch capture |
 | POST | /api/capture/batch/captcha | CAPTCHA detected notification |
-| POST | /api/capture | Receive capture from extension (`html` is converted with `html_to_markdown()`; `text` is stored as is when no HTML is sent) |
+| POST | /api/capture | Receive capture from extension (`html` is converted with `html_to_markdown()`; `text` is stored as is when no HTML is sent; `visible_part_only` flags the page; with `batch`, a batch capture: stored only while the batch waits for `url`, else 409 and nothing stored) |
 | POST | /api/flag/{id} | Flag URL for recapture (flags.json only; the stored page is kept) |
 | POST | /api/reset/{id} | Delete the stored page or failure record; the URL becomes `pending` |
 | GET | /api/review/{id} | Get review statuses for a task |
@@ -93,7 +93,7 @@ This project uses `uv`, not pip. Use `uv run`, `uv sync`, `uv add`.
 | POST | /api/urls/{id}/rename | Rename/edit URL link (moves a stored page with its flag and review status; a failed or pending URL leaves the new URL `pending`); returns the new URL as listed |
 | DELETE | /api/urls/{id} | Delete URL: stored page, failure record, pending entries (every spelling of the page), flag, review status |
 | POST | /api/upload-mhtml/{id} | Upload MHTML: its text, with a 1x1 placeholder screenshot (422 if it has no text) |
-| POST | /api/upload-pdf/{id} | Upload PDF (replaces content, switches type; 422 without the `%PDF-` signature) |
+| POST | /api/upload-pdf/{id} | Upload PDF (replaces content, switches type; 422 without the `%PDF-` signature; `batch` query parameter as for `/api/capture`) |
 | GET | /api/events | SSE stream |
 
 ## State Store (store.js)
@@ -160,8 +160,10 @@ Key state fields:
 - **CAPTCHA detection**: Cloudflare, Turnstile, reCAPTCHA, hCaptcha, generic blocked pages
 - **Rich popup UI**: Live progress bar, status badge, current URL, scrollable log
 - **Skip on failure**: Failed captures skip and advance to prevent infinite loops
-- **Only the current URL advances the batch**: a capture or upload advances the queue only when it stores the URL at its head (`_batch_waits_for()` in routes.py), and only that page gets the `"recaptured"` status; pages captured or uploaded by hand for other URLs during a batch get `"fixed"`
-- **Resuming**: a batch that the extension did not finish (the batch tab was closed, or the extension was reloaded) stays queued on the server; Start Batch resumes it at its head, and the popup counts the server's `completed` as done earlier
+- **One rule for what the batch captures**: a URL qualifies when it is listed, not a stored PDF, a definite issue, and has no review status (`_qualifies()` in routes.py). `batch/start` queues the given URLs that qualify; a queued URL that stops qualifying (captured or uploaded by hand, which sets `"fixed"`; reviewed; renamed; deleted) is left out when it reaches the head (`_skip_urls_that_no_longer_qualify()`), so the batch never replaces a page fixed by hand with what its tab shows. The batch's `completed` is `total - remaining`: captured, skipped, and left out
+- **Only a batch capture advances the batch**: the extension sends its captures and PDF uploads with `batch`; the backend stores them only while their URL is the head of the queue, gives them the `"recaptured"` status, and pops the head; otherwise it refuses them with 409 and stores nothing (`_refuse_a_stale_batch_capture()`). A skip names its URL and is checked the same way. Captures made by hand are not checked. The batch does not set the capture target, so the extension's single capture keeps capturing for the URL selected in the UI
+- **A batch capture is for the URL its tab loaded**: the extension remembers the task and URL it sent the batch tab to; if the batch's head differs once the page has loaded, it loads the head without capturing, and counts neither a capture nor a skip
+- **Resuming**: a batch that the extension did not finish (the batch tab was closed, or the extension was reloaded) stays queued on the server; Start Batch resumes it at its head. The badge and the popup's progress show the server's `completed`
 
 ## Gotchas
 
@@ -171,4 +173,4 @@ Key state fields:
 - Screenshot browser caching: always use `contentVersion` in screenshot URLs.
 - MHTML upload uses Python's `email` module parser.
 - `"recaptured"` status is NOT counted in progress — these URLs still need human review.
-- `captureVisibleTab`, the fallback screenshot, captures the active tab, not a specific tab — must activate the target tab first.
+- `captureVisibleTab`, the fallback screenshot, captures whichever tab is active in a window, not a specific tab: `captureVisiblePart()` activates the target tab first and discards the screenshot, failing the capture, unless the tab is the active tab of its window both before and after it.

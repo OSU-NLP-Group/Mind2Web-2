@@ -78,10 +78,6 @@ export async function getBatchStatus() {
     return (await request('GET', '/api/capture/batch/status')).json();
 }
 
-export async function skipBatchUrl() {
-    return (await request('POST', '/api/capture/batch/skip')).json();
-}
-
 export async function stopBatch() {
     return (await request('POST', '/api/capture/batch/stop')).json();
 }

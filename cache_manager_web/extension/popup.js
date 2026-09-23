@@ -41,21 +41,19 @@ function showSection(name) {
 }
 
 function updateBatchRunningUI(state) {
-    const completed = state.completed || 0;
+    const done = state.done || 0;  // the server's count: captured, skipped, or left out
     const total = state.total || 0;
+    const completed = state.completed || 0;
     const skipped = state.skipped || 0;
-    const before = state.before || 0;  // done before this run, when it resumed the batch
     const status = state.status || 'loading';
     const currentUrl = state.currentUrl || '';
     const log = state.log || [];
 
-    // Progress count: pages this run captured, of all queued pages
-    document.getElementById('br-completed').textContent = completed;
+    // Progress count: queued pages that are done, and what this run did
+    document.getElementById('br-completed').textContent = done;
     document.getElementById('br-total').textContent = total;
-    const notes = [];
-    if (skipped > 0) notes.push(`${skipped} skipped`);
-    if (before > 0) notes.push(`${before} done earlier`);
-    document.getElementById('br-skipped').textContent = notes.length ? `(${notes.join(', ')})` : '';
+    document.getElementById('br-skipped').textContent =
+        completed || skipped ? `(this run: ${completed} captured, ${skipped} skipped)` : '';
 
     // Status badge
     const badgeEl = document.getElementById('br-status');
@@ -69,7 +67,7 @@ function updateBatchRunningUI(state) {
     }
 
     // Progress bar
-    const pct = total > 0 ? Math.round(((before + completed + skipped) / total) * 100) : 0;
+    const pct = total > 0 ? Math.round((done / total) * 100) : 0;
     document.getElementById('br-progress-fill').style.width = pct + '%';
 
     // Current URL
