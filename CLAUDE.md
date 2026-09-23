@@ -90,7 +90,7 @@ uv run run_eval.py --agent_name example --task_id yu_lineage
 
 # Check an agent's answers, and compute its leaderboard metrics from saved results
 uv run mind2web2 validate example
-uv run mind2web2 metrics example --task-list <split.csv>
+uv run mind2web2 metrics example --task-list <split.csv> --num-runs 3
 ```
 
 ## Key Dependencies
