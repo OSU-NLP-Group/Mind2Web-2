@@ -107,7 +107,8 @@ def collect_records(
 
     ``num_runs`` defaults to the highest run index among the answers found.
     Raises :class:`~mind2web2.submission.MetadataError` if an answer's
-    ``.meta.json`` file is invalid.
+    ``.meta.json`` file is invalid, and ``ValueError`` naming the file if an
+    answer is not UTF-8 text.
     """
     task_ids = list(tasks)
     answers = {t: discover_answers(agent_name, t, answers_root, results_root) for t in task_ids}
@@ -125,12 +126,16 @@ def collect_records(
             result = load_latest_result(results_root, agent_name, task_id, answer.name)
             score = float(result["final_score"]) if result and "final_score" in result else None
             metadata = load_metadata(answer)
+            try:
+                text = answer.path.read_text(encoding="utf-8")
+            except UnicodeDecodeError as exc:
+                raise ValueError(f"{answer.path}: not UTF-8 text") from exc
             records.append(AnswerRecord(
                 task_id=task_id,
                 run=run,
                 answer_present=True,
                 score=score,
-                word_count=count_words(answer.path.read_text(encoding="utf-8")),
+                word_count=count_words(text),
                 time_seconds=metadata.time_seconds if metadata else None,
             ))
     return records, num_runs

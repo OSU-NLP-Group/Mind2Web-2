@@ -45,10 +45,31 @@ def test_csv_task_list_needs_task_id_column(tmp_path):
         load_task_list(csv_file)
 
 
+def test_unreadable_csv_task_lists_raise_value_error(tmp_path):
+    short_rows = tmp_path / "short.csv"
+    short_rows.write_text("domain,task_id\nShopping,a\nTravel\n")  # the second row has no task_id
+    assert load_task_list(short_rows) == [TaskInfo("a", "Shopping")]
+    oversized = tmp_path / "oversized.csv"
+    oversized.write_text("task_id,notes\na," + "x" * 200_000 + "\n")  # beyond the csv field size limit
+    with pytest.raises(ValueError, match="not a valid CSV file"):
+        load_task_list(oversized)
+
+
 def test_only_answer_k_md_files_are_answers(tmp_path):
     make_task(tmp_path, "t", {"answer_2.md": CITED, "answer_10.md": CITED, "answer.md": CITED,
                               "answer_1.md.bak": CITED, "answer_1.meta.json": "{}"})
     assert [(a.run, a.name) for a in list_answer_files(tmp_path / "t")] == [(2, "answer_2.md"), (10, "answer_10.md")]
+
+
+def test_run_numbers_start_at_1_without_leading_zeros(tmp_path):
+    """``answer_01.md`` would be a second file for run 1, and run 0 is never scored."""
+    make_task(tmp_path, "t", {"answer_1.md": CITED, "answer_2.md": CITED, "answer_01.md": CITED,
+                              "answer_0.md": CITED, "answer_01.meta.json": "{}"})
+    assert [a.name for a in list_answer_files(tmp_path / "t")] == ["answer_1.md", "answer_2.md"]
+    issues = validate_submission(tmp_path)
+    assert {(i.level, i.path) for i in issues} == {
+        ("warning", "t/answer_0.md"), ("warning", "t/answer_01.md"), ("warning", "t/answer_01.meta.json")}
+    assert all("evaluation ignores it" in i.message for i in issues)
 
 
 def test_metadata_is_validated(tmp_path):
@@ -111,3 +132,11 @@ def test_validate_command_exit_status(tmp_path, capsys):
     make_task(agent_dir, "a", {"answer_2.md": CITED, "answer_2.meta.json": "[]"})
     assert cli_main(argv) == 1
     assert "ERROR    a/answer_2.meta.json" in capsys.readouterr().out
+
+
+def test_validate_command_reports_an_unreadable_task_list(tmp_path, capsys):
+    make_task(tmp_path / "answers" / "agent", "a", {"answer_1.md": CITED})
+    argv = ["validate", "agent", "--answers-dir", str(tmp_path / "answers"),
+            "--task-list", str(tmp_path / "missing.csv")]
+    assert cli_main(argv) == 1
+    assert "Cannot read the task list" in capsys.readouterr().err

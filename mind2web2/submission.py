@@ -11,8 +11,10 @@ subdirectory per task::
         └── ...
 
 ``answer_<k>.md`` holds the agent's markdown answer, with URL citations, for
-run ``k``; the paper evaluates three runs per task.  Evaluation and metrics
-consider only files with exactly this name.  ``answer_<k>.meta.json`` is
+run ``k``; the paper evaluates three runs per task.  ``k`` is a positive
+integer without leading zeros (``answer_1.md``, not ``answer_01.md`` or
+``answer_0.md``), so that each run has exactly one file name.  Evaluation and
+metrics consider only files with exactly this name.  ``answer_<k>.meta.json`` is
 optional and records facts the judge never sees, currently the agent's
 wall-clock inference time (see :class:`AnswerMetadata`).
 
@@ -31,8 +33,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-ANSWER_FILE_RE = re.compile(r"^answer_(\d+)\.md$")
-META_FILE_RE = re.compile(r"^answer_(\d+)\.meta\.json$")
+ANSWER_FILE_RE = re.compile(r"^answer_([1-9]\d*)\.md$")
+META_FILE_RE = re.compile(r"^answer_([1-9]\d*)\.meta\.json$")
 _URL_RE = re.compile(r"https?://", re.IGNORECASE)
 
 
@@ -125,7 +127,7 @@ def load_metadata(answer: AnswerFile) -> AnswerMetadata | None:
 
 
 def count_words(text: str) -> int:
-    """Answer length as reported on the leaderboard: whitespace-separated tokens of the markdown."""
+    """Answer length in words: the number of whitespace-separated tokens of the markdown, URLs and markup included."""
     return len(text.split())
 
 
@@ -133,7 +135,9 @@ def load_task_list(source: Path) -> list[TaskInfo]:
     """Read a task list from a CSV file, a text file, or a directory of eval scripts.
 
     See the module docstring for the accepted formats.  Duplicate task IDs are
-    dropped, keeping the first occurrence.
+    dropped, keeping the first occurrence.  Raises ``OSError`` if the source
+    cannot be read and ``ValueError`` if it is not UTF-8 text or is a CSV file
+    without a ``task_id`` column.
     """
     source = Path(source)
     if source.is_dir():
@@ -141,12 +145,14 @@ def load_task_list(source: Path) -> list[TaskInfo]:
     elif source.suffix.lower() == ".csv":
         with source.open(newline="", encoding="utf-8") as fp:
             reader = csv.DictReader(fp)
-            if not reader.fieldnames or "task_id" not in reader.fieldnames:
-                raise ValueError(f"{source}: CSV task list needs a 'task_id' column")
-            tasks = [
-                TaskInfo(row["task_id"].strip(), row.get("domain") or None, row.get("subdomain") or None)
-                for row in reader if row["task_id"].strip()
-            ]
+            try:
+                if not reader.fieldnames or "task_id" not in reader.fieldnames:
+                    raise ValueError(f"{source}: CSV task list needs a 'task_id' column")
+                rows = [(row["task_id"] or "", row.get("domain"), row.get("subdomain")) for row in reader]
+            except csv.Error as exc:
+                raise ValueError(f"{source}: not a valid CSV file ({exc})") from exc
+        tasks = [TaskInfo(task_id.strip(), domain or None, subdomain or None)
+                 for task_id, domain, subdomain in rows if task_id.strip()]
     else:
         lines = source.read_text(encoding="utf-8").splitlines()
         tasks = [TaskInfo(line.strip()) for line in lines if line.strip() and not line.startswith("#")]
@@ -231,7 +237,8 @@ def validate_submission(
             if path.name.startswith(".") or path.name in known:
                 continue
             reason = ("metadata without a matching answer file" if META_FILE_RE.match(path.name)
-                      else "not named answer_<k>.md or answer_<k>.meta.json; evaluation ignores it")
+                      else "not named answer_<k>.md or answer_<k>.meta.json with k = 1, 2, 3, ...; "
+                           "evaluation ignores it")
             issues.append(SubmissionIssue("warning", f"{task_id}/{path.name}", reason))
     return issues
 
