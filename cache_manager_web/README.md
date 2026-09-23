@@ -51,6 +51,8 @@ The most powerful feature — fix all broken pages at once:
 5. Pages with very short content are auto-retried (up to 2 times)
 6. After batch completes, review the recaptured URLs (shown in blue) and press `r` to confirm each
 
+Opening the Cache Manager page again, in the same tab or another one, and clicking **Refresh** keep a running batch; opening another cache folder stops it.
+
 ## Single-Page Recapture
 
 For pages that need manual intervention (login walls, complex anti-bot):

@@ -7,6 +7,12 @@ import * as api from '../api.js';
 let currentImgEl = null;  // current screenshot <img> element
 let currentImgSrc = '';   // track current image source to avoid reloads
 
+// DOMPurify settings for rendered answers, on top of its defaults (which drop scripts and event handlers)
+const ANSWER_SANITIZER = {
+    FORBID_TAGS: ['style', 'form', 'input', 'button', 'select', 'option', 'optgroup', 'textarea'],
+    FORBID_ATTR: ['style'],
+};
+
 export function initPreview() {
     // Mode tabs
     document.querySelectorAll('.mode-btn').forEach(btn => {
@@ -213,8 +219,10 @@ function renderAnswer(s) {
             text = text.replaceAll(s.selectedUrl, `**>>> ${s.selectedUrl} <<<**`);
         }
         if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
-            // Answers come from the agents under review: keep their Markdown, drop scripts and event handlers
-            el.innerHTML = DOMPurify.sanitize(marked.parse(text));
+            // Answers come from the agents under review: keep their Markdown, drop scripts and event handlers,
+            // styles that could lay content over the UI, and forms and their controls, which could send
+            // requests to this server from its own origin
+            el.innerHTML = DOMPurify.sanitize(marked.parse(text), ANSWER_SANITIZER);
         } else {
             const pre = document.createElement('pre');
             pre.textContent = text;
