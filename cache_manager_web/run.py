@@ -58,10 +58,9 @@ def resolve_cache_folder(arg: str, cache_root: Path) -> Path:
 
 def allowed_hosts(host: str) -> str:
     """The ``CM_ALLOWED_HOSTS`` value for a server bound to ``host``: the loopback names, plus ``host`` itself,
-    or ``"*"`` when ``host`` is a wildcard address."""
-    if host in WILDCARD_HOSTS:
-        return "*"
-    return ",".join(dict.fromkeys([*LOOPBACK_HOSTS, host.strip("[]").lower()]))
+    or plus ``"*"`` (any IP address) when ``host`` is a wildcard address."""
+    extra = "*" if host in WILDCARD_HOSTS else host.strip("[]").lower()
+    return ",".join(dict.fromkeys([*LOOPBACK_HOSTS, extra]))
 
 
 def main():
@@ -89,7 +88,8 @@ def main():
     os.environ["CM_ALLOWED_HOSTS"] = allowed_hosts(args.host)
     if args.host in WILDCARD_HOSTS:
         print(f"Warning: --host {args.host!r} serves every network interface, and the Cache Manager has no "
-              "authentication: anyone who can reach the port can read and change the cache.", file=sys.stderr)
+              "authentication: anyone who can reach the port can read and change the cache. Other machines "
+              "must use this machine's IP address; host names other than localhost are refused.", file=sys.stderr)
 
     # Open browser after a short delay
     if not args.no_browser:

@@ -344,6 +344,13 @@ class CacheFileSys:
             return None
         return dict(failures.records[key])
 
+    def failure_url(self, url: str) -> Optional[str]:
+        """The URL of the record :meth:`failure` returns for ``url``, as :meth:`failures` lists it, or ``None``."""
+        key = self._failures.find(url)
+        if key is None or self._is_stored(_address(key)):
+            return None
+        return _address(key)
+
     def failures(self) -> Dict[str, Dict[str, Any]]:
         """Every failure record that :meth:`failure` returns, by its URL as :meth:`lookup` returns URLs."""
         return {_address(key): dict(record) for key, record in self._failures.records.items()

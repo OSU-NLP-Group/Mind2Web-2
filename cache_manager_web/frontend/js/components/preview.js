@@ -212,7 +212,14 @@ function renderAnswer(s) {
         if (s.selectedUrl && text.includes(s.selectedUrl)) {
             text = text.replaceAll(s.selectedUrl, `**>>> ${s.selectedUrl} <<<**`);
         }
-        el.innerHTML = typeof marked !== 'undefined' ? marked.parse(text) : `<pre>${text}</pre>`;
+        if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
+            // Answers come from the agents under review: keep their Markdown, drop scripts and event handlers
+            el.innerHTML = DOMPurify.sanitize(marked.parse(text));
+        } else {
+            const pre = document.createElement('pre');
+            pre.textContent = text;
+            el.replaceChildren(pre);
+        }
     } else {
         el.textContent = s.answers.length === 0
             ? (s.selectedTaskId ? 'No answer files found for this task.' : 'Select a task to view answers.')

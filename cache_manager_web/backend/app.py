@@ -1,6 +1,7 @@
 """FastAPI application for the web-based Cache Manager."""
 
 from __future__ import annotations
+import ipaddress
 import os
 import logging
 from pathlib import Path
@@ -26,9 +27,11 @@ class LocalRequestGuard:
     browser, including the pages being recaptured, can send requests to this
     server.  Two checks keep them out:
 
-    - The ``Host`` header must name one of ``allowed_hosts``; ``"*"`` allows
-      any.  A page that points its own domain at this machine (DNS
-      rebinding) sends that domain as the host and is refused.
+    - The ``Host`` header must name one of ``allowed_hosts``; ``"*"`` among
+      them also allows any IP address, but no other name.  A page that
+      points its own domain at this machine (DNS rebinding) sends that
+      domain as the host and is refused, even when the server listens on
+      every interface.
     - A request that can change data (any method but GET, HEAD, and OPTIONS)
       and carries an ``Origin`` header must come from this server's own
       origin or from a Chrome extension.  Browsers send ``Origin`` with such
@@ -58,15 +61,51 @@ class LocalRequestGuard:
         """Why the request is refused, or ``None`` if it is allowed."""
         headers = Headers(scope=scope)
         host = headers.get("host", "").lower()
-        if "*" not in self.allowed_hosts and _host_name(host) not in self.allowed_hosts:
+        name = _host_name(host)
+        if name not in self.allowed_hosts and not ("*" in self.allowed_hosts and _is_ip_address(name)):
             return (f"Host {host!r} is not served; the served hosts are {', '.join(sorted(self.allowed_hosts))} "
-                    "(see run.py --host)")
+                    "(see run.py --host; '*' stands for any IP address)")
         origin = headers.get("origin")
         if (scope["method"] not in self.SAFE_METHODS and origin is not None
                 and origin.lower() != f"{scope['scheme']}://{host}"
                 and not origin.startswith("chrome-extension://")):
             return f"Requests from {origin} are not accepted"
         return None
+
+
+def _is_ip_address(name: str) -> bool:
+    try:
+        ipaddress.ip_address(name)
+    except ValueError:
+        return False
+    return True
+
+
+class FrameGuard:
+    """ASGI middleware that lets no other site show the Cache Manager in a frame.
+
+    Every response carries ``Content-Security-Policy: frame-ancestors 'self'``
+    and ``X-Frame-Options: SAMEORIGIN``, so a page on another origin cannot
+    lay the UI under its own content to make the reviewer click its buttons
+    (clickjacking), while the UI's own PDF preview frame still loads.
+    """
+
+    HEADERS = [(b"content-security-policy", b"frame-ancestors 'self'"), (b"x-frame-options", b"SAMEORIGIN")]
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_headers(message):
+            if message["type"] == "http.response.start":
+                message = {**message, "headers": [*message.get("headers", []), *self.HEADERS]}
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
 
 
 def _host_name(host: str) -> str:
@@ -77,7 +116,7 @@ def _host_name(host: str) -> str:
 
 
 def allowed_hosts_from_env() -> list[str]:
-    """``CM_ALLOWED_HOSTS`` (comma-separated, ``"*"`` for any host), or the loopback host names if it is unset."""
+    """``CM_ALLOWED_HOSTS`` (comma-separated; ``"*"`` for any IP address), or the loopback host names if it is unset."""
     value = os.environ.get("CM_ALLOWED_HOSTS")
     return value.split(",") if value else list(LOOPBACK_HOSTS)
 
@@ -104,6 +143,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Cache Manager", lifespan=lifespan)
 
 app.add_middleware(LocalRequestGuard, allowed_hosts=allowed_hosts_from_env())
+app.add_middleware(FrameGuard)  # added last, so it runs first and marks refusals too
 
 # API routes
 app.include_router(router, prefix="/api")

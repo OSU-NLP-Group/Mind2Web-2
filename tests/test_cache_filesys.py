@@ -322,6 +322,8 @@ def test_failures_are_recorded_matched_and_cleared_by_storing_the_page(tmp_path)
 
     record = CacheFileSys(str(tmp_path)).failure("https://example.com/a#section")
     assert (record["reason"], record["blocked"], record["attempts"]) == ("blocked: HTTP 403", True, 2)
+    assert cache.failure_url("http://www.example.com/a/") == "https://example.com/a"
+    assert cache.failure_url("https://example.com/b") is None
     assert cache.summary()["failed_urls"] == 1
     assert cache.has("https://example.com/a") is None
 

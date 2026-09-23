@@ -222,15 +222,18 @@ async function onOpenInBrowser() {
     toast('Opened in browser. Use the extension to capture.');
 }
 
-function hasStoredPage(s) {
-    const urlData = s.urls.find(u => u.url === s.selectedUrl);
-    return ['web', 'pdf'].includes(urlData?.content_type);
+/** What the cache holds for the selected URL: "the stored page", "the failure record", or null (a pending URL). */
+function storedRecord(s) {
+    const type = s.urls.find(u => u.url === s.selectedUrl)?.content_type;
+    if (type === 'web' || type === 'pdf') return 'the stored page';
+    return type === 'failed' ? 'the failure record' : null;
 }
 
 async function onDeleteUrl() {
     const s = getState();
     if (!s.selectedTaskId || !s.selectedUrl) return;
-    if (hasStoredPage(s) && !confirm(`Delete ${s.selectedUrl} and its stored page? This cannot be undone.`)) return;
+    const record = storedRecord(s);
+    if (record && !confirm(`Delete ${s.selectedUrl} and ${record}? This cannot be undone.`)) return;
     try {
         await api.deleteUrl(s.selectedTaskId, s.selectedUrl);
         setState({ selectedUrl: null, currentText: null, currentIssues: null });
@@ -244,12 +247,13 @@ async function onDeleteUrl() {
 async function onResetUrl() {
     const s = getState();
     if (!s.selectedTaskId || !s.selectedUrl) return;
-    if (hasStoredPage(s) && !confirm(`Delete the stored page of ${s.selectedUrl}? The URL stays listed as not `
-            + 'captured yet, and evaluation captures it live until it is captured again.')) return;
+    const record = storedRecord(s);
+    if (record && !confirm(`Delete ${record} of ${s.selectedUrl}? The URL stays listed as `
+            + 'not captured yet, and evaluation captures it live until it is captured again.')) return;
     try {
         showStatus('Resetting URL...', 'warning');
         await api.resetUrl(s.selectedTaskId, s.selectedUrl);
-        toast('Reset: the URL is not captured yet and flagged for recapture', 'success');
+        toast('Reset: the URL is listed as not captured yet', 'success');
         setState({ contentVersion: s.contentVersion + 1 });
         await reloadCurrentTask();
         await updateReviewProgress();
@@ -265,9 +269,9 @@ async function onEditUrl() {
     if (!newUrl || newUrl === s.selectedUrl) return;
     try {
         showStatus('Renaming URL...', 'warning');
-        await api.renameUrl(s.selectedTaskId, s.selectedUrl, newUrl.trim());
+        const result = await api.renameUrl(s.selectedTaskId, s.selectedUrl, newUrl.trim());
         toast('URL renamed successfully', 'success');
-        setState({ selectedUrl: newUrl.trim(), contentVersion: s.contentVersion + 1 });
+        setState({ selectedUrl: result.url, contentVersion: s.contentVersion + 1 });
         await reloadCurrentTask();
     } catch (err) {
         toast('Rename failed: ' + err.message, 'error');

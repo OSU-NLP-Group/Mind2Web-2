@@ -284,7 +284,13 @@
     <div id="toast" class="toast"></div>
 
     <!-- Scripts -->
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <!-- Answers are written by the agents under review: they are rendered with marked and sanitized with DOMPurify -->
+    <script src="https://cdn.jsdelivr.net/npm/marked@18.0.14/lib/marked.umd.js"
+            integrity="sha384-2vpGtuKqJvFlwJqYnf/wUMuzUfhUnYBt9oay0e2yaFcq0Dh6/aEbQ8YAOeKGzlYo"
+            crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.4.15/dist/purify.min.js"
+            integrity="sha384-uUMu9JDY09vBzRf9SPcK2VgUj+W/70J6Soc+Dded5P474ElQ63iv9j5N3DE7Kp3N"
+            crossorigin="anonymous"></script>
     <script type="module" src="/static/js/main.js"></script>
     <script>
         // Keyboard shortcuts modal

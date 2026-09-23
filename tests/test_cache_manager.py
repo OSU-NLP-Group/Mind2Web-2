@@ -17,7 +17,7 @@ from cache_manager_web.backend.api import routes
 from cache_manager_web.backend.app import LocalRequestGuard, _host_name, app
 from cache_manager_web.backend.models.cache_manager import CacheManager
 from cache_manager_web.backend.models.keyword_detector import KeywordDetector
-from mind2web2.utils.cache_filesys import CacheFileSys
+from mind2web2.utils.cache_filesys import CacheFileSys, storage_key
 
 A, B = "https://example.com/a", "https://example.com/b"
 
@@ -43,9 +43,17 @@ def url_states(c: TestClient) -> dict[str, tuple[str, list[str], str]]:
             for u in c.get("/api/tasks/task/urls").json()["urls"]}
 
 
-def flags(tmp_path) -> list[str]:
-    path = tmp_path / "agent" / "task" / "flags.json"
+def url_file(tmp_path, name: str) -> list[str]:
+    path = tmp_path / "agent" / "task" / name
     return json.loads(path.read_text()) if path.exists() else []
+
+
+def flags(tmp_path) -> list[str]:
+    return url_file(tmp_path, "flags.json")
+
+
+def pending(tmp_path) -> list[str]:
+    return url_file(tmp_path, "pending.json")
 
 
 # ------------------------------------------------------------------ the CacheManager model
@@ -67,7 +75,7 @@ def test_edits_switch_content_types_reset_and_delete_pages(tmp_path):
     assert not manager.delete_url("task", "https://example.com/never-cached")
 
     assert json.loads((task_dir / "index.json").read_text()) == {}
-    assert sorted(p.name for p in task_dir.iterdir()) == ["flags.json", "index.json"]
+    assert sorted(p.name for p in task_dir.iterdir()) == ["index.json", "pending.json"]
     assert [(info.url, info.content_type) for info in manager.get_task_urls("task")] == [(A, "pending")]
     summary = manager.get_task_summary("task")
     assert (summary.total_urls, summary.web_urls, summary.pdf_urls, summary.pending_urls) == (1, 0, 0, 1)
@@ -100,13 +108,17 @@ def test_failed_urls_are_listed_until_captured_or_deleted(tmp_path):
     assert json.loads((tmp_path / "agent" / "task" / "failures.json").read_text()) == {}
 
 
-def test_a_task_with_only_pending_urls_is_loaded(tmp_path):
+def test_a_task_with_only_pending_urls_is_loaded_and_bare_flags_are_ignored(tmp_path):
     (tmp_path / "agent" / "task").mkdir(parents=True)
-    (tmp_path / "agent" / "task" / "flags.json").write_text(json.dumps([A, "not a url"]))
+    (tmp_path / "agent" / "task" / "pending.json").write_text(json.dumps([A, "not a url"]))
+    (tmp_path / "agent" / "task" / "flags.json").write_text(json.dumps([B]))  # a flag without a page
+    (tmp_path / "agent" / "flags_only").mkdir()
+    (tmp_path / "agent" / "flags_only" / "flags.json").write_text(json.dumps([A]))
     manager = CacheManager()
-    assert manager.load_agent_cache(tmp_path / "agent") == (1, 1)
+    assert manager.load_agent_cache(tmp_path / "agent") == (1, 2)
     assert [(info.url, info.content_type) for info in manager.get_task_urls("task")] == [
         (A, "pending"), ("not a url", "pending")]
+    assert manager.url_state("task", B) is None
 
 
 # ------------------------------------------------------------------ the API
@@ -159,6 +171,9 @@ def test_reset_deletes_the_stored_page_and_leaves_the_url_pending(tmp_path):
 
     with client() as c:
         c.post("/api/load", json={"path": str(tmp_path / "agent")})
+        for url in (A, B):
+            assert c.post("/api/flag/task", json={"url": url}).json() == {"ok": True}
+        assert flags(tmp_path) == [A, B]
         assert c.post("/api/reset/task", json={"url": A}).json() == {"ok": True, "content_type": "web"}
         assert c.post("/api/reset/task", json={"url": B}).json() == {"ok": True, "content_type": "failed"}
         assert c.post("/api/reset/task", json={"url": A}).status_code == 409  # already pending
@@ -169,11 +184,11 @@ def test_reset_deletes_the_stored_page_and_leaves_the_url_pending(tmp_path):
         fresh = CacheFileSys(str(task_dir))
         assert (fresh.has(A), fresh.failure(A), fresh.has(B), fresh.failure(B)) == (None, None, None, None)
         assert json.loads((task_dir / "index.json").read_text()) == {}
-        assert flags(tmp_path) == [A, B]
+        assert (pending(tmp_path), flags(tmp_path)) == ([A, B], [])
 
         assert c.post("/api/capture", json=capture(A)).json()["ok"]
         assert CacheFileSys(str(task_dir)).get_web(A, get_screenshot=False)[0] == "captured by hand"
-        assert flags(tmp_path) == [B]
+        assert pending(tmp_path) == [B]
         assert url_states(c)[A] == ("web", [], "")
 
 
@@ -186,8 +201,10 @@ def test_added_urls_are_pending_and_can_be_renamed_or_deleted(tmp_path):
 
     with client() as c:
         c.post("/api/load", json={"path": str(tmp_path / "agent")})
-        assert c.post("/api/urls/task", json={"url": f" {new} "}).json() == {"ok": True, "content_type": "pending"}
+        assert c.post("/api/urls/task", json={"url": f" {new} "}).json() == {"ok": True, "url": new,
+                                                                              "content_type": "pending"}
         assert c.post("/api/urls/task", json={"url": new}).status_code == 409
+        assert c.post("/api/urls/task", json={"url": "http://www.example.com/new/"}).status_code == 409
         assert c.post("/api/urls/task", json={"url": "http://www.example.com/a/"}).status_code == 409  # stored as A
         assert c.post("/api/urls/task", json={"url": B}).status_code == 409
         assert c.post("/api/urls/task", json={"url": "example.com/c"}).status_code == 400
@@ -197,17 +214,20 @@ def test_added_urls_are_pending_and_can_be_renamed_or_deleted(tmp_path):
 
         # A pending URL keeps no content when renamed, nor does a failed one
         rename = {"old_url": new, "new_url": new + "2"}
-        assert c.post("/api/urls/task/rename", json=rename).json() == {"ok": True, "content_type": "pending"}
+        assert c.post("/api/urls/task/rename", json=rename).json() == {"ok": True, "url": new + "2",
+                                                                       "content_type": "pending"}
         rename = {"old_url": B, "new_url": B + "2"}
-        assert c.post("/api/urls/task/rename", json=rename).json() == {"ok": True, "content_type": "pending"}
+        assert c.post("/api/urls/task/rename", json=rename).json() == {"ok": True, "url": B + "2",
+                                                                       "content_type": "pending"}
         assert CacheFileSys(str(task_dir)).failures() == {}
-        assert flags(tmp_path) == [B + "2", new + "2"]
+        assert pending(tmp_path) == [B + "2", new + "2"]
 
         # A stored page moves with its flag and review status
         c.post("/api/flag/task", json={"url": A})
         c.post("/api/review/task", json={"url": A, "status": "skip"})
         rename = {"old_url": A, "new_url": A + "/moved"}
-        assert c.post("/api/urls/task/rename", json=rename).json() == {"ok": True, "content_type": "web"}
+        assert c.post("/api/urls/task/rename", json=rename).json() == {"ok": True, "url": A + "/moved",
+                                                                       "content_type": "web"}
         assert CacheFileSys(str(task_dir)).get_web(A + "/moved", get_screenshot=False)[0] == "page a"
         assert c.get("/api/review/task").json()["reviewed"] == {A + "/moved": "skip"}
         assert A + "/moved" in flags(tmp_path)
@@ -215,6 +235,69 @@ def test_added_urls_are_pending_and_can_be_renamed_or_deleted(tmp_path):
         assert c.delete("/api/urls/task", params={"url": new + "2"}).json() == {"ok": True}
         assert c.delete("/api/urls/task", params={"url": new + "2"}).status_code == 404
         assert set(url_states(c)) == {A + "/moved", B + "2"}
+
+
+def test_edits_name_a_page_by_any_of_its_spellings(tmp_path):
+    task_dir = tmp_path / "agent" / "task"
+    CacheFileSys(str(task_dir)).put_web(A, "page a", png_bytes())
+    new = "https://example.com/new"
+
+    with client() as c:
+        c.post("/api/load", json={"path": str(tmp_path / "agent")})
+        # A renamed page is listed under its stored URL, and its flag and review status follow it there
+        c.post("/api/flag/task", json={"url": "http://www.example.com/a/"})
+        c.post("/api/review/task", json={"url": A + "/", "status": "skip"})
+        rename = {"old_url": A + "#top", "new_url": "https://example.com/moved/"}
+        assert c.post("/api/urls/task/rename", json=rename).json()["url"] == "https://example.com/moved"
+        assert (flags(tmp_path), url_file(tmp_path, "reviewed.json")) == (
+            ["https://example.com/moved"], {"https://example.com/moved": "skip"})
+        assert url_states(c) == {"https://example.com/moved": ("web", ["flagged"], "definite")}
+
+        # One page is pending once, whatever the spelling, until a capture of any spelling stores it
+        assert c.post("/api/urls/task", json={"url": new + "/"}).status_code == 200
+        for spelling in (new, "http://www.example.com/new"):
+            assert c.post("/api/urls/task", json={"url": spelling}).status_code == 409
+        assert c.post("/api/capture", json=capture("http://www.example.com/new")).json()["url"] == new
+        assert url_states(c)[new] == ("web", [], "")
+        assert pending(tmp_path) == [] and url_file(tmp_path, "reviewed.json")[new] == "fixed"
+        assert {i["url"] for i in c.get("/api/issues").json()["issue_index"]} == {"https://example.com/moved"}
+
+
+def test_uploads_store_only_captured_content(tmp_path):
+    task_dir = tmp_path / "agent" / "task"
+    CacheFileSys(str(task_dir)).put_web(A, "page a", png_bytes())
+    mhtml = (b"MIME-Version: 1.0\r\nContent-Type: multipart/related; boundary=b\r\n\r\n--b\r\n"
+             b"Content-Type: text/html\r\n\r\n<html><body><p>Saved page</p></body></html>\r\n--b--\r\n")
+    empty_mhtml = mhtml.replace(b"<p>Saved page</p>", b"")
+
+    with client() as c:
+        c.post("/api/load", json={"path": str(tmp_path / "agent")})
+        upload = lambda path, url, data: c.post(path, params={"url": url}, files={"file": ("f", data)})
+        assert upload("/api/upload-mhtml/task", B, empty_mhtml).status_code == 422
+        assert upload("/api/upload-pdf/task", B, b"<html>Log in to read this paper</html>").status_code == 422
+        assert CacheFileSys(str(task_dir)).has(B) is None
+
+        assert upload("/api/upload-mhtml/task", B, mhtml).json() == {"ok": True, "url": B}
+        assert CacheFileSys(str(task_dir)).get_web(B, get_screenshot=False)[0] == "Saved page"
+        assert upload("/api/upload-pdf/task", A + "/", b"%PDF-1.4 a paper").json()["url"] == A
+        assert CacheFileSys(str(task_dir)).has(A) == "pdf"
+
+        (task_dir / (CacheFileSys(str(task_dir))._path(storage_key(B), ".jpg").rsplit("/", 1)[1])).unlink()
+        rename = {"old_url": B, "new_url": B + "/moved"}
+        assert c.post("/api/urls/task/rename", json=rename).status_code == 500  # the screenshot is gone
+        assert CacheFileSys(str(task_dir)).has(B + "/moved") is None
+
+
+def test_loading_a_cache_stops_the_batch_and_clears_the_capture_target(tmp_path):
+    cache = CacheFileSys(str(tmp_path / "agent" / "task"))
+    cache.record_failure(A, "HTTP 503")
+    with client() as c:
+        c.post("/api/load", json={"path": str(tmp_path / "agent")})
+        assert c.post("/api/capture/batch/start", json={"items": [{"task_id": "task", "url": A}]}).json()["total"] == 1
+        assert c.get("/api/capture/target").json()["active"]
+        c.post("/api/load", json={"path": str(tmp_path / "agent")})
+        assert c.get("/api/capture/batch/status").json() == {"active": False}
+        assert c.get("/api/capture/target").json() == {"active": False}
 
 
 def test_a_failed_load_keeps_the_loaded_cache(tmp_path, monkeypatch):
@@ -264,15 +347,26 @@ def test_requests_from_other_web_pages_are_refused():
         assert c.get("/api/status", headers={"Host": "evil.example:8000"}).status_code == 403  # DNS rebinding
 
 
+def test_no_other_site_can_frame_the_cache_manager():
+    with client() as c:
+        for response in (c.get("/"), c.get("/api/status"), c.get("/api/status", headers={"Host": "evil.example"})):
+            assert response.headers["x-frame-options"] == "SAMEORIGIN"
+            assert response.headers["content-security-policy"] == "frame-ancestors 'self'"
+
+
 def test_the_served_hosts_follow_the_bound_interface():
     assert run_script.allowed_hosts("127.0.0.1") == "127.0.0.1,localhost,::1"
     assert run_script.allowed_hosts("192.168.1.5") == "127.0.0.1,localhost,::1,192.168.1.5"
-    assert run_script.allowed_hosts("0.0.0.0") == "*"
+    assert run_script.allowed_hosts("0.0.0.0") == "127.0.0.1,localhost,::1,*"
     assert [_host_name(h) for h in ("127.0.0.1:8000", "[::1]:8000", "localhost", "[::1]")] == [
         "127.0.0.1", "::1", "localhost", "::1"]
 
     inner = Starlette(routes=[Route("/", lambda request: PlainTextResponse("ok"), methods=["GET", "POST"])])
-    assert TestClient(LocalRequestGuard(inner, ["*"]), base_url="http://192.168.1.5:8000").get("/").text == "ok"
+    wildcard = TestClient(LocalRequestGuard(inner, ["localhost", "*"]), base_url="http://192.168.1.5:8000")
+    assert wildcard.get("/").text == "ok"
+    assert wildcard.get("/", headers={"Host": "[fe80::1]:8000"}).text == "ok"
+    assert wildcard.get("/", headers={"Host": "localhost:8000"}).text == "ok"
+    assert wildcard.get("/", headers={"Host": "rebind.evil.example:8000"}).status_code == 403  # any IP, no names
     guarded = TestClient(LocalRequestGuard(inner, ["192.168.1.5"]), base_url="http://192.168.1.5:8000")
     assert guarded.post("/", headers={"Origin": "http://192.168.1.5:8000"}).status_code == 200
     assert guarded.post("/", headers={"Origin": "http://127.0.0.1:8000"}).status_code == 403
