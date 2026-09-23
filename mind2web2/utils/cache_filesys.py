@@ -14,7 +14,8 @@ named by the MD5 hex digest of that key (``<stem>``).  Lookups accept other
 surface forms of a stored URL; see :meth:`CacheFileSys.lookup`.
 ``failures.json`` records URLs whose capture failed, so that they are neither
 evaluated against an error page nor silently missing; storing a page for a
-URL clears its failure record.
+URL clears its failure record, and removing the page deletes any failure
+record for it too.
 
 Every change is written to disk, and fsynced, before the call returns.
 Content files and the two JSON files are replaced atomically, and each change,
@@ -319,16 +320,26 @@ class CacheFileSys:
         page with one of the other type after this instance read the index.
         If another process has removed the page, no files are deleted and
         ``None`` is returned.
+
+        Failure records that :meth:`failure` ignores because this page is
+        stored for their URL are deleted with the page, so that they do not
+        reappear.  Other failure records are left to :meth:`clear_failure`.
         """
         with self._index_lock():
             key = self._find_key(url)
             if key is None:
                 return None
+            self._failures = self._load_failures()
+            hidden = [failure_key for failure_key in self._failures
+                      if self._stored_key(_address(failure_key)) == key]
             on_disk = self._update_json(self.index_file, key, None)
             content_type = on_disk if on_disk in FILE_EXTENSIONS else None
             self._discard(key)
             if content_type is not None:
                 self._delete_files(key, content_type)
+            for failure_key in hidden:
+                self._update_json(self.failures_file, failure_key, None)
+                del self._failures[failure_key]
         return content_type
 
     def _put(self, url: str, content_type: ContentType, files: Dict[str, bytes]) -> str:
@@ -417,11 +428,15 @@ class CacheFileSys:
         return {key: record for key, record in self._read_json(self.failures_file).items()
                 if isinstance(record, dict)}
 
-    def _is_stored(self, url: str) -> bool:
+    def _stored_key(self, url: str) -> Optional[str]:
+        """The key of the page ``url`` refers to, or ``None``, also when ``url`` cannot be parsed."""
         try:
-            return self.lookup(url) is not None
+            return self._find_key(url)
         except ValueError:
-            return False
+            return None
+
+    def _is_stored(self, url: str) -> bool:
+        return self._stored_key(url) is not None
 
     @staticmethod
     def _read_json(path: str) -> Dict[str, Any]:

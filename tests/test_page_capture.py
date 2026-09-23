@@ -10,8 +10,8 @@ import logging
 
 import pytest
 
-from local_site import HTML, LocalSite, Route, unused_port_url
-from mind2web2.utils.page_info_retrieval import BatchBrowserManager, detect_block
+from local_site import LocalSite, Route, unused_port_url
+from mind2web2.utils.page_info_retrieval import BatchBrowserManager, Capture, detect_block
 
 LOGGER = logging.getLogger("test")
 
@@ -32,10 +32,12 @@ def challenge(handler) -> Route:
 ROUTES = {
     "/article": Route(body=ARTICLE),
     "/forbidden": Route(403, b"<html><head><title>403 Forbidden</title></head><body>Forbidden</body></html>"),
+    "/article-sent-with-403": Route(403, ARTICLE),
     "/challenge": Route(respond=challenge),
     "/robot-check": Route(body=b"<html><head><title>Robot or human?</title></head>"
                                b"<body>Activate and hold the button to confirm that you are human.</body></html>"),
     "/unavailable": Route(503, b"<html><head><title>503</title></head><body>Service Unavailable</body></html>"),
+    "/article-sent-with-503": Route(503, ARTICLE),
     "/missing": Route(404, b"<html><head><title>Not found</title></head><body>No such page</body></html>"),
     "/download": Route(body=b"PK\x03\x04 zip bytes",
                        headers={"Content-Type": "application/zip",
@@ -72,9 +74,11 @@ def test_capture_outcomes(captures):
     assert {name: outcome(capture) for name, capture in captures.items()} == {
         "/article": {"ok": True, "blocked": False, "status": 200, "error": None},
         "/forbidden": {"ok": False, "blocked": True, "status": 403, "error": "blocked"},
+        "/article-sent-with-403": {"ok": True, "blocked": False, "status": 403, "error": None},
         "/challenge": {"ok": True, "blocked": False, "status": 200, "error": None},  # passed by itself
         "/robot-check": {"ok": False, "blocked": True, "status": 200, "error": "blocked"},
         "/unavailable": {"ok": False, "blocked": False, "status": 503, "error": "HTTP 503"},
+        "/article-sent-with-503": {"ok": True, "blocked": False, "status": 503, "error": None},
         "/missing": {"ok": True, "blocked": False, "status": 404, "error": None},  # captured as it renders
         "/download": {"ok": False, "blocked": False, "status": None, "error": "navigation failed"},
         "/hang": {"ok": False, "blocked": False, "status": None, "error": "navigation failed"},
@@ -90,7 +94,8 @@ def test_a_captured_page_has_its_text_and_a_png_screenshot(captures):
 
 
 @pytest.mark.parametrize("status, title, text, blocked", [
-    (429, "Example", "x" * 10_000, True),
+    (429, "Too Many Requests", "Too many requests", True),
+    (403, "Example", "x" * 10_000, False),  # long page: content, whatever its status
     (200, "Just a moment...", "Checking your browser", True),
     (200, "Access Denied", "You don't have permission to access this page.", True),
     (200, "Access denied errors in SQL Server", "x" * 10_000, False),  # long article
@@ -100,3 +105,82 @@ def test_a_captured_page_has_its_text_and_a_png_screenshot(captures):
 ])
 def test_detect_block(status, title, text, blocked):
     assert (detect_block(status, title, text) is not None) == blocked
+
+
+# ------------------------------------------------------------------ retries, with a fake browser
+
+class FakeContext:
+    def __init__(self, close_seconds: float = 0.0):
+        self.close_seconds = close_seconds
+        self.closed = False
+
+    async def close(self):
+        await asyncio.sleep(self.close_seconds)
+        self.closed = True
+
+
+class FakeBrowser:
+    def __init__(self, close_seconds: float = 0.0):
+        self.connected = True
+        self.close_seconds = close_seconds
+        self.contexts: list[FakeContext] = []
+
+    def is_connected(self) -> bool:
+        return self.connected
+
+    async def new_context(self, **kwargs):
+        self.contexts.append(FakeContext(self.close_seconds))
+        return self.contexts[-1]
+
+    async def close(self):
+        self.connected = False
+
+
+def fake_manager(capture_in, max_retries: int = 1, page_timeout: float = 30, close_seconds: float = 0.0):
+    """A manager whose browsers are fakes, launched anew after each disconnect, and whose page loads run ``capture_in``."""
+    manager = BatchBrowserManager(max_retries=max_retries, page_timeout=page_timeout)
+    manager.launched = []
+
+    async def start():
+        if manager.browser is None:
+            manager.browser = FakeBrowser(close_seconds)
+            manager.launched.append(manager.browser)
+
+    manager.start = start
+    manager._capture_in = capture_in
+    return manager
+
+
+def test_closing_the_context_does_not_count_against_the_page_timeout():
+    async def capture_in(context, url, logger, wait_until):
+        await asyncio.sleep(0.2)
+        return Capture(screenshot_b64="c2NyZWVu", text="text", status=200)
+
+    manager = fake_manager(capture_in, page_timeout=0.5, close_seconds=0.5)
+    capture = asyncio.run(manager.capture("https://example.com", LOGGER))
+    assert capture.ok
+    assert [context.closed for context in manager.launched[0].contexts] == [True]
+
+
+def test_an_attempt_the_browser_disconnected_during_is_repeated_once_without_counting():
+    loads = []
+
+    async def disconnect_once(context, url, logger, wait_until):
+        loads.append(manager.browser)
+        if len(loads) == 1:
+            manager.browser.connected = False
+            raise RuntimeError("Target page, context or browser has been closed")
+        return Capture(screenshot_b64="c2NyZWVu", text="text", status=200)
+
+    manager = fake_manager(disconnect_once, max_retries=1)
+    assert asyncio.run(manager.capture("https://example.com", LOGGER)).ok
+    assert loads == manager.launched and len(loads) == 2
+
+    async def always_disconnect(context, url, logger, wait_until):
+        manager.browser.connected = False
+        raise RuntimeError("Target page, context or browser has been closed")
+
+    manager = fake_manager(always_disconnect, max_retries=1)
+    capture = asyncio.run(manager.capture("https://example.com", LOGGER))
+    assert capture.error == "RuntimeError: Target page, context or browser has been closed"
+    assert len(manager.launched) == 2

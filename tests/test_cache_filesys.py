@@ -306,3 +306,17 @@ def test_failure_records_stay_consistent_between_processes(tmp_path):
     assert reopened.failure("https://example.com/b") is None
     assert reopened.failures() == {}
     assert reopened.summary()["failed_urls"] == 0
+
+    # Removing the page deletes that failure too, instead of letting it reappear.
+    assert reopened.remove("http://www.example.com/b/") == "web"
+    assert reopened.failure("https://example.com/b") is None
+    assert json.loads((tmp_path / "failures.json").read_text()) == {}
+
+
+def test_removing_a_page_keeps_failures_of_other_urls(tmp_path):
+    cache = CacheFileSys(str(tmp_path))
+    cache.put_web("https://example.com/a", "a", png_bytes())
+    cache.record_failure("https://example.com/c", "HTTP 503")
+    assert cache.remove("https://example.com/a") == "web"
+    assert cache.remove("https://example.com/c") is None
+    assert list(cache.failures()) == ["https://example.com/c"]

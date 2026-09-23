@@ -44,7 +44,7 @@ DEFAULT_USER_AGENTS = [
 BLOCK_STATUSES = frozenset({401, 403, 407, 429, 999})
 """HTTP statuses of a refusal rather than content (999 is LinkedIn's)."""
 SHORT_PAGE_CHARS = 3000
-"""Only pages with less text than this (in characters) are judged by their wording in :func:`detect_block`."""
+"""Only pages with less text than this (in characters) can be judged a refusal or an error page."""
 # Page titles of bot checks and access-denied pages (Cloudflare, Akamai, Imperva, PerimeterX, ...)
 _BLOCK_TITLE = re.compile(
     r"^\s*(just a moment|checking your browser|attention required|access denied|"
@@ -65,15 +65,17 @@ def detect_block(status: Optional[int], title: str, text: str) -> Optional[str]:
     """Why a loaded page is a refusal (bot check, access denied) rather than content, or ``None``.
 
     ``status`` is the HTTP status of the displayed document, ``title`` its
-    title, and ``text`` its text.  A status in :data:`BLOCK_STATUSES` is a
-    refusal.  So is a page shorter than :data:`SHORT_PAGE_CHARS` whose title
-    or text reads like a bot check or an access-denied notice; longer pages
-    are never flagged by their wording, since articles may quote it.
+    title, and ``text`` its text.  Only a page with less text than
+    :data:`SHORT_PAGE_CHARS` can be a refusal: a longer page is content even
+    with a refusal status, since some sites send their pages with one, and
+    even if it uses a refusal's wording, since articles may quote it.  A
+    shorter page is a refusal if its status is in :data:`BLOCK_STATUSES`, or
+    its title or text reads like a bot check or an access-denied notice.
     """
-    if status in BLOCK_STATUSES:
-        return f"HTTP {status}"
     if len(text) >= SHORT_PAGE_CHARS:
         return None
+    if status in BLOCK_STATUSES:
+        return f"HTTP {status}"
     if _BLOCK_TITLE.search(title or ""):
         return f"bot check or access denied (page title {title.strip()[:80]!r})"
     match = _BLOCK_TEXT.search(text)
@@ -112,13 +114,16 @@ class BatchBrowserManager:
     ``page_timeout`` seconds, counted from when it gets its slot, so waiting
     in the queue never uses up a URL's time.  An attempt that times out or
     raises is retried up to ``max_retries`` attempts in total, and the
-    browser is restarted if it disconnected.  These outcomes are reported
+    browser is restarted if it disconnected; an attempt during which the
+    browser disconnected is repeated once without counting, since another
+    page may have crashed the shared browser.  These outcomes are reported
     without retrying:
 
     * the page did not load (DNS or connection errors, a download instead of
       a page, nothing received within ``navigation_timeout``);
     * the site refused the browser (see :func:`detect_block`);
-    * the server answered with an HTTP 5xx error page.
+    * the server answered with an HTTP 5xx status and a page with less text
+      than :data:`SHORT_PAGE_CHARS`, an error page.
 
     A page that is still loading after ``navigation_timeout`` is captured as
     far as it has loaded.  Pages with other statuses, such as 404, are
@@ -182,77 +187,87 @@ class BatchBrowserManager:
         logger.info(f"Start collecting page {url}")
         async with self._page_semaphore:
             error = "not attempted"
-            for attempt in range(1, self.max_retries + 1):
+            attempt, repeated = 1, False
+            while attempt <= self.max_retries:
                 async with self._browser_lock:
                     await self.start()
                 browser = self.browser
+                context: Optional[BrowserContext] = None
                 try:
                     async with asyncio.timeout(self.page_timeout):
-                        return await self._capture_once(browser, url, logger, wait_until)
+                        context = await browser.new_context(
+                            locale='en-US',
+                            ignore_https_errors=True,
+                            extra_http_headers={"user-agent": random.choice(DEFAULT_USER_AGENTS)},
+                            viewport={"width": random.randint(1050, 1150), "height": random.randint(700, 800)},
+                        )
+                        return await self._capture_in(context, url, logger, wait_until)
                 except TimeoutError:
                     error = f"timed out after {self.page_timeout:.0f}s"
                 except Exception as e:
                     error = f"{type(e).__name__}: {e}".splitlines()[0]
+                finally:
+                    if context is not None:  # outside the timeout, so that closing cannot discard a finished capture
+                        try:
+                            await asyncio.wait_for(context.close(), 10)
+                        except Exception:
+                            pass
+                if not browser.is_connected():
                     async with self._browser_lock:
-                        if self.browser is browser and not browser.is_connected():
+                        if self.browser is browser:
                             logger.warning("Browser disconnected; it will be restarted")
                             await self.stop()
+                    if not repeated:  # the shared browser failed, possibly because of another page
+                        repeated = True
+                        logger.warning(f"Attempt {attempt}/{self.max_retries} for {url} is repeated "
+                                       f"because the browser disconnected: {error}")
+                        continue
                 logger.warning(f"Attempt {attempt}/{self.max_retries} failed for {url}: {error}")
+                attempt += 1
             return Capture(error=error)
 
-    async def _capture_once(self, browser: Browser, url: str, logger: Logger, wait_until: str) -> Capture:
-        context = await browser.new_context(
-            locale='en-US',
-            ignore_https_errors=True,
-            extra_http_headers={"user-agent": random.choice(DEFAULT_USER_AGENTS)},
-            viewport={"width": random.randint(1050, 1150), "height": random.randint(700, 800)},
-        )
+    async def _capture_in(self, context: BrowserContext, url: str, logger: Logger, wait_until: str) -> Capture:
+        """Load ``url`` in a new page of ``context`` and capture it; the caller closes ``context``."""
+        await _grant_permissions(context, url, logger)
+        page = await context.new_page()
+        # Status of the displayed document: the last main-frame document response,
+        # which follows redirects and the reload after a passed bot check
+        document_status: dict[str, int] = {}
+        page.on("response", lambda response: _record_document_status(page, response, document_status))
+
         try:
-            await _grant_permissions(context, url, logger)
-            page = await context.new_page()
-            # Status of the displayed document: the last main-frame document response,
-            # which follows redirects and the reload after a passed bot check
-            document_status: dict[str, int] = {}
-            page.on("response", lambda response: _record_document_status(page, response, document_status))
-
-            try:
-                await page.goto(url, wait_until=wait_until, timeout=self.navigation_timeout * 1000)
-            except PlaywrightTimeoutError:
-                if _nothing_loaded(page):
-                    return Capture(error=f"navigation failed: no response within {self.navigation_timeout:.0f}s")
-                logger.info(f"Navigation timed out; capturing what has loaded: {url}")
-            except PlaywrightError as e:
-                message = str(e).splitlines()[0]
-                if "Download is starting" in message or _nothing_loaded(page):
-                    return Capture(error=f"navigation failed: {message}")
-                logger.info(f"Navigation error ({message}); capturing what has loaded: {url}")
+            await page.goto(url, wait_until=wait_until, timeout=self.navigation_timeout * 1000)
+        except PlaywrightTimeoutError:
             if _nothing_loaded(page):
-                return Capture(error="navigation failed: the browser showed an error page")
+                return Capture(error=f"navigation failed: no response within {self.navigation_timeout:.0f}s")
+            logger.info(f"Navigation timed out; capturing what has loaded: {url}")
+        except PlaywrightError as e:
+            message = str(e).splitlines()[0]
+            if "Download is starting" in message or _nothing_loaded(page):
+                return Capture(error=f"navigation failed: {message}")
+            logger.info(f"Navigation error ({message}); capturing what has loaded: {url}")
+        if _nothing_loaded(page):
+            return Capture(error="navigation failed: the browser showed an error page")
 
-            await _wait_for_js_challenge(page)
+        await _wait_for_js_challenge(page)
 
-            # Scroll to trigger lazy-loaded content
-            for _ in range(3):
-                await page.keyboard.press("End")
-                await asyncio.sleep(random.uniform(0.3, 0.8))
-            await page.keyboard.press("Home")
+        # Scroll to trigger lazy-loaded content
+        for _ in range(3):
+            await page.keyboard.press("End")
             await asyncio.sleep(random.uniform(0.3, 0.8))
+        await page.keyboard.press("Home")
+        await asyncio.sleep(random.uniform(0.3, 0.8))
 
-            screenshot_b64, page_html = await _capture_screenshot_and_html(context, page)
-            text = await asyncio.to_thread(html_to_markdown, page_html)  # slow on large pages
+        screenshot_b64, page_html = await _capture_screenshot_and_html(context, page)
+        text = await asyncio.to_thread(html_to_markdown, page_html)  # slow on large pages
 
-            status = document_status.get("status")
-            block = detect_block(status, await page.title(), text)
-            if block is not None:
-                return Capture(error=f"blocked: {block}", blocked=True, status=status)
-            if status is not None and status >= 500:
-                return Capture(error=f"HTTP {status}", status=status)
-            return Capture(screenshot_b64=screenshot_b64, text=text, status=status)
-        finally:
-            try:
-                await asyncio.wait_for(context.close(), 10)
-            except Exception:
-                pass
+        status = document_status.get("status")
+        block = detect_block(status, await page.title(), text)
+        if block is not None:
+            return Capture(error=f"blocked: {block}", blocked=True, status=status)
+        if status is not None and status >= 500 and len(text) < SHORT_PAGE_CHARS:
+            return Capture(error=f"HTTP {status}", status=status)
+        return Capture(screenshot_b64=screenshot_b64, text=text, status=status)
 
 
 async def _grant_permissions(context: BrowserContext, url: str, logger: Logger) -> None:

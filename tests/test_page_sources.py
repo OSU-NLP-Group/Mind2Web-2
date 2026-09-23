@@ -13,11 +13,12 @@ import logging
 
 import pymupdf
 from PIL import Image
+from pydantic import BaseModel
 
 import batch_answer_cache as crawler
 from local_site import LocalSite, Route
 from mind2web2.api_tools.tool_pdf import PDFParser
-from mind2web2.eval_toolkit import Verifier
+from mind2web2.eval_toolkit import Extractor, Verifier, empty_extraction
 from mind2web2.utils.cache_filesys import CacheFileSys
 from mind2web2.utils.page_info_retrieval import Capture
 from mind2web2.verification_tree import VerificationNode
@@ -81,6 +82,27 @@ def test_evaluation_does_not_capture_a_url_whose_capture_failed(tmp_path):
     assert asyncio.run(v.verify_by_url("claim", "https://example.com/blocked", node=node)) is False
     assert (node.score, node.status) == (0.0, "failed")
     assert browser.urls == []
+
+
+class Laureates(BaseModel):
+    university: str
+    count: int
+    names: list[str] = []
+
+
+class Links(BaseModel):
+    urls: list[str] = []
+
+
+def test_extracting_from_an_unavailable_page_gives_empty_values(tmp_path):
+    cache = CacheFileSys(str(tmp_path))
+    cache.record_failure("https://example.com/laureates", "HTTP 503")
+    extractor = Extractor(client=NoJudge(), task_description="task", answer="answer", global_cache=cache,
+                          global_semaphore=asyncio.Semaphore(2), logger=LOGGER,
+                          browser_manager=StubBrowser(Capture(error="unused")))
+    result = asyncio.run(extractor.extract_from_url("List the laureates", "https://example.com/laureates", Laureates))
+    assert (result.university, result.count, result.names) == (None, None, [])
+    assert empty_extraction(Links) == Links()
 
 
 def test_evaluation_records_a_failed_live_capture_and_does_not_retry_it(tmp_path):
@@ -183,6 +205,6 @@ def test_crawler_retries_failures_of_the_run_once_but_not_refusals(tmp_path, mon
     cache = CacheFileSys(str(tmp_path / "cache" / "agent" / "task"))
     assert [cache.has(url) for url in urls] == ["web", None, "web"]
     assert cache.failure(urls[1])["attempts"] == 1
-    assert list(calls.values()) == [2, 1, 1]
+    assert calls == {urls[0]: 2, urls[1]: 1, urls[2]: 1}
     meta = json.loads((tmp_path / "cache" / "agent" / "task.json").read_text())
     assert meta["failed_urls"] == {urls[1]: "blocked: HTTP 403"}

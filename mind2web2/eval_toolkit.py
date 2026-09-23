@@ -10,7 +10,7 @@ import uuid
 from typing import List, Type, Callable, Awaitable, Optional, Tuple, Union
 
 from PIL import Image
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from .api_tools import tool_pdf
 from .llm_client.base_client import LLMClient
@@ -24,6 +24,23 @@ from .utils.page_info_retrieval import (
 )
 from .api_tools.tool_pdf import is_pdf
 from .verification_tree import VerificationNode
+
+
+def empty_extraction(template_class: Type[BaseModel]) -> BaseModel:
+    """What an extraction returns when there is nothing to extract from.
+
+    That is the case when the page is unavailable or the extraction request
+    failed for a reason other than a :class:`JudgeError`.  The result is
+    ``template_class()`` when its fields all have defaults; otherwise it is an
+    unvalidated instance with the defaults and ``None`` for each required
+    field, so that a script reading it gets empty values instead of an
+    exception that would leave the whole answer unscored.
+    """
+    try:
+        return template_class()
+    except ValidationError:
+        required = {name: None for name, field in template_class.model_fields.items() if field.is_required()}
+        return template_class.model_construct(**required)
 
 
 class BinaryEvalResult(BaseModel):
@@ -375,8 +392,7 @@ class Extractor(BaseEvaluator):
                     "error": str(e)
                 }
             )
-            # Return empty template instance
-            return template_class()
+            return empty_extraction(template_class)
 
     async def _core_extract(
             self,
@@ -454,7 +470,7 @@ class Extractor(BaseEvaluator):
                 f"[{op_id}] Failed to get page info for URL {url}",
                 extra=extract_context
             )
-            return template_class()
+            return empty_extraction(template_class)
 
         self.logger.debug(
             f"[{op_id}] Page content retrieved: text_length={len(web_text) if web_text else 0}, has_screenshot={bool(screenshot_b64)}"
