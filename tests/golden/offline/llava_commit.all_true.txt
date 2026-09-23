@@ -1,0 +1,37 @@
+final_score 0.7
+root [sequential] 0.7 partial
+  commit_verification [sequential] 1 passed
+    commit_id_verification [parallel, critical] 1 passed
+      commit_id_exists [parallel, critical] 1 passed
+      commit_id_correctness [parallel, critical] 1 passed
+      commit_provenance [parallel, critical] 1 passed
+    commit_date_verification [parallel, critical] 1 passed
+      commit_date_exists [parallel, critical] 1 passed
+      commit_date_correctness [parallel, critical] 1 passed
+      commit_date_provenance [parallel, critical] 1 passed
+  authors_verification [parallel] 0.4 partial
+    author_1 [parallel] 1 passed
+      author_1_exists [parallel, critical] 1 passed
+      author_1_name_match [parallel, critical] 1 passed
+      author_1_profile_provided [parallel, critical] 1 passed
+      author_1_commit_provenance [parallel, critical] 1 passed
+    author_2 [parallel] 1 passed
+      author_2_exists [parallel, critical] 1 passed
+      author_2_name_match [parallel, critical] 1 passed
+      author_2_profile_provided [parallel, critical] 1 passed
+      author_2_commit_provenance [parallel, critical] 1 passed
+    author_3 [parallel] 0 failed
+      author_3_exists [parallel, critical] 0 failed
+      author_3_name_match [parallel, critical] 0 skipped
+      author_3_profile_provided [parallel, critical] 0 skipped
+      author_3_commit_provenance [parallel, critical] 0 skipped
+    author_4 [parallel] 0 failed
+      author_4_exists [parallel, critical] 0 failed
+      author_4_name_match [parallel, critical] 0 skipped
+      author_4_profile_provided [parallel, critical] 0 skipped
+      author_4_commit_provenance [parallel, critical] 0 skipped
+    author_5 [parallel] 0 failed
+      author_5_exists [parallel, critical] 0 failed
+      author_5_name_match [parallel, critical] 0 skipped
+      author_5_profile_provided [parallel, critical] 0 skipped
+      author_5_commit_provenance [parallel, critical] 0 skipped

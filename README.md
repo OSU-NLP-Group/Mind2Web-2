@@ -185,6 +185,30 @@ python run_eval.py --agent_name example --task_id yu_lineage
 - `--dump_cache`: Persist cache to disk (default: True)
 - `--overwrite`: Overwrite existing results
 
+## 🧪 Development
+
+Dependencies are pinned in `uv.lock`, so `uv sync` installs the exact versions the harness was tested with. The test suite runs offline: it needs no API keys, network access, or browser.
+
+```bash
+uv sync           # also installs the dev dependency group (pytest)
+uv run pytest -q
+```
+
+`tests/test_eval_scripts_offline.py` runs every script in `eval_scripts/dev_set/` end to end with a deterministic fake judge and a synthetic webpage cache, under four input policies (see `tests/offline_eval.py`), and compares each resulting rubric tree with its golden file in `tests/golden/offline/`. A harness change that alters any rubric result therefore fails a test. After an intentional change, regenerate the golden files and review their diff:
+
+```bash
+uv run pytest tests/test_eval_scripts_offline.py --update-golden
+```
+
+The same test can check the full script release from Hugging Face without adding it to the repository. Record golden files outside the repository on the base commit, then compare after your change:
+
+```bash
+uv run pytest tests/test_eval_scripts_offline.py --eval-scripts-dir <hf_download>/evaluation_scripts/2025_10_23 \
+    --golden-dir <private_dir> --update-golden   # on the base commit
+uv run pytest tests/test_eval_scripts_offline.py --eval-scripts-dir <hf_download>/evaluation_scripts/2025_10_23 \
+    --golden-dir <private_dir>                   # after the change
+```
+
 ## 📝 Citation
 
 If you find this work useful, please consider starring our repo and citing our papers:

@@ -1,0 +1,59 @@
+final_score 1
+root [parallel] 1 passed
+  patent_0 [sequential] 1 passed
+    patent_0_required_info [parallel, critical] 1 passed
+    patent_0_constraints [parallel] 1 passed
+      patent_0_title_url_match [parallel, critical] 1 passed
+      patent_0_autonomous_driving [parallel, critical] 1 passed
+      patent_0_published_2025 [parallel, critical] 1 passed
+    patent_0_additional_info [parallel] 1 passed
+      patent_0_inventors_main [parallel] 1 passed
+        patent_0_inventors_provided [parallel, critical] 1 passed
+        patent_0_inventors_accurate [parallel, critical] 1 passed
+      patent_0_assignee_main [parallel] 1 passed
+        patent_0_assignee_provided [parallel, critical] 1 passed
+        patent_0_assignee_accurate [parallel, critical] 1 passed
+      patent_0_filing_date_main [parallel] 1 passed
+        patent_0_filing_date_provided [parallel, critical] 1 passed
+        patent_0_filing_date_accurate [parallel, critical] 1 passed
+      patent_0_pub_date_main [parallel] 1 passed
+        patent_0_pub_date_provided [parallel, critical] 1 passed
+        patent_0_pub_date_accurate [parallel, critical] 1 passed
+  patent_1 [sequential] 1 passed
+    patent_1_required_info [parallel, critical] 1 passed
+    patent_1_constraints [parallel] 1 passed
+      patent_1_title_url_match [parallel, critical] 1 passed
+      patent_1_autonomous_driving [parallel, critical] 1 passed
+      patent_1_published_2025 [parallel, critical] 1 passed
+    patent_1_additional_info [parallel] 1 passed
+      patent_1_inventors_main [parallel] 1 passed
+        patent_1_inventors_provided [parallel, critical] 1 passed
+        patent_1_inventors_accurate [parallel, critical] 1 passed
+      patent_1_assignee_main [parallel] 1 passed
+        patent_1_assignee_provided [parallel, critical] 1 passed
+        patent_1_assignee_accurate [parallel, critical] 1 passed
+      patent_1_filing_date_main [parallel] 1 passed
+        patent_1_filing_date_provided [parallel, critical] 1 passed
+        patent_1_filing_date_accurate [parallel, critical] 1 passed
+      patent_1_pub_date_main [parallel] 1 passed
+        patent_1_pub_date_provided [parallel, critical] 1 passed
+        patent_1_pub_date_accurate [parallel, critical] 1 passed
+  patent_2 [sequential] 1 passed
+    patent_2_required_info [parallel, critical] 1 passed
+    patent_2_constraints [parallel] 1 passed
+      patent_2_title_url_match [parallel, critical] 1 passed
+      patent_2_autonomous_driving [parallel, critical] 1 passed
+      patent_2_published_2025 [parallel, critical] 1 passed
+    patent_2_additional_info [parallel] 1 passed
+      patent_2_inventors_main [parallel] 1 passed
+        patent_2_inventors_provided [parallel, critical] 1 passed
+        patent_2_inventors_accurate [parallel, critical] 1 passed
+      patent_2_assignee_main [parallel] 1 passed
+        patent_2_assignee_provided [parallel, critical] 1 passed
+        patent_2_assignee_accurate [parallel, critical] 1 passed
+      patent_2_filing_date_main [parallel] 1 passed
+        patent_2_filing_date_provided [parallel, critical] 1 passed
+        patent_2_filing_date_accurate [parallel, critical] 1 passed
+      patent_2_pub_date_main [parallel] 1 passed
+        patent_2_pub_date_provided [parallel, critical] 1 passed
+        patent_2_pub_date_accurate [parallel, critical] 1 passed

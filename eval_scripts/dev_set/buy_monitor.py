@@ -227,7 +227,7 @@ async def verify_single_monitor(
     while len(monitor.websites) < REQUIRED_WEBSITES_PER_MODEL:
         monitor.websites.append(Website())
     
-    for website_index in len(monitor.websites[:REQUIRED_WEBSITES_PER_MODEL]):
+    for website_index in range(len(monitor.websites[:REQUIRED_WEBSITES_PER_MODEL])):
         await verify_single_website(
             evaluator=evaluator,
             parent_node=websites_node,
