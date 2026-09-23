@@ -41,7 +41,7 @@ DEFAULT_USER_AGENTS = [
     '(KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36',
 ]
 
-BLOCK_STATUSES = frozenset({401, 403, 407, 429, 999})
+BLOCK_STATUSES = frozenset({401, 403, 407, 999})
 """HTTP statuses of a refusal rather than content (999 is LinkedIn's)."""
 SHORT_PAGE_CHARS = 3000
 """Only pages with less text than this (in characters) can be judged a refusal or an error page."""
@@ -71,6 +71,9 @@ def detect_block(status: Optional[int], title: str, text: str) -> Optional[str]:
     even if it uses a refusal's wording, since articles may quote it.  A
     shorter page is a refusal if its status is in :data:`BLOCK_STATUSES`, or
     its title or text reads like a bot check or an access-denied notice.
+    HTTP 429 (Too Many Requests) is not a refusal status, since a rate limit
+    is temporary: :class:`BatchBrowserManager` reports a short page with it as
+    an error page, an ordinary failure.
     """
     if len(text) >= SHORT_PAGE_CHARS:
         return None
@@ -122,8 +125,8 @@ class BatchBrowserManager:
     * the page did not load (DNS or connection errors, a download instead of
       a page, nothing received within ``navigation_timeout``);
     * the site refused the browser (see :func:`detect_block`);
-    * the server answered with an HTTP 5xx status and a page with less text
-      than :data:`SHORT_PAGE_CHARS`, an error page.
+    * the server answered with HTTP 429 (Too Many Requests) or a 5xx status
+      and a page with less text than :data:`SHORT_PAGE_CHARS`, an error page.
 
     A page that is still loading after ``navigation_timeout`` is captured as
     far as it has loaded.  Pages with other statuses, such as 404, are
@@ -265,7 +268,7 @@ class BatchBrowserManager:
         block = detect_block(status, await page.title(), text)
         if block is not None:
             return Capture(error=f"blocked: {block}", blocked=True, status=status)
-        if status is not None and status >= 500 and len(text) < SHORT_PAGE_CHARS:
+        if status is not None and (status == 429 or status >= 500) and len(text) < SHORT_PAGE_CHARS:
             return Capture(error=f"HTTP {status}", status=status)
         return Capture(screenshot_b64=screenshot_b64, text=text, status=status)
 

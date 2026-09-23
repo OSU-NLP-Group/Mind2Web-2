@@ -208,3 +208,32 @@ def test_crawler_retries_failures_of_the_run_once_but_not_refusals(tmp_path, mon
     assert calls == {urls[0]: 2, urls[1]: 1, urls[2]: 1}
     meta = json.loads((tmp_path / "cache" / "agent" / "task.json").read_text())
     assert meta["failed_urls"] == {urls[1]: "blocked: HTTP 403"}
+
+
+# ------------------------------------------------------------------ evaluation and crawler
+
+def test_cache_writes_run_outside_the_event_loop(tmp_path, monkeypatch):
+    """Every cache write takes a lock and fsyncs, so it runs in a worker thread,
+    not on the event loop, where it would stall the captures in progress."""
+    on_event_loop = []
+    index_lock = CacheFileSys._index_lock
+
+    def recording_index_lock(self):
+        try:
+            asyncio.get_running_loop()
+            on_event_loop.append(True)
+        except RuntimeError:  # no event loop runs in this thread
+            on_event_loop.append(False)
+        return index_lock(self)
+
+    monkeypatch.setattr(CacheFileSys, "_index_lock", recording_index_lock)
+    cache = CacheFileSys(str(tmp_path))
+    failing = StubBrowser(Capture(error="HTTP 503", status=503))
+    capturing = StubBrowser(Capture(screenshot_b64=png_b64(), text="Live page", status=200))
+    with LocalSite(PAGES) as site:
+        asyncio.run(verifier(cache, failing).get_page_info(site.url("/article")))
+        asyncio.run(verifier(cache, capturing).get_page_info(site.url("/landing.pdf")))
+        asyncio.run(verifier(cache, capturing).get_page_info(site.url("/paper")))
+        assert crawl(cache, failing, site.url("/article?crawled")) == "failed"
+        assert crawl(cache, capturing, site.url("/article?captured")) == "stored"
+    assert on_event_loop == [False] * 5

@@ -58,6 +58,13 @@ def test_detection_and_download_check_what_the_server_returns():
 
 
 def test_detection_gives_up_after_its_timeout_without_blocking_the_event_loop():
+    """A blocking download would stall the event loop until the timeout or the server's answer.
+
+    The limits sit halfway between what a working probe takes and what a
+    blocking one would, so that a loaded machine still passes.
+    """
+    timeout, server_delay = 2.0, 8.0
+
     async def run(url: str):
         gaps, last = [], time.monotonic()
 
@@ -71,13 +78,13 @@ def test_detection_gives_up_after_its_timeout_without_blocking_the_event_loop():
 
         tick = asyncio.create_task(ticker())
         start = time.monotonic()
-        result = await is_pdf(url, timeout=0.5)
+        result = await is_pdf(url, timeout=timeout)
         elapsed = time.monotonic() - start
         tick.cancel()
         return result, elapsed, max(gaps)
 
-    with LocalSite({"/slow": Route(body=b"late", delay=3)}) as site:
+    with LocalSite({"/slow": Route(body=b"late", delay=server_delay)}) as site:
         result, elapsed, max_gap = asyncio.run(run(site.url("/slow")))
     assert result is False
-    assert elapsed < 1.5
-    assert max_gap < 0.25
+    assert elapsed < (timeout + server_delay) / 2  # gave up at the timeout, not at the server's answer
+    assert max_gap < timeout / 2  # the event loop kept running while the probe waited

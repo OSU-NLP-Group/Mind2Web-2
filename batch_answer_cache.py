@@ -212,7 +212,7 @@ async def crawl_one_page(
             await asyncio.to_thread(cache.put_web, url, capture.text, capture.screenshot_b64)
             return "stored"
         logger.warning(f"Could not capture {url}: {capture.error}")
-        cache.record_failure(url, capture.error, blocked=capture.blocked)
+        await asyncio.to_thread(cache.record_failure, url, capture.error, blocked=capture.blocked)
         return "blocked" if capture.blocked else "failed"
     except Exception:
         logger.error(f"Error crawling {url}", exc_info=True)
@@ -361,8 +361,9 @@ async def process_cache(
             return outcomes
 
         outcomes = await crawl_all(all_unique_urls, retry_failed, "Crawling")
-        # A failure that is not a refusal is often transient (a slow or overloaded
-        # site): retry those from this run once, when nothing else is queued.
+        # A failure that is not a refusal is often transient (a slow, overloaded,
+        # or rate-limiting site): retry those from this run once, when nothing
+        # else is queued.
         transient = [url for url, outcome in outcomes.items() if outcome == "failed"]
         if transient:
             logger.info(f"[{agent_name}/{task_id}] Retrying {len(transient)} failed URLs once")

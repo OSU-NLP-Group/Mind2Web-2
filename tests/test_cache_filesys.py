@@ -320,3 +320,33 @@ def test_removing_a_page_keeps_failures_of_other_urls(tmp_path):
     assert cache.remove("https://example.com/a") == "web"
     assert cache.remove("https://example.com/c") is None
     assert list(cache.failures()) == ["https://example.com/c"]
+
+
+def test_failure_records_being_read_are_never_changed(tmp_path, monkeypatch):
+    """Evaluation reads failure records on the event loop while worker threads store pages.
+
+    Every change therefore installs new records instead of changing the ones
+    a reader may be iterating, and :meth:`CacheFileSys.failure` reads them once.
+    """
+    installed = []  # (records as installed, a copy taken then)
+
+    class Cache(CacheFileSys):
+        def __setattr__(self, name, value):
+            if name == "_failures":
+                installed.append((value, dict(value)))
+            super().__setattr__(name, value)
+
+    cache = Cache(str(tmp_path))
+    cache.put_web("https://example.com/stored", "stored", png_bytes())
+    cache.record_failure("https://example.com/a", "HTTP 503")
+    CacheFileSys(str(tmp_path)).record_failure("https://example.com/stored", "timed out")  # hidden by the page
+    cache.record_failure("https://example.com/b", "HTTP 503")
+    cache.put_web("https://example.com/a", "captured", png_bytes())  # clears a's record
+    cache.remove("https://example.com/stored")  # deletes the hidden record
+    assert len(installed) >= 5  # at construction, and at each of the four changes to the records
+    assert all(records == copy for records, copy in installed)
+
+    # A change after failure() found the record does not make it lose the record.
+    monkeypatch.setattr(cache, "_is_stored", lambda url: cache.clear_failure(url) and False)
+    assert cache.failure("https://example.com/b")["reason"] == "HTTP 503"
+    assert CacheFileSys(str(tmp_path)).failures() == {}

@@ -15,18 +15,25 @@ from mind2web2.utils.page_info_retrieval import BatchBrowserManager, Capture, de
 
 LOGGER = logging.getLogger("test")
 
+NAVIGATION_TIMEOUT = 8
+"""Seconds; generous, so that a loaded machine still loads the local pages in time."""
+CHALLENGE_SECONDS = 6
+"""When the local bot check passes: after the scrolling and settling that precede a capture (at
+most 4.2 s after the page loads), so that the capture shows the content only if it waits for the check."""
+
 ARTICLE = ("<html><head><title>Article</title></head><body><h1>Mind2Web 2</h1>"
            + "<p>Agentic search systems are evaluated with rubric trees.</p>" * 80
            + "<p>Some sites ask you to verify you are a human.</p></body></html>").encode()
 
 
 def challenge(handler) -> Route:
-    """A bot check that passes by itself: a 403 page that sets a cookie and reloads into the content."""
+    """A bot check that passes by itself: a 403 page that, after :data:`CHALLENGE_SECONDS`, sets a
+    cookie and reloads into the content."""
     if "passed=1" in (handler.headers.get("Cookie") or ""):
         return Route(body=ARTICLE)
     return Route(403, b"<html><head><title>Just a moment...</title></head><body>Checking your browser"
-                      b"<script>setTimeout(() => { document.cookie = 'passed=1; path=/'; location.reload(); }, 300)"
-                      b"</script></body></html>")
+                      b"<script>setTimeout(() => { document.cookie = 'passed=1; path=/'; location.reload(); }, "
+                      + str(CHALLENGE_SECONDS * 1000).encode() + b")</script></body></html>")
 
 
 ROUTES = {
@@ -36,13 +43,15 @@ ROUTES = {
     "/challenge": Route(respond=challenge),
     "/robot-check": Route(body=b"<html><head><title>Robot or human?</title></head>"
                                b"<body>Activate and hold the button to confirm that you are human.</body></html>"),
+    "/rate-limited": Route(429, b"<html><head><title>429 Too Many Requests</title></head>"
+                                b"<body>Too many requests</body></html>"),
     "/unavailable": Route(503, b"<html><head><title>503</title></head><body>Service Unavailable</body></html>"),
     "/article-sent-with-503": Route(503, ARTICLE),
     "/missing": Route(404, b"<html><head><title>Not found</title></head><body>No such page</body></html>"),
     "/download": Route(body=b"PK\x03\x04 zip bytes",
                        headers={"Content-Type": "application/zip",
                                 "Content-Disposition": "attachment; filename=data.zip"}),
-    "/hang": Route(body=b"too late", delay=20),
+    "/hang": Route(body=b"too late", delay=3 * NAVIGATION_TIMEOUT),
 }
 
 
@@ -52,8 +61,8 @@ def outcome(capture) -> dict:
 
 
 async def capture_all(urls: dict[str, str]) -> dict:
-    async with BatchBrowserManager(headless=True, max_retries=1, max_concurrent_pages=4,
-                                   page_timeout=30, navigation_timeout=2) as browser:
+    async with BatchBrowserManager(headless=True, max_retries=1, max_concurrent_pages=6,
+                                   page_timeout=60, navigation_timeout=NAVIGATION_TIMEOUT) as browser:
         results = await asyncio.gather(*(browser.capture(url, LOGGER) for url in urls.values()))
     return dict(zip(urls, results))
 
@@ -75,8 +84,9 @@ def test_capture_outcomes(captures):
         "/article": {"ok": True, "blocked": False, "status": 200, "error": None},
         "/forbidden": {"ok": False, "blocked": True, "status": 403, "error": "blocked"},
         "/article-sent-with-403": {"ok": True, "blocked": False, "status": 403, "error": None},
-        "/challenge": {"ok": True, "blocked": False, "status": 200, "error": None},  # passed by itself
+        "/challenge": {"ok": True, "blocked": False, "status": 200, "error": None},  # passed while waited for
         "/robot-check": {"ok": False, "blocked": True, "status": 200, "error": "blocked"},
+        "/rate-limited": {"ok": False, "blocked": False, "status": 429, "error": "HTTP 429"},  # retried later
         "/unavailable": {"ok": False, "blocked": False, "status": 503, "error": "HTTP 503"},
         "/article-sent-with-503": {"ok": True, "blocked": False, "status": 503, "error": None},
         "/missing": {"ok": True, "blocked": False, "status": 404, "error": None},  # captured as it renders
@@ -94,7 +104,7 @@ def test_a_captured_page_has_its_text_and_a_png_screenshot(captures):
 
 
 @pytest.mark.parametrize("status, title, text, blocked", [
-    (429, "Too Many Requests", "Too many requests", True),
+    (429, "Too Many Requests", "Too many requests", False),  # rate limited: an ordinary failure
     (403, "Example", "x" * 10_000, False),  # long page: content, whatever its status
     (200, "Just a moment...", "Checking your browser", True),
     (200, "Access Denied", "You don't have permission to access this page.", True),

@@ -137,6 +137,7 @@ class CacheFileSys:
         self._types: Dict[str, ContentType] = {}
         self._keys_by_match: Dict[str, List[str]] = {}  # normalize_url_simple(key) -> keys, oldest first
         self._raw_keys_by_form: Dict[str, List[str]] = {}  # _raw_form(raw key) -> raw keys, oldest first
+        # Replaced as a whole, never changed in place: other threads may be iterating it.
         self._failures: Dict[str, Dict[str, Any]] = {}
         self._lock = threading.Lock()
         os.makedirs(self.task_dir, exist_ok=True)
@@ -234,13 +235,15 @@ class CacheFileSys:
         raw keys.  A record has ``reason`` (text), ``blocked`` (the site
         refused an automated browser, so a person may still capture it),
         ``attempts``, and ``time`` (ISO 8601, UTC, of the latest attempt).  A
-        record is ignored while a page is stored for its URL, which happens
-        when another process stored the page after the failure was recorded.
+        record is ignored while a page is stored for its URL.  Storing a page
+        deletes its URL's record, so this happens when a process that has not
+        seen a page another process stored records a failure for its URL.
         """
-        key = self._failure_key(url)
+        failures = self._failures
+        key = self._failure_key(url, failures)
         if key is None or self._is_stored(_address(key)):
             return None
-        return dict(self._failures[key])
+        return dict(failures[key])
 
     def failures(self) -> Dict[str, Dict[str, Any]]:
         """Every failure record that :meth:`failure` returns, by its URL as :meth:`lookup` returns URLs."""
@@ -254,13 +257,14 @@ class CacheFileSys:
         count incremented.
         """
         with self._index_lock():
-            self._failures = self._load_failures()
-            key = self._failure_key(url) or storage_key(url)
-            attempts = self._failures.get(key, {}).get("attempts", 0) + 1
+            failures = self._load_failures()
+            key = self._failure_key(url, failures) or storage_key(url)
+            attempts = failures.get(key, {}).get("attempts", 0) + 1
             record = {"reason": reason, "blocked": blocked, "attempts": attempts,
                       "time": datetime.now(timezone.utc).isoformat(timespec="seconds")}
             self._update_json(self.failures_file, key, record)
-            self._failures[key] = record
+            failures[key] = record
+            self._failures = failures
         return _address(key)
 
     def clear_failure(self, url: str) -> bool:
@@ -329,8 +333,8 @@ class CacheFileSys:
             key = self._find_key(url)
             if key is None:
                 return None
-            self._failures = self._load_failures()
-            hidden = [failure_key for failure_key in self._failures
+            failures = self._load_failures()
+            hidden = [failure_key for failure_key in failures
                       if self._stored_key(_address(failure_key)) == key]
             on_disk = self._update_json(self.index_file, key, None)
             content_type = on_disk if on_disk in FILE_EXTENSIONS else None
@@ -339,7 +343,8 @@ class CacheFileSys:
                 self._delete_files(key, content_type)
             for failure_key in hidden:
                 self._update_json(self.failures_file, failure_key, None)
-                del self._failures[failure_key]
+                del failures[failure_key]
+            self._failures = failures
         return content_type
 
     def _put(self, url: str, content_type: ContentType, files: Dict[str, bytes]) -> str:
@@ -394,35 +399,36 @@ class CacheFileSys:
             return self._raw_keys_by_form, _raw_form(key)
         return self._keys_by_match, _match_key(key)
 
-    def _failure_key(self, url: str) -> Optional[str]:
-        """The key of the failure record ``url`` refers to, matched like :meth:`_find_key` without rule 4."""
+    @staticmethod
+    def _failure_key(url: str, failures: Dict[str, Dict[str, Any]]) -> Optional[str]:
+        """The key of the record in ``failures`` that ``url`` refers to, matched like :meth:`_find_key` without rule 4."""
         key = storage_key(url)
-        if key in self._failures:
+        if key in failures:
             return key
         if _is_raw(key):
             raw_form = _raw_form(key)
-            found = next((k for k in self._failures if _is_raw(k) and _raw_form(k) == raw_form), None)
+            found = next((k for k in failures if _is_raw(k) and _raw_form(k) == raw_form), None)
             if found is not None:
                 return found
-        if url in self._failures and not _is_raw(url):
+        if url in failures and not _is_raw(url):
             return url
         match = _match_key(url)
         if match is None:
             return None
-        return next((k for k in self._failures if not _is_raw(k) and _match_key(k) == match), None)
+        return next((k for k in failures if not _is_raw(k) and _match_key(k) == match), None)
 
     def _clear_failure(self, url: str) -> bool:
         """Delete the failure record matching ``url``, whichever process wrote it.
 
         Must be called under :meth:`_index_lock`.
         """
-        self._failures = self._load_failures()
-        key = self._failure_key(url)
-        if key is None:
-            return False
-        self._update_json(self.failures_file, key, None)
-        del self._failures[key]
-        return True
+        failures = self._load_failures()
+        key = self._failure_key(url, failures)
+        if key is not None:
+            self._update_json(self.failures_file, key, None)
+            del failures[key]
+        self._failures = failures
+        return key is not None
 
     def _load_failures(self) -> Dict[str, Dict[str, Any]]:
         return {key: record for key, record in self._read_json(self.failures_file).items()

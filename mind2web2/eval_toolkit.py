@@ -147,7 +147,7 @@ class BaseEvaluator:
             capture = await self.browser_manager.capture(url, self.logger)
         if not capture.ok:
             self.logger.warning(f"Could not capture {url}: {capture.error}")
-            self.cache.record_failure(url, capture.error, blocked=capture.blocked)
+            await asyncio.to_thread(self.cache.record_failure, url, capture.error, blocked=capture.blocked)
             return None, None
         await asyncio.to_thread(self.cache.put_web, url, capture.text, capture.screenshot_b64)
         return capture.screenshot_b64, capture.text
