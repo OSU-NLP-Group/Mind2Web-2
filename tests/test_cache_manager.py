@@ -57,6 +57,21 @@ def pending(tmp_path) -> list[str]:
     return url_file(tmp_path, "pending.json")
 
 
+@pytest.fixture
+def no_batch():
+    """No batch capture and no capture target in the routes' module state, before and after the test."""
+    def reset():
+        routes._batch_queue, routes._batch_active, routes._batch_total, routes._batch_completed = [], False, 0, 0
+        routes._capture_target = {}
+
+    reset()
+    yield
+    reset()
+
+
+EXTENSION = {"Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop"}
+
+
 # ------------------------------------------------------------------ the CacheManager model
 
 def test_edits_switch_content_types_reset_and_delete_pages(tmp_path):
@@ -255,8 +270,7 @@ def test_a_captured_pages_html_is_stored_as_text_the_way_the_crawler_stores_it(t
     with client() as c:
         c.post("/api/load", json={"path": str(tmp_path / "agent")})
         from_extension = capture(B, text="ignored when html is sent") | {"html": html}
-        assert c.post("/api/capture", json=from_extension,
-                      headers={"Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop"}).json()["ok"]
+        assert c.post("/api/capture", json=from_extension, headers=EXTENSION).json()["ok"]
         assert c.post("/api/capture", json=capture(A)).json()["ok"]  # text only, as older extension versions send
 
     cache = CacheFileSys(str(task_dir))
@@ -403,7 +417,7 @@ def test_uploads_store_only_captured_content(tmp_path):
         assert CacheFileSys(str(task_dir)).has(B + "/moved") is None
 
 
-def test_loading_another_folder_stops_the_batch_and_clears_the_capture_target(tmp_path):
+def test_loading_another_folder_stops_the_batch_and_clears_the_capture_target(tmp_path, no_batch):
     CacheFileSys(str(tmp_path / "agent" / "task")).record_failure(A, "HTTP 503")
     CacheFileSys(str(tmp_path / "other" / "task")).record_failure(B, "HTTP 503")
     with client() as c:
@@ -444,7 +458,7 @@ def test_edits_served_while_a_load_reads_the_folder_are_kept_and_listed(tmp_path
                                  p: ("web", [], ""), q: ("pending", ["not captured yet"], "definite")}
 
 
-def test_only_the_url_a_batch_waits_for_advances_it(tmp_path):
+def test_only_the_url_a_batch_waits_for_advances_it(tmp_path, no_batch):
     cache = CacheFileSys(str(tmp_path / "agent" / "task"))
     cache.record_failure(A, "HTTP 503")
     cache.record_failure(B, "HTTP 503")
@@ -465,7 +479,64 @@ def test_only_the_url_a_batch_waits_for_advances_it(tmp_path):
         assert url_file(tmp_path, "reviewed.json") == {other: "fixed", A: "recaptured"}
 
 
-def test_a_screenshot_of_the_visible_part_only_is_reported_to_the_ui(tmp_path, monkeypatch):
+def test_urls_stored_while_queued_behind_the_current_one_leave_the_batch(tmp_path, no_batch):
+    task_dir = tmp_path / "agent" / "task"
+    cache = CacheFileSys(str(task_dir))
+    paper, c_url = "https://example.com/paper", "https://example.com/c"
+    for url in (A, paper, B, c_url):
+        cache.record_failure(url, "blocked: HTTP 403", blocked=True)
+
+    with client() as c:
+        c.post("/api/load", json={"path": str(tmp_path / "agent")})
+        items = [{"task_id": "task", "url": url} for url in (A, paper, B, c_url)]
+        assert c.post("/api/capture/batch/start", json={"items": items}).json()["total"] == 4
+        # While the batch works on A, the reviewer uploads the paper's PDF and captures B by hand
+        assert c.post("/api/upload-pdf/task", params={"url": paper}, files={"file": ("p.pdf", b"%PDF-1.4")}).json()["ok"]
+        assert c.post("/api/capture", json=capture(B + "/")).json()["url"] == B
+        assert c.get("/api/capture/batch/status").json() == {
+            "active": True, "total": 2, "completed": 0, "remaining": 2, "current": {"task_id": "task", "url": A}}
+        # The batch captures A, whose page redirected to C, so C leaves the batch too
+        assert c.post("/api/capture", headers=EXTENSION, json=capture(A, "page a") | {
+            "actual_url": c_url, "batch_url": A}).json()["ok"]
+        assert c.get("/api/capture/batch/status").json() == {"active": False}
+
+    fresh = CacheFileSys(str(task_dir))
+    assert (fresh.has(paper), fresh.get_web(B, get_screenshot=False)[0]) == ("pdf", "captured by hand")
+    assert url_file(tmp_path, "reviewed.json") == {paper: "fixed", B: "fixed", A: "recaptured", c_url: "recaptured"}
+
+
+def test_a_batch_capture_is_stored_only_while_the_batch_waits_for_its_url(tmp_path, no_batch):
+    task_dir = tmp_path / "agent" / "task"
+    cache = CacheFileSys(str(task_dir))
+    cache.record_failure(A, "HTTP 503")
+    cache.record_failure(B, "HTTP 503")
+
+    with client() as c:
+        c.post("/api/load", json={"path": str(tmp_path / "agent")})
+        items = [{"task_id": "task", "url": url} for url in (A, B)]
+        assert c.post("/api/capture/batch/start", json={"items": items}).json()["total"] == 2
+        # The reviewer uploads A's PDF by hand while the batch tab loads A, which moves the batch on to B
+        assert c.post("/api/upload-pdf/task", params={"url": A}, files={"file": ("a.pdf", b"%PDF-1.4 a")}).json()["ok"]
+        # The batch tab's page of A is then refused, as a capture and as a PDF upload, and nothing is stored
+        refused = c.post("/api/capture", headers=EXTENSION, json=capture(A, "page a") | {"batch_url": A})
+        assert refused.status_code == 409
+        refused = c.post("/api/upload-pdf/task", headers=EXTENSION, params={"url": A, "batch_url": A},
+                         files={"file": ("a.pdf", b"%PDF-1.4 from the batch tab")})
+        assert refused.status_code == 409
+        assert c.get("/api/capture/batch/status").json()["current"] == {"task_id": "task", "url": B}
+        fresh = CacheFileSys(str(task_dir))
+        assert (fresh.get_pdf(A), fresh.has(B), fresh.failure(B) is not None) == (b"%PDF-1.4 a", None, True)
+
+        assert c.post("/api/capture", headers=EXTENSION, json=capture(B, "page b") | {"batch_url": B}).json()["ok"]
+        assert c.get("/api/capture/batch/status").json() == {"active": False}
+        assert url_file(tmp_path, "reviewed.json") == {A: "recaptured", B: "recaptured"}
+        # Once the batch is over, a late batch capture is refused too
+        late = c.post("/api/capture", headers=EXTENSION, json=capture(B, "late page b") | {"batch_url": B})
+        assert late.status_code == 409
+        assert CacheFileSys(str(task_dir)).get_web(B, get_screenshot=False)[0] == "page b"
+
+
+def test_a_screenshot_of_the_visible_part_only_is_flagged_and_reported_to_the_ui(tmp_path, monkeypatch):
     CacheFileSys(str(tmp_path / "agent" / "task")).put_web(A, "page a", png_bytes())
     events = []
 
@@ -477,8 +548,13 @@ def test_a_screenshot_of_the_visible_part_only_is_reported_to_the_ui(tmp_path, m
         c.post("/api/load", json={"path": str(tmp_path / "agent")})
         assert c.post("/api/capture", json=capture(A)).json()["ok"]
         assert c.post("/api/capture", json=capture(B) | {"visible_part_only": True}).json()["ok"]
+        # Found after an unattended batch: flagged, so a definite issue, and not reviewed
+        assert (flags(tmp_path), url_states(c)[B]) == ([B], ("web", ["flagged"], "definite"))
+        assert url_file(tmp_path, "reviewed.json") == {A: "fixed"}
+        assert c.post("/api/capture", json=capture(B)).json()["ok"]  # a full-page capture clears the flag
+        assert (flags(tmp_path), url_states(c)[B]) == ([], ("web", [], ""))
     assert [data.get("warning") for event_type, data in events if event_type == "capture_complete"] == [
-        None, "the full-page screenshot failed, so the screenshot shows only the visible part of the page"]
+        None, "the full-page screenshot failed, so the screenshot shows only the visible part of the page", None]
 
 
 def test_a_failed_load_keeps_the_loaded_cache(tmp_path, monkeypatch):

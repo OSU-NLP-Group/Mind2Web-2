@@ -46,6 +46,7 @@ let batchState = {
     before: 0,        // pages done before this run, when it resumes a batch
     completed: 0,     // pages this run captured
     skipped: 0,       // pages this run skipped
+    currentTaskId: '',  // the batch's current URL when the batch tab was sent to it, and its task
     currentUrl: '',
     status: '',       // 'loading', 'retrying', 'captcha', 'capturing', 'advancing', 'done'
     log: [],          // [{time, msg, type}] — last 20 entries
@@ -57,9 +58,12 @@ function batchLog(msg, type = 'info') {
     if (batchState.log.length > 30) batchState.log.shift();
 }
 
-function setBatchStatus(status, currentUrl = null) {
+function setBatchStatus(status, current = null) {
     batchState.status = status;
-    if (currentUrl !== null) batchState.currentUrl = currentUrl;
+    if (current !== null) {
+        batchState.currentTaskId = current.task_id;
+        batchState.currentUrl = current.url;
+    }
 }
 
 /** The queued pages that are done, captured or skipped, including those done before a resumed run. */
@@ -107,16 +111,12 @@ function detectCaptcha() {
 }
 
 /**
- * Run CAPTCHA detection in a tab.
+ * Run CAPTCHA detection in a tab; null also when the check fails or times out.
  * @returns {Promise<string|null>}
  */
 async function detectCaptchaInTab(tabId) {
     try {
-        const results = await chrome.scripting.executeScript({
-            target: { tabId },
-            func: detectCaptcha,
-        });
-        return results?.[0]?.result || null;
+        return (await runInPage(tabId, detectCaptcha)) || null;
     } catch (e) {
         console.warn('detectCaptchaInTab failed:', e);
         return null;
@@ -142,11 +142,16 @@ chrome.commands.onCommand.addListener(async (command) => {
 
 /**
  * Capture the current page and send to backend.
+ *
+ * Returns {success: true} when the page was stored; otherwise {success: false,
+ * error}, with moved: true when the backend refused a batch capture because
+ * the batch no longer waits for opts.batchUrl (nothing was stored).
  * @param {chrome.tabs.Tab} tab
  * @param {object} [opts] - Optional overrides for batch mode
  * @param {boolean} [opts.skipTargetFetch] - Skip fetching capture target (use opts.task_id/url)
  * @param {string} [opts.task_id]
  * @param {string} [opts.url]
+ * @param {string} [opts.batchUrl] - the batch's current URL when the batch tab was sent to it, sent as batch_url
  */
 async function capturePage(tab, opts = {}) {
     try {
@@ -172,10 +177,11 @@ async function capturePage(tab, opts = {}) {
         const isPdf = await detectPdfInTab(tab.id) || (tab.url && tab.url.toLowerCase().endsWith('.pdf'));
         if (isPdf) {
             const actual_url = tab.url && tab.url !== url ? tab.url : undefined;
-            const ok = await capturePdfAndUpload(task_id, url, actual_url);
-            if (!ok) {
+            const pdf = await capturePdfAndUpload(task_id, url, actual_url, opts.batchUrl);
+            if (pdf !== 'stored') {
                 setBadge('✗', '#dc2626', 3000);
-                return { success: false, error: 'Failed to download PDF' };
+                return pdf === 'moved' ? { success: false, moved: true, error: 'The batch moved on' }
+                                       : { success: false, error: 'Failed to download PDF' };
             }
             if (batchMode) {
                 setBadge('✓', '#22c55e', 1000);
@@ -195,16 +201,14 @@ async function capturePage(tab, opts = {}) {
         const visiblePartOnly = !captured;
         if (visiblePartOnly) {
             await scrollAsTheCrawler(tab.id);
-            const html = await readHtml(tab.id);
-            const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'jpeg', quality: 85 });
-            captured = { html, screenshot: dataUrl.replace(/^data:image\/jpeg;base64,/, '') };
+            captured = { ...(await readPage(tab.id)), screenshot: await captureVisiblePart(tab.id) };
             if (batchMode) batchLog('Full-page screenshot unavailable; captured the visible part only', 'warn');
         }
 
         // Detect redirect: tab.url may differ from the original URL
         const actual_url = tab.url && tab.url !== url ? tab.url : undefined;
 
-        // Send to backend
+        // Send to backend; text is for Cache Manager versions that do not convert HTML
         const captureRes = await api('/api/capture', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -212,12 +216,18 @@ async function capturePage(tab, opts = {}) {
                 task_id,
                 url,
                 html: captured.html,
+                text: captured.text,
                 screenshot_base64: captured.screenshot,
                 ...(visiblePartOnly ? { visible_part_only: true } : {}),
                 ...(actual_url ? { actual_url } : {}),
+                ...(opts.batchUrl ? { batch_url: opts.batchUrl } : {}),
             }),
         });
 
+        if (captureRes.status === 409 && opts.batchUrl) {
+            setBadge('✗', '#dc2626', 3000);
+            return { success: false, moved: true, error: 'The batch moved on' };
+        }
         if (!captureRes.ok) {
             throw new Error(`Backend returned ${captureRes.status}`);
         }
@@ -240,21 +250,23 @@ async function capturePage(tab, opts = {}) {
 }
 
 /**
- * The HTML of the page in a tab and a screenshot of the whole page, as base64 PNG, taken as the crawler takes them.
+ * The HTML and text of the page in a tab and a screenshot of the whole page, as base64 PNG, taken as the crawler takes them.
  *
  * Through the DevTools protocol, the page is laid out in a viewport of the
  * crawler's window size (CRAWLER_WINDOW) at a device scale factor of 1, as in
  * the crawler, and scrolled as the crawler scrolls (see scrollAsTheCrawler).  The viewport is then resized to the page's
  * content height, at most MAX_VIEWPORT_HEIGHT, and after
- * SETTLE_AFTER_RESIZE_MS the HTML is read and the page is captured with
+ * SETTLE_AFTER_RESIZE_MS the HTML and text are read (see readPage), the tab
+ * is brought to the front, since Chrome may not render a background tab, and
+ * the page is captured with
  * captureBeyondViewport, which covers the whole page, including any part
  * below that viewport.  The DevTools commands are Page and Emulation commands
- * only, and scrolling and reading the HTML run as content scripts, so the
+ * only, and scrolling and reading the page run as content scripts, so the
  * Runtime domain, which some bot checks detect, is never enabled.  Chrome
  * shows a "started debugging this browser" bar while the debugger is
  * attached, and the tab gets its own viewport back afterwards.
  *
- * Returns {html, screenshot}, or null when the debugger cannot attach (for
+ * Returns {html, text, screenshot}, or null when the debugger cannot attach (for
  * example under a policy that blocks it), when a command fails (for example
  * after Cancel on that bar), or when a command or content script does not
  * finish within its timeout.
@@ -280,10 +292,11 @@ async function captureFullPage(tabId) {
         const metrics = await send('Page.getLayoutMetrics');
         await setViewport(Math.round(Math.min(metrics.cssContentSize.height, MAX_VIEWPORT_HEIGHT)));
         await sleep(SETTLE_AFTER_RESIZE_MS);
-        const html = await readHtml(tabId);
+        const page = await readPage(tabId);
+        await send('Page.bringToFront').catch(() => {});  // best effort: the screenshot decides success
         const shot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true },
                                 SCREENSHOT_TIMEOUT_MS);
-        return { html, screenshot: shot.data };
+        return { ...page, screenshot: shot.data };
     } catch (e) {
         console.warn('Full-page screenshot failed:', e);
         return null;
@@ -308,9 +321,38 @@ async function scrollAsTheCrawler(tabId) {
     }
 }
 
-/** The outerHTML of the document in a tab. */
-async function readHtml(tabId) {
-    return (await runInPage(tabId, () => document.documentElement.outerHTML)) || '';
+/**
+ * {html, text}: the outerHTML of the document in a tab, which the backend stores as text, and
+ * the innerText of its body, which a backend that takes no HTML stores instead.
+ */
+async function readPage(tabId) {
+    const page = await runInPage(tabId, () => ({
+        html: document.documentElement.outerHTML,
+        text: document.body?.innerText || '',
+    }));
+    return { html: page?.html || '', text: page?.text || '' };
+}
+
+/**
+ * A screenshot of the visible part of the page in a tab, as base64 JPEG.
+ *
+ * captureVisibleTab captures whichever tab is active in a window, so the tab is
+ * made active again, and the screenshot is kept only if the tab is the active tab
+ * of its window both right before and right after it is taken; otherwise this
+ * throws, and the capture fails instead of storing another tab's screenshot.
+ */
+async function captureVisiblePart(tabId) {
+    await chrome.tabs.update(tabId, { active: true });
+    await sleep(150);
+    const before = await chrome.tabs.get(tabId);
+    if (!before.active) throw new Error('The page is not the active tab of its window');
+    const dataUrl = await withTimeout(chrome.tabs.captureVisibleTab(before.windowId, { format: 'jpeg', quality: 85 }),
+                                      COMMAND_TIMEOUT_MS, 'captureVisibleTab');
+    const after = await chrome.tabs.get(tabId);
+    if (!after.active || after.windowId !== before.windowId) {
+        throw new Error('The page stopped being the active tab of its window during the screenshot');
+    }
+    return dataUrl.replace(/^data:image\/jpeg;base64,/, '');
 }
 
 /** The result of `func(...args)` run as a content script in a tab; rejects after COMMAND_TIMEOUT_MS. */
@@ -342,7 +384,7 @@ async function startBatch(opts = {}) {
         // was reloaded) resumes at its current URL; the server's completed count is what that run did.
         batchState = {
             total: status.total, before: status.completed || 0, completed: 0, skipped: 0,
-            currentUrl: status.current.url, status: 'loading', log: [],
+            currentTaskId: status.current.task_id, currentUrl: status.current.url, status: 'loading', log: [],
         };
         const mode = pauseOnCaptcha ? 'pause on CAPTCHA' : 'auto';
         batchLog(batchState.before
@@ -383,7 +425,7 @@ async function advanceBatch() {
         if (batchTabId) {
             batchProcessing = false;
             currentRetryCount = 0;  // reset retry count for new URL
-            setBatchStatus('loading', status.current.url);
+            setBatchStatus('loading', status.current);
             batchLog(`Loading: ${truncUrl(status.current.url)}`);
             startPageTimeout(batchTabId);
             await chrome.tabs.update(batchTabId, { url: status.current.url });
@@ -528,23 +570,19 @@ function stopCaptchaPolling() {
 
 /**
  * Detect if the tab is showing Chrome's built-in PDF viewer.
- * Returns true if the page is a PDF.
+ * Returns true if the page is a PDF; false otherwise, and when the check fails or times out.
  */
 async function detectPdfInTab(tabId) {
     try {
-        const results = await chrome.scripting.executeScript({
-            target: { tabId },
-            func: () => {
-                // Chrome's PDF viewer uses an <embed type="application/pdf">
-                const embed = document.querySelector('embed[type="application/pdf"]');
-                if (embed) return true;
-                // Also check if the content type meta tag says PDF
-                const ct = document.contentType || '';
-                if (ct === 'application/pdf') return true;
-                return false;
-            },
-        });
-        return results?.[0]?.result || false;
+        return (await runInPage(tabId, () => {
+            // Chrome's PDF viewer uses an <embed type="application/pdf">
+            const embed = document.querySelector('embed[type="application/pdf"]');
+            if (embed) return true;
+            // Also check if the content type meta tag says PDF
+            const ct = document.contentType || '';
+            if (ct === 'application/pdf') return true;
+            return false;
+        })) || false;
     } catch {
         return false;
     }
@@ -552,9 +590,13 @@ async function detectPdfInTab(tabId) {
 
 /**
  * Download PDF bytes from a URL and upload to the backend.
- * Returns true on success.
+ *
+ * batchUrl, sent by a batch capture, is the batch's current URL when the batch
+ * tab was sent to it.  Returns 'stored'; 'moved' when the backend refused the
+ * upload because the batch no longer waits for batchUrl (nothing was stored);
+ * or 'failed'.
  */
-async function capturePdfAndUpload(taskId, url, actualUrl) {
+async function capturePdfAndUpload(taskId, url, actualUrl, batchUrl) {
     const downloadUrl = actualUrl || url;
     try {
         const res = await fetch(downloadUrl);
@@ -564,15 +606,17 @@ async function capturePdfAndUpload(taskId, url, actualUrl) {
         const form = new FormData();
         form.append('file', blob, 'page.pdf');
 
+        const batchQuery = batchUrl ? `&batch_url=${encodeURIComponent(batchUrl)}` : '';
         const uploadRes = await api(
-            `/api/upload-pdf/${encodeURIComponent(taskId)}?url=${encodeURIComponent(url)}`,
+            `/api/upload-pdf/${encodeURIComponent(taskId)}?url=${encodeURIComponent(url)}${batchQuery}`,
             { method: 'POST', body: form }
         );
+        if (uploadRes.status === 409 && batchUrl) return 'moved';
         if (!uploadRes.ok) throw new Error(`Upload failed: ${uploadRes.status}`);
-        return true;
+        return 'stored';
     } catch (err) {
         console.warn('capturePdfAndUpload failed:', err);
-        return false;
+        return 'failed';
     }
 }
 
@@ -580,6 +624,18 @@ async function capturePdfAndUpload(taskId, url, actualUrl) {
 // Auto-capture helper
 // ---------------------------------------------------------------------------
 
+/**
+ * Capture the page in the batch tab for the batch's current URL, then load the next one.
+ *
+ * The tab shows the URL the batch waited for when the tab was sent to it
+ * (batchState.currentTaskId and currentUrl).  If the batch has moved on since,
+ * because that URL was captured or uploaded by hand, skipped, or replaced by a new
+ * batch, the page is not captured, which would store it under another URL, and the
+ * tab is sent to the batch's current URL instead.  The capture names the URL as
+ * batch_url, so the backend also refuses it, with status 409, when the batch moves
+ * on during the capture; that too only moves the tab on.  Neither counts as
+ * captured or skipped.
+ */
 async function autoCaptureAndAdvance(tabId, retryCount = 0) {
     try {
         // Get current batch target
@@ -591,6 +647,12 @@ async function autoCaptureAndAdvance(tabId, retryCount = 0) {
             return;
         }
 
+        if (status.current.task_id !== batchState.currentTaskId || status.current.url !== batchState.currentUrl) {
+            batchLog(`Batch moved on from ${truncUrl(batchState.currentUrl)}; not captured`, 'warn');
+            await advanceBatch();
+            return;
+        }
+
         const tab = await chrome.tabs.get(tabId);
 
         // Check if page is actually a PDF (e.g., URL was misrecorded as "web")
@@ -599,11 +661,14 @@ async function autoCaptureAndAdvance(tabId, retryCount = 0) {
             setBatchStatus('capturing');
             batchLog(`PDF detected: ${truncUrl(status.current.url)}`, 'info');
             const actual_url = tab.url && tab.url !== status.current.url ? tab.url : undefined;
-            const ok = await capturePdfAndUpload(status.current.task_id, status.current.url, actual_url);
-            if (ok) {
+            const pdf = await capturePdfAndUpload(status.current.task_id, status.current.url, actual_url,
+                                                  status.current.url);
+            if (pdf === 'stored') {
                 batchState.completed++;
                 batchLog(`PDF saved OK`, 'success');
                 setBadge('✓', '#22c55e', 1000);
+            } else if (pdf === 'moved') {
+                batchLog(`Batch moved on from ${truncUrl(status.current.url)}; PDF not stored`, 'warn');
             } else {
                 batchLog(`PDF download failed, skipping`, 'error');
                 await skipAndAdvance();
@@ -617,11 +682,7 @@ async function autoCaptureAndAdvance(tabId, retryCount = 0) {
         // Check if page body is too short (may need retry)
         if (retryCount < MAX_RETRIES) {
             try {
-                const textResults = await chrome.scripting.executeScript({
-                    target: { tabId },
-                    func: () => (document.body?.innerText || '').length,
-                });
-                const bodyLength = textResults?.[0]?.result || 0;
+                const bodyLength = (await runInPage(tabId, () => (document.body?.innerText || '').length)) || 0;
                 if (bodyLength < MIN_BODY_LENGTH) {
                     console.log(`Page body too short (${bodyLength} chars), retry ${retryCount + 1}/${MAX_RETRIES}`);
                     setBatchStatus('retrying');
@@ -645,8 +706,15 @@ async function autoCaptureAndAdvance(tabId, retryCount = 0) {
             skipTargetFetch: true,
             task_id: status.current.task_id,
             url: status.current.url,
+            batchUrl: status.current.url,
         });
 
+        if (result.moved) {
+            batchLog(`Batch moved on from ${truncUrl(status.current.url)}; not stored`, 'warn');
+            await sleep(500);
+            await advanceBatch();
+            return;
+        }
         if (!result.success) {
             // Capture failed — skip this URL and advance
             console.warn(`Capture failed for ${status.current.url}: ${result.error}, skipping`);

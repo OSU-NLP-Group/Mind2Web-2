@@ -36,7 +36,7 @@ The server has no authentication, so it answers only requests addressed to `127.
 
 After pulling a new version of the extension, click its reload button in `chrome://extensions`.
 
-A capture stores the page the way the crawler does. The page is laid out 1,100 CSS pixels wide, as in the crawler's browser window, and scrolled to the end and back to load content that appears on scrolling. The extension then stores a screenshot of the whole page and the page's HTML, which the Cache Manager converts to text with the crawler's converter. For the full-page screenshot, the extension briefly attaches Chrome's debugger to the tab, so Chrome shows a "Cache Manager Capture started debugging this browser" bar during each capture. If the full-page screenshot fails, for example because **Cancel** was clicked on that bar during the capture, the debugger did not answer in time, or a policy blocks the debugger, the extension stores a screenshot of only the visible part of the tab, and the Cache Manager shows a warning so that you can capture the page again. Starting Chrome with `--silent-debugger-extension-api` hides the bar.
+A capture stores the page the way the crawler does. The page is laid out 1,100 CSS pixels wide, as in the crawler's browser window, and scrolled to the end and back to load content that appears on scrolling. The extension then stores a screenshot of the whole page and the page's HTML, which the Cache Manager converts to text with the crawler's converter. For the full-page screenshot, the extension briefly attaches Chrome's debugger to the tab, so Chrome shows a "Cache Manager Capture started debugging this browser" bar during each capture. If the full-page screenshot fails, for example because **Cancel** was clicked on that bar during the capture, the debugger did not answer in time, or a policy blocks the debugger, the extension stores a screenshot of only the visible part of the tab, and the Cache Manager flags the URL and shows a warning so that you can capture the page again. Starting Chrome with `--silent-debugger-extension-api` hides the bar.
 
 ### 3. Review & Fix
 
@@ -56,7 +56,7 @@ The most powerful feature — fix all broken pages at once:
 5. Pages with very short content are auto-retried (up to 2 times)
 6. After batch completes, review the recaptured URLs (shown in blue) and press `r` to confirm each
 
-Only a capture of the URL the batch is waiting for advances the batch; capturing or uploading another URL by hand while a batch runs leaves the queue as it is. If the batch tab is closed or the extension is reloaded, the batch stays queued, and starting it again from the popup resumes it at that URL.
+Only a capture of the URL the batch is waiting for advances the batch. Capturing or uploading by hand a URL that is still queued takes it out of the batch, so the batch does not capture it again later; if it is the URL the batch is waiting for, the batch moves on to the next URL without storing what its tab loaded for that URL. If the batch tab is closed or the extension is reloaded, the batch stays queued, and starting it again from the popup resumes it at that URL.
 
 Opening the Cache Manager page again, in the same tab or another one, and clicking **Refresh** keep a running batch; opening another cache folder stops it.
 
