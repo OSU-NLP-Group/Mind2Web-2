@@ -119,6 +119,29 @@ def test_transient_errors_are_retried(monkeypatch):
     assert len(completions.calls) == 4
 
 
+def test_request_timeouts_conflicts_and_retryable_responses_are_retried(monkeypatch):
+    """The OpenAI SDK's own rules: 408 and 409 are transient, and ``x-should-retry: true`` overrides the status."""
+    verdict = Verdict(reasoning="ok", result=True)
+    completions = ScriptedCompletions(
+        status_error(openai.APIStatusError, 408),
+        status_error(openai.ConflictError, 409),
+        status_error(openai.BadRequestError, 400, headers={"x-should-retry": "true"}),
+        completion(parsed=verdict),
+    )
+    client = make_client(completions, monkeypatch, judge=JudgeConfig())
+    assert asyncio.run(client.async_response(messages=MESSAGES, response_format=Verdict)) is verdict
+    assert len(completions.calls) == 4
+
+
+def test_a_response_marked_not_retryable_is_not_retried(monkeypatch):
+    completions = ScriptedCompletions(
+        status_error(openai.InternalServerError, 503, headers={"x-should-retry": "false"}))
+    client = make_client(completions, monkeypatch, judge=JudgeConfig())
+    with pytest.raises(JudgeError, match="InternalServerError"):
+        asyncio.run(client.async_response(messages=MESSAGES, response_format=Verdict))
+    assert len(completions.calls) == 1
+
+
 @pytest.mark.parametrize("error", [
     status_error(openai.BadRequestError, 400),
     status_error(openai.AuthenticationError, 401),

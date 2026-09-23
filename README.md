@@ -200,7 +200,7 @@ python run_eval.py --agent_name example --task_id yu_lineage
 - `--max_webpage_retrieval`: Maximum concurrent webpage retrievals (default: 5)
 - `--max_llm_requests`: Maximum concurrent LLM API requests (default: 30)
 - `--dump_cache`: Persist cache to disk (default: True)
-- `--overwrite`: Overwrite existing results
+- `--overwrite`: Evaluate answers again even if they have a result. Without it, an answer's latest result is reused when it scored the same answer file with the same judge configuration; otherwise the answer is evaluated again. Before an answer is evaluated, its earlier results move to `results/superseded/`.
 
 ### 5. Compute Metrics
 

@@ -5,11 +5,16 @@ For every evaluated answer, ``run_eval.py`` writes::
     <results_root>/<agent_name>/<task_id>/<answer_base>/
     ├── <answer_name>                               # copy of the evaluated answer
     ├── logs/
-    └── results/<timestamp>_<answer_name>.json      # output of Evaluator.get_summary()
+    └── results/
+        ├── <timestamp>_<answer_name>.json          # output of Evaluator.get_summary()
+        └── superseded/                             # results of earlier evaluations
 
 ``<answer_base>`` is the answer file name without its extension (``answer_1``
-for ``answer_1.md``) and ``<timestamp>`` is ``YYYYMMDD_HHMMSS``.  Re-evaluating an
-answer adds another timestamped file; the newest one is the answer's result.
+for ``answer_1.md``) and ``<timestamp>`` is ``YYYYMMDD_HHMMSS``.  The newest
+file directly in ``results/`` is the answer's result.  Before an answer is
+evaluated again, its earlier results move to ``results/superseded/``
+(:func:`supersede_results`), so an evaluation that fails leaves the answer
+without a result instead of with the result of an earlier answer or judge.
 """
 from __future__ import annotations
 
@@ -19,6 +24,7 @@ from datetime import datetime
 from pathlib import Path
 
 _TIMESTAMP_RE = re.compile(r"(\d{8})_?(\d{6})")
+SUPERSEDED_DIR = "superseded"
 
 
 def answer_base(answer_name: str) -> str:
@@ -46,8 +52,19 @@ def latest_result_file(result_dir: Path) -> Path | None:
     """Return the ``*.json`` file in ``result_dir`` with the newest timestamp in its name."""
     if not result_dir.is_dir():
         return None
-    candidates = [p for p in result_dir.iterdir() if p.suffix == ".json"]
+    candidates = [p for p in result_dir.iterdir() if p.suffix == ".json" and p.is_file()]
     return max(candidates, key=_timestamp_of) if candidates else None
+
+
+def supersede_results(result_dir: Path) -> None:
+    """Move every result file in ``result_dir`` into its ``superseded/`` subdirectory."""
+    if not result_dir.is_dir():
+        return
+    stale = [p for p in result_dir.iterdir() if p.suffix == ".json" and p.is_file()]
+    if stale:
+        (result_dir / SUPERSEDED_DIR).mkdir(exist_ok=True)
+    for path in stale:
+        path.replace(result_dir / SUPERSEDED_DIR / path.name)
 
 
 def load_latest_result(results_root: Path, agent_name: str, task_id: str, answer_name: str) -> dict | None:
