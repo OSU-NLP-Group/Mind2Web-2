@@ -22,8 +22,6 @@ DEFAULT_RETRY_SECONDS = 900.0
 DEFAULT_TIMEOUT_SECONDS = 600.0
 MAX_RETRY_DELAY_SECONDS = 120.0
 
-# APITimeoutError is a subclass of APIConnectionError; InternalServerError covers HTTP 5xx.
-TRANSIENT_ERRORS = (openai.RateLimitError, openai.APIConnectionError, openai.InternalServerError)
 _REQUEST_ERRORS = (openai.OpenAIError, pydantic.ValidationError, json.JSONDecodeError)
 _JUDGE_PARAMS = ("model", "reasoning_effort", "temperature")
 
@@ -42,13 +40,15 @@ class LLMClient:
     parameters, replacing any ``model``, ``reasoning_effort``, or ``temperature``
     the caller passes; without it, requests are sent as given.
 
-    Transient failures (rate limits, timeouts, connection and server errors) are
-    retried with jittered exponential backoff that starts at
-    ``retry_initial_delay`` seconds and honors the server's ``retry-after``
-    header, until ``retry_seconds`` have passed since the first attempt.  A
-    failure that is not retried, or that outlasts the retry budget, raises
-    :class:`JudgeError`, as does a response without the requested structured
-    output.
+    Transient failures are retried with jittered exponential backoff that starts
+    at ``retry_initial_delay`` seconds and honors the server's ``retry-after``
+    header, until ``retry_seconds`` have passed since the first attempt.  They
+    are the failures the OpenAI SDK itself retries: connection errors and
+    timeouts, and HTTP 408, 409, 429, and 5xx responses, unless the response's
+    ``x-should-retry`` header says otherwise; exhausted quota (HTTP 429 with
+    code ``insufficient_quota``) is not retried.  A failure that is not retried,
+    or that outlasts the retry budget, raises :class:`JudgeError`, as does a
+    response without the requested structured output.
 
     ``response(**kwargs)`` / ``async_response(**kwargs)`` take Chat Completions
     parameters and return the parsed Pydantic object (structured output) or the
@@ -143,7 +143,7 @@ class _RetryBudget:
 
     def next_wait(self, exc: BaseException) -> float | None:
         """Seconds to wait before retrying after ``exc``, or ``None`` to give up."""
-        if not isinstance(exc, TRANSIENT_ERRORS) or getattr(exc, "code", None) == "insufficient_quota":
+        if not _is_transient(exc):
             return None
         wait = max(self.delay * (0.5 + random.random()), _retry_after(exc) or 0.0)
         wait = min(wait, MAX_RETRY_DELAY_SECONDS)
@@ -151,6 +151,18 @@ class _RetryBudget:
             return None
         self.delay = min(self.delay * 2, MAX_RETRY_DELAY_SECONDS)
         return wait
+
+
+def _is_transient(exc: BaseException) -> bool:
+    """Whether a failed request may succeed if sent again, by the rules in the LLMClient docstring."""
+    if isinstance(exc, openai.APIConnectionError):  # includes APITimeoutError
+        return True
+    if not isinstance(exc, openai.APIStatusError) or exc.code == "insufficient_quota":
+        return False
+    should_retry = exc.response.headers.get("x-should-retry")
+    if should_retry in ("true", "false"):
+        return should_retry == "true"
+    return exc.status_code in (408, 409, 429) or exc.status_code >= 500
 
 
 def _retry_after(exc: BaseException) -> float | None:

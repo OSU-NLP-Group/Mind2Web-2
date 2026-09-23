@@ -72,7 +72,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--self_debug", action="store_true",
                    help="Add *_debug suffix to logs / result files")
     p.add_argument("--overwrite", action="store_true",
-                   help="Overwrite existing results")
+                   help="Evaluate answers again even if their latest result scored the same answer "
+                        "with the same judge (earlier results move to results/superseded/)")
     return p
 
 

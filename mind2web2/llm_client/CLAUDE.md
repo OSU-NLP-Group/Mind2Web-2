@@ -13,7 +13,7 @@ Chat Completions client used by the judge (and by the webpage-caching script for
 - OpenAI provider: `OPENAI_API_KEY`, and `base_url` or `OPENAI_BASE_URL` for any OpenAI-compatible server (e.g. a LiteLLM proxy). Azure provider: `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT_URL`, `AZURE_OPENAI_API_VERSION`.
 - With `judge` set, every request is sent to `judge.model` with the judge's parameters, replacing whatever `model` / `temperature` / `reasoning_effort` the caller passed (logged once per replaced model). This keeps one judge per run even when an eval script names a model.
 - `response(**kwargs)` / `async_response(**kwargs)`: a Pydantic `response_format` goes to `chat.completions.parse` and returns the parsed object; otherwise `chat.completions.create` returns the message text. `count_token=True` returns `(result, tokens)`.
-- Retries: rate limits, timeouts, connection errors, and HTTP 5xx are retried with jittered exponential backoff (honoring `retry-after`) until `retry_seconds` have passed; exhausted quota and every other error raise `JudgeError` immediately. The SDK's own retries are disabled.
+- Retries: connection errors, timeouts, and HTTP 408, 409, 429, and 5xx responses (unless the response's `x-should-retry` header says otherwise; the rules the OpenAI SDK uses) are retried with jittered exponential backoff (honoring `retry-after`) until `retry_seconds` have passed; exhausted quota and every other error raise `JudgeError` immediately. The SDK's own retries are disabled.
 
 ## api_cost.py
 `calculate_api_cost(input_tokens, output_tokens, model_name)`: per-million-token price lookup for a few models.

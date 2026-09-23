@@ -45,10 +45,11 @@ class JudgeConfig:
 class JudgeError(RuntimeError):
     """A judge request failed for good, so the answer it was made for cannot be scored.
 
-    Raised after transient failures (rate limits, timeouts, connection errors,
-    server errors) have been retried until the client's retry budget ran out,
-    and immediately for any other failure: invalid request, authentication,
-    exhausted quota, truncated or refused output.  Evaluation code lets it
+    Raised after transient failures (connection errors, timeouts, rate limits,
+    server errors, and other responses marked as retryable) have been retried
+    until the client's retry budget ran out, and immediately for any other
+    failure: invalid request, authentication, exhausted quota, truncated or
+    refused output.  Evaluation code lets it
     propagate instead of scoring the verification as failed, so that a judge
     outage never lowers an agent's score.
     """
