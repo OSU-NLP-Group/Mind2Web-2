@@ -12,7 +12,7 @@ A browser-based tool for reviewing and batch-fixing cached webpages used in [Min
 ### 1. Start the Server
 
 ```bash
-# By agent name (looks up cache/<agent_name>)
+# By agent name (looks up <cache-dir>/<agent_name>; --cache-dir defaults to cache/)
 uv run python3 cache_manager_web/run.py <agent_name>
 
 # By full path
@@ -20,9 +20,12 @@ uv run python3 cache_manager_web/run.py /path/to/cache/folder
 
 # Options
 uv run python3 cache_manager_web/run.py <agent_name> --port 8000 --no-browser
+uv run python3 cache_manager_web/run.py <agent_name> --cache-dir /data/cache --answers-dir /data/answers
 ```
 
-The web UI opens automatically in your browser.
+The web UI opens automatically in your browser. The Answer view reads `<answers-dir>/<agent_name>/<task_id>/answer_*.md`; without `--answers-dir`, it uses the `answers` directory next to the cache directory.
+
+The server has no authentication, so it answers only requests addressed to `127.0.0.1`, `localhost`, or `::1`, and it refuses requests that change data when they come from any web page other than the Cache Manager itself (the Chrome extension is allowed). Pages you open while recapturing therefore cannot read or change the cache. `--host` binds another interface and serves that host name too; a wildcard such as `0.0.0.0` serves every host, so use it only on a trusted network.
 
 ### 2. Install the Chrome Extension
 
@@ -33,7 +36,7 @@ The web UI opens automatically in your browser.
 ### 3. Review & Fix
 
 1. **Browse tasks** — select a task from the left panel to see its URLs
-2. **Check issues** — red = definite issue, yellow = possible issue, green = reviewed OK. URLs the crawler could not capture are listed as `failed`, with the reason, and are definite issues; capturing one with the extension (or uploading a PDF or MHTML file) stores the page and clears the failure
+2. **Check issues** — red = definite issue, yellow = possible issue, green = reviewed OK. URLs the crawler could not capture are listed as `failed`, with the reason; URLs you added or reset are listed as `pending` (not captured yet). Both are definite issues, as are flagged URLs, pages with no text, and short pages (under 3,000 characters) with bot-check or access-denied wording. Longer pages with such wording are only possible issues, since articles may quote it. Capturing a URL with the extension (or uploading a PDF or MHTML file) stores its page and clears its failure record and flag
 3. **Navigate quickly** — use `j`/`k` to move between URLs, `n`/`N` to jump across issues in all tasks
 4. **Preview** — toggle between screenshot (`1`), extracted text (`2`), and agent answer (`3`) views
 
@@ -41,7 +44,7 @@ The web UI opens automatically in your browser.
 
 The most powerful feature — fix all broken pages at once:
 
-1. Click **Batch Recapture** in the toolbar (queues all flagged URLs)
+1. Click **Batch Recapture** in the toolbar (queues every unreviewed red URL that is not a stored PDF)
 2. Click the Chrome Extension icon → **Start Auto-Capture**
 3. The extension automatically opens each URL, waits for it to load, captures the page, and advances to the next one
 4. If a CAPTCHA is detected (Cloudflare, reCAPTCHA, hCaptcha, etc.), it pauses and waits for you to solve it, then continues
@@ -59,12 +62,16 @@ For pages that need manual intervention (login walls, complex anti-bot):
 
 ## URL Management
 
-- **Flag** (`f`) — manually mark a URL as broken for batch recapture
-- **Reset** (`x`) — clear cached content and auto-flag for re-download
-- **Edit** (`e`) — change the URL link (content is preserved)
-- **Add** (`a`) — add a new URL (auto-flagged; `.pdf` URLs detected automatically)
-- **Delete** (`d`) — remove a URL and its cached files
+- **Flag** (`f`) — mark a URL for recapture (red). Its stored page is kept, and evaluation keeps using it, until a capture replaces it
+- **Reset** (`x`) — delete the URL's stored page (or its failure record) and flag it; it is listed as `pending` until captured again. Asks first when a page is stored
+- **Edit** (`e`) — change the URL link. A stored page moves to the new URL; a failed or pending URL leaves the new URL `pending`
+- **Add** (`a`) — add a URL the crawl missed; it is listed as `pending` until you capture it or upload a file
+- **Delete** (`d`) — remove a URL: its stored page, failure record, and flag. Asks first when a page is stored
 - **Upload** — drag-and-drop `.pdf` or `.mhtml` files onto the preview panel
+
+### What evaluation sees
+
+Evaluation reads only the stored pages (`index.json` and their files) and the failure records (`failures.json`) of each task: a stored page is used as it is, a URL with a failure record counts as unavailable, and any other URL is captured live. The Cache Manager's own state, flags (`flags.json`) and review statuses (`reviewed.json`), is never read by evaluation, and no Cache Manager action stores content that was not captured. So a flagged page is still evaluated from its stored content, and a `pending` URL is captured live until you capture it.
 
 ## Keyboard Shortcuts
 
@@ -75,9 +82,9 @@ For pages that need manual intervention (login walls, complex anti-bot):
 | `n` | Next issue (cross-task) |
 | `N` | Previous issue (cross-task) |
 | `r` | Mark as reviewed |
-| `f` | Flag as issue |
-| `d` | Delete URL |
-| `x` | Reset URL cache |
+| `f` | Flag for recapture |
+| `d` | Delete URL (asks first if a page is stored) |
+| `x` | Reset: delete the stored page and flag (asks first) |
 | `e` | Edit URL |
 | `a` | Add new URL |
 | `o` | Open in browser |
