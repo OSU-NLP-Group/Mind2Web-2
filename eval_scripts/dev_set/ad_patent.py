@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from datetime import datetime
 from typing import Optional, List, Dict
 
@@ -9,6 +10,17 @@ from mind2web2.llm_client.base_client import LLMClient
 from mind2web2.evaluator import Evaluator, AggregationStrategy
 from mind2web2.utils.cache_filesys import CacheFileSys
 
+
+def evaluation_now(clock=datetime.now):
+    """Return the "now" from which this task's relative time ranges are computed.
+
+    This is midnight of MIND2WEB2_EVAL_DATE (YYYY-MM-DD) when that environment variable is set, for
+    example to the date the answers were collected, and ``clock()`` otherwise.
+    """
+    pinned = os.environ.get("MIND2WEB2_EVAL_DATE")
+    return datetime.strptime(pinned, "%Y-%m-%d") if pinned else clock()
+
+
 # --------------------------------------------------------------------------- #
 # Task-specific constants                                                     #
 # --------------------------------------------------------------------------- #
@@ -17,7 +29,7 @@ TASK_DESCRIPTION = """
 Find three U.S. patents or patent applications in the field of autonomous driving that were published in the last year, regardless of whether they have been granted. For each, include the title, the inventors' names, the organization or assignee, the filing date, the publication date, and a link to the corresponding Google Patents page.
 """
 
-LAST_YEAR = datetime.utcnow().year - 1
+LAST_YEAR = evaluation_now(datetime.utcnow).year - 1
 
 # --------------------------------------------------------------------------- #
 # Data models for extracted info                                              #
