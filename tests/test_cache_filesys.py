@@ -187,6 +187,18 @@ def test_remove_deletes_the_entry_and_its_files(tmp_path):
     assert sorted(p.suffix for p in tmp_path.iterdir()) == [".json", ".pdf"]
 
 
+def test_remove_deletes_what_is_on_disk_when_another_process_changed_the_page(tmp_path):
+    url = "https://example.com/report"
+    CacheFileSys(str(tmp_path)).put_web(url, "html", png_bytes())
+    manager, other = CacheFileSys(str(tmp_path)), CacheFileSys(str(tmp_path))  # both see a web page
+    CacheFileSys(str(tmp_path)).put_pdf(url, b"%PDF-1.4")  # another process replaces it with a PDF
+    assert manager.remove(url) == "pdf"
+    assert [p.name for p in tmp_path.iterdir()] == ["index.json"]
+    assert index_on_disk(tmp_path) == {}
+    assert other.remove(url) is None  # already removed on disk
+    assert other.has(url) is None
+
+
 def test_instances_sharing_a_task_keep_each_others_entries(tmp_path):
     crawler, manager = CacheFileSys(str(tmp_path)), CacheFileSys(str(tmp_path))
     crawler.put_web("https://example.com/1", "1", png_bytes())

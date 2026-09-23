@@ -254,13 +254,21 @@ class CacheFileSys:
         return self._put(url, "pdf", {".pdf": pdf_bytes})
 
     def remove(self, url: str) -> ContentType | None:
-        """Delete the cached page ``url`` refers to; returns its content type, or ``None`` if nothing was cached."""
+        """Delete the cached page ``url`` refers to; returns its content type, or ``None`` if nothing was cached.
+
+        The page is found as :meth:`lookup` finds it.  The content type
+        returned, and the files deleted, are those that ``index.json`` records
+        at the time of the call, because another process may have replaced the
+        page with one of the other type after this instance read the index.
+        If another process has removed the page, no files are deleted and
+        ``None`` is returned.
+        """
         with self._index_lock():
             key = self._find_key(url)
             if key is None:
                 return None
-            self._commit(self._read_index(), key, None)
-            content_type = self._types.get(key)
+            on_disk = self._commit(self._read_index(), key, None)
+            content_type = on_disk if on_disk in FILE_EXTENSIONS else None
             self._discard(key)
             if content_type is not None:
                 self._delete_files(key, content_type)
