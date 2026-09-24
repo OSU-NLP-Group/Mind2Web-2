@@ -72,9 +72,7 @@ def reference_lookup(stored: list[str], url: str):
     if is_raw(query_key):
         if query_key in stored:
             return query_key
-        raw_match = next((k for k in stored if is_raw(k) and _raw_form(k) == _raw_form(query_key)), None)
-        if raw_match is not None:
-            return raw_match
+        return next((k for k in stored if is_raw(k) and _raw_form(k) == _raw_form(query_key)), None)
     plain = [k for k in stored if not is_raw(k)]
     if url in plain:
         return url
@@ -105,7 +103,7 @@ def surface_forms(url: str) -> set[str]:
 
 def test_lookup_follows_its_rules_as_pages_are_added_replaced_and_removed(tmp_path):
     urls = [f"https://site{i % 7}.org/Page{i % 5}/{p}" for i in range(40)
-            for p in ("", "a%23b", "x y", "q?id=3", "Wiki_(x)")]
+            for p in ("", "a%23b", "x y", "q?id=3", "q?id=C", "q?id=C%23", "Wiki_(x)")]
     rng = random.Random(0)
     cache = CacheFileSys(str(tmp_path))
     stored: list[str] = []
