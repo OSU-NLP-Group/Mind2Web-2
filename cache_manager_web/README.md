@@ -68,7 +68,7 @@ For pages that need manual intervention (login walls, complex anti-bot):
 - **Reset** (`x`) — delete the URL's stored page (or its failure record); it is listed as `pending` until captured again. Asks first
 - **Edit** (`e`) — change the URL link. A stored page moves to the new URL, with its flag and review status; a failed or pending URL leaves the new URL `pending`
 - **Add** (`a`) — add a URL the crawl missed; it is listed as `pending` until you capture it or upload a file. A URL the task already lists, in any spelling, is refused
-- **Delete** (`d`) — remove a URL: its stored page, failure record, and flag. Asks first when a page or failure record is stored
+- **Delete** (`d`) — remove a URL: its stored page, failure record, flag, and review status, and every pending spelling of its page. Asks first when a page or failure record is stored
 - **Upload** — drag-and-drop `.pdf` or `.mhtml` files onto the preview panel. A file that is not a PDF, or an MHTML file without text, is refused
 
 ### What evaluation sees

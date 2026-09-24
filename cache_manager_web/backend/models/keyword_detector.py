@@ -150,8 +150,8 @@ class KeywordDetector:
         Every matching keyword (sorted, definite ones first) and pattern is
         reported.  The severity is "definite" for empty text, and for a page
         shorter than ``SHORT_PAGE_CHARS`` characters that matches a definite
-        keyword or pattern or that the crawler's ``detect_block()`` judges a
-        refusal; it is "possible" otherwise.  A longer page is never
+        keyword or pattern or whose text the crawler's ``detect_block()``
+        judges a refusal; it is "possible" otherwise.  A longer page is never
         "definite" by its wording, since articles may quote it; the crawler
         applies the same length threshold when it decides whether a page it
         loaded is a refusal.
