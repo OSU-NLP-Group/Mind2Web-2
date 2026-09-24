@@ -8,7 +8,7 @@ from .llm_client.base_client import LLMClient
 from .api_tools import ArxivTool, GoogleMapsTool, PDFParser
 from .llm_client import JudgeConfig, JudgeError, JudgeContentError, DEFAULT_JUDGE_MODEL
 from .utils import (
-    create_logger, cleanup_logger, create_sub_logger,
+    create_logger, cleanup_logger,
     BatchBrowserManager, Capture,
     load_eval_script,
     normalize_url_markdown, text_dedent, strip_extension,
@@ -43,7 +43,6 @@ __all__ = [
     # Utilities
     "create_logger",
     "cleanup_logger",
-    "create_sub_logger", 
     "BatchBrowserManager",
     "Capture",
     "load_eval_script",

@@ -38,17 +38,13 @@ Rule 2 comes first so that, among pages stored for URLs that differ only in lett
 - Reported as failures without retrying: pages that did not load (DNS or connection errors, a download instead of a page, no response within `navigation_timeout`), refusals (`detect_block`), and HTTP 429 and 5xx error pages. Both apply only to pages with less than 3000 characters of text (`SHORT_PAGE_CHARS`): such a page is a refusal if its status is 401/403/407/999 or it reads like a bot check or access-denied notice, and an error page if its status is 429 or 5xx. A rate limit (429) is therefore an ordinary failure, which the crawler retries at the end of its run, not a refusal. A longer page is captured whatever its status, since some sites send real content with such statuses. A page still loading after `navigation_timeout` is captured as far as it loaded; pages with other statuses, such as 404, are captured as they render.
 - Waits up to 15 s for a JavaScript bot check ("Just a moment...") to pass by itself, scrolls to trigger lazy loading, and captures through CDP (a screenshot of the whole page, and `outerHTML`).
 
-### logging_setup.py — Structured Logging
-`create_logger(name, log_folder)` creates loggers with multiple handlers:
-- **JSONL file**: Machine-readable structured logs
-- **Readable file**: Human-readable format with timestamps
-- **Console**: Colored structured output (optional)
-- **Shared error handler**: Cross-logger error display for concurrent evaluation
-
-Custom formatters:
-- `ColoredStructuredFormatter`: Colored console output with op_id/node context
-- `HumanReadableFormatter`: File logs with structured field display
-- `CompactJsonFormatter`: Compact JSONL for machine parsing
+### logging_setup.py — Log Files and Console Output
+Every log is written twice: a readable `.log` file (INFO and above) and a `.jsonl` file (DEBUG and above, one JSON object per record with every field passed in `extra`).
+- `create_logger(name, log_folder)` → `(logger, timestamp)`: an answer's log, `<log_folder>/<timestamp>_<name>.log` and `.jsonl`; the logger does not propagate. `cleanup_logger(logger)` closes its files.
+- `configure_run_logging(log_dir, name, console=True)` / `close_run_logging()`: a command's run log, `<log_dir>/<timestamp>_<name>.log` and `.jsonl`, fed by the `mind2web2` package logger, plus the console (stderr, through `tqdm.write` so that it prints above progress bars). A record with `extra={"console": False}` goes to the files only. `close_run_logging()` restores the package logger's level and propagation.
+- `logging_to(logger)`: inside the block (and in tasks and threads started in it), records of the package's module loggers go to `logger`, the answer's log, instead of the run log.
+- `ReadableFormatter`: `HH:MM:SS.mmm LEVEL message`, then the detail fields `claim`, `reasoning`, `result`, `error` (cut after `MAX_DETAIL_CHARS`) and the traceback, indented below the line. Other `extra` fields appear only in the `.jsonl` file, so a message must say what happened on its own.
+- `ConsoleFormatter`: the message alone, with a `warning:` or `error:` prefix, colored only on a terminal without `NO_COLOR`.
 
 ### url_tools.py — URL Normalization & Extraction
 - `normalize_url_keep_case(url)`: A normalized form that keeps letter case (UTM parameters and fragment removed, percent-decoded, trailing slash removed, `https`, no `www.`); the crawler merges the spellings of one page under it, since paths that differ in letter case can be different pages (except a spelling whose storage key would change again, such as `?q=C%23`, which it merges by the cache's raw-key form)

@@ -4,7 +4,7 @@ For every evaluated answer, evaluation (``mind2web2 evaluate``) writes::
 
     <results_root>/<agent_name>/<task_id>/<answer_base>/
     ├── <answer_name>                               # copy of the evaluated answer
-    ├── logs/
+    ├── logs/                                       # <timestamp>_<answer_name>.log and .jsonl per evaluation
     └── results/
         ├── <timestamp>_<answer_name>.json          # output of Evaluator.get_summary()
         └── superseded/                             # results of earlier evaluations

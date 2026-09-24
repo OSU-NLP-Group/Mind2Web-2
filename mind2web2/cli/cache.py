@@ -29,13 +29,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 import sys
 
 from . import _common
 from ..crawl import DEFAULT_URL_MODELS, OUTCOMES, LLMUrlExtractor, TaskCrawl, cache_answers
 from ..llm_client import LLMClient
 from ..submission import list_answer_files
-from ..utils.logging_setup import create_logger
+from ..utils.logging_setup import close_run_logging, configure_run_logging
 from ..utils.page_info_retrieval import BatchBrowserManager
 
 
@@ -101,13 +102,16 @@ def run(args: argparse.Namespace) -> int:
         models = [m.strip() for m in args.url_models.split(",") if m.strip()]
         extractor = LLMUrlExtractor(client, models)
 
-    logger, _ = create_logger("mind2web2_cache", str(args.cache_dir / "logs"), enable_console=False)
-    print(f"Caching {len(task_ids)} tasks of {args.agent!r} into {args.cache_dir / args.agent} "
-          f"(URL extraction: {'regex' if extractor is None else 'regex + ' + ', '.join(extractor.models)}; "
-          f"log: {args.cache_dir / 'logs'})")
-    if len(task_ids) < len(tasks):
-        print(f"Skipping {len(tasks) - len(task_ids)} tasks that have no answer_<k>.md files.")
-    reports = asyncio.run(_crawl(args, task_ids, extractor, logger))
+    run_log = configure_run_logging(args.cache_dir / "logs", "cache", console=False)
+    try:
+        print(f"Caching {len(task_ids)} tasks of {args.agent!r} into {args.cache_dir / args.agent} "
+              f"(URL extraction: {'regex' if extractor is None else 'regex + ' + ', '.join(extractor.models)}; "
+              f"log: {run_log}.log)")
+        if len(task_ids) < len(tasks):
+            print(f"Skipping {len(tasks) - len(task_ids)} tasks that have no answer_<k>.md files.")
+        reports = asyncio.run(_crawl(args, task_ids, extractor, logging.getLogger("mind2web2.crawl")))
+    finally:
+        close_run_logging()
 
     print(_format_reports(reports))
     failed = sum(r.outcomes["failed"] + r.outcomes["blocked"] for r in reports)

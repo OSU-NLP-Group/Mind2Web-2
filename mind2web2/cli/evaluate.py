@@ -48,7 +48,10 @@ from ..eval_toolkit import shared_browser
 from ..llm_client import DEFAULT_JUDGE_MODEL, DEFAULT_JUDGE_REASONING_EFFORT, JudgeConfig, LLMClient
 from ..metrics import collect_records, compute_metrics, format_report, save_metrics
 from ..submission import TaskInfo, list_answer_files
+from ..utils.logging_setup import close_run_logging, configure_run_logging
 from ..utils.page_info_retrieval import BatchBrowserManager
+
+log = logging.getLogger(__name__)
 
 
 def register(subparsers) -> None:
@@ -149,36 +152,43 @@ def run(args: argparse.Namespace) -> int:
         print(f"Cannot create the {args.llm_provider} judge client: {exc}", file=sys.stderr)
         return 2
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s",
-                        datefmt="%Y-%m-%d %H:%M:%S")
-    logging.getLogger("httpx").setLevel(logging.WARNING)  # one INFO line per judge request otherwise
-    print(f"Evaluating {len(scripts)} tasks of {args.agent!r} with the eval scripts in {scripts_dir} "
-          f"(judge: {_describe_judge(judge)}); results go to {args.results_dir / args.agent}")
-    if without_script:
-        print(f"Skipping {without_script} tasks that have answers but no eval script in {scripts_dir}; "
-              f"pass --task-list or --task to evaluate a given set of tasks.")
-    if unanswered:
-        print(f"Skipping {unanswered} tasks that have no answer_<k>.md files.")
-    results = asyncio.run(_evaluate(args, client, scripts)) if scripts else {}
+    run_log = configure_run_logging(args.results_dir / args.agent / "logs", "evaluate")
+    try:
+        start = (f"Evaluating {len(scripts)} tasks of {args.agent!r} with the eval scripts in {scripts_dir} "
+                 f"(judge: {_describe_judge(judge)}); results go to {args.results_dir / args.agent}")
+        print(start)
+        log.info(start, extra={"console": False})
+        if without_script:
+            print(f"Skipping {without_script} tasks that have answers but no eval script in {scripts_dir}; "
+                  f"pass --task-list or --task to evaluate a given set of tasks.")
+        if unanswered:
+            print(f"Skipping {unanswered} tasks that have no answer_<k>.md files.")
+        results = asyncio.run(_evaluate(args, client, scripts)) if scripts else {}
 
-    unscored = 0
-    for task_id in answered:
-        num_answers = len(list_answer_files(agent_dir / task_id))
-        if task_id in missing:
-            print(f"  {task_id}: no eval script {scripts_dir / (task_id + '.py')}")
-            unscored += num_answers
-            continue
-        scores = [float(r["final_score"]) for r in results[task_id]]
-        unscored += num_answers - len(scores)
-        mean = f", mean score {sum(scores) / len(scores):.3f}" if scores else ""
-        print(f"  {task_id}: {len(scores)}/{num_answers} answers scored{mean}")
-    if unscored:
-        print(f"{unscored} answers have no result; their logs are under {args.results_dir / args.agent}. "
-              f"Running the command again evaluates only them.")
+        unscored = 0
+        for task_id in answered:
+            num_answers = len(list_answer_files(agent_dir / task_id))
+            if task_id in missing:
+                print(f"  {task_id}: no eval script {scripts_dir / (task_id + '.py')}")
+                unscored += num_answers
+                continue
+            scores = [float(r["final_score"]) for r in results[task_id]]
+            unscored += num_answers - len(scores)
+            mean = f", mean score {sum(scores) / len(scores):.3f}" if scores else ""
+            print(f"  {task_id}: {len(scores)}/{num_answers} answers scored{mean}")
+        if unscored:
+            end = (f"{unscored} answers have no result; the reasons are in {run_log}.log, and each answer's "
+                   f"log in the logs/ folder of its results. Running the command again evaluates only them.")
+        else:
+            end = f"Every answer has a result. The run's log: {run_log}.log"
+        print(end)
+        log.info(end, extra={"console": False})
 
-    if scripts and not args.tasks:
-        _report_metrics(args, tasks)
-    return 1 if unscored else 0
+        if scripts and not args.tasks:
+            _report_metrics(args, tasks)
+        return 1 if unscored else 0
+    finally:
+        close_run_logging()
 
 
 async def _evaluate(args: argparse.Namespace, client: LLMClient, scripts: dict[str, Path]):

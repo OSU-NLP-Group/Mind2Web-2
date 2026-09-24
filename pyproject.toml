@@ -23,7 +23,6 @@ dependencies = [
     "arxiv",
     "googlemaps",
     "httpx",
-    "python-json-logger",
     "python-dateutil",  # imported by several eval scripts
     "PyMuPDF>=1.24.3",
     "fastapi",

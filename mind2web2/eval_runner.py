@@ -18,7 +18,10 @@ from .metrics import is_success
 from .submission import answer_run, list_answer_files, metadata_path
 from .utils.cache_filesys import CacheFileSys
 from .utils.load_eval_script import load_eval_script
-from .utils.logging_setup import create_logger, cleanup_logger
+from .utils.logging_setup import cleanup_logger, create_logger, logging_to
+
+#: The run's log: each answer's outcome and each task's problems (see :mod:`mind2web2.utils.logging_setup`).
+log = logging.getLogger(__name__)
 
 
 class DualSemaphore:
@@ -109,113 +112,69 @@ async def _eval_one_answer(
     the judge, :data:`mind2web2.results.SCORING_VERSION`
     (``scoring_version``), and the value of
     :data:`mind2web2.results.EVAL_DATE_VARIABLE` (``eval_date``).
+
+    Everything the evaluation logs, including the package's own logging during
+    it, goes to the answer's log, ``logs/<timestamp>_<answer>.log`` and
+    ``.jsonl`` in the answer's results folder; the result file carries the same
+    timestamp.  Returns the result, or the exception that left the answer
+    unscored, whose traceback is in the answer's log.
     """
 
     answer_name = answer_path.name
-    answer_base = results.answer_base(answer_name)
-
-    # ---------- Create isolated logging ----------
-    log_dir = output_dir / agent_name / task_id / answer_base / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-
-    # Use a more specific logger name to ensure uniqueness
-    log_tag = f"{task_id}_{agent_name}_{answer_name}"
-
-    # Important: Disable console output in concurrent environments to avoid log confusion
-    logger, timestamp = create_logger(
-        log_tag,
-        str(log_dir),
-        enable_console=False  # Disable console output during concurrency, only output to file
-    )
-
-    # Add structured log for task start
-    logger.info(
-        f"🚀 Starting evaluation for {agent_name}/{answer_name}",
-        extra={
-            "task_id": task_id,
-            "agent_name": agent_name,
-            "answer_name": answer_name,
-            "answer_base": answer_base,
-            "operation": "eval_start"
-        }
-    )
-
-    # ---------- Read answer ----------
-    try:
-        answer_bytes = answer_path.read_bytes()
-        answer_text = answer_bytes.decode("utf-8")
-        logger.debug(
-            f"Answer loaded: {len(answer_text)} characters",
-            extra={"answer_length": len(answer_text)}
-        )
-    except Exception as e:
-        logger.error(f"Failed to read answer file: {e}")
-        return e
+    log_dir = output_dir / agent_name / task_id / results.answer_base(answer_name) / "logs"
+    logger, timestamp = create_logger(answer_name, str(log_dir), enable_console=False)
 
     result = None
     try:
-        # Create a dual semaphore wrapper for the eval function
-        dual_semaphore = DualSemaphore(webpage_semaphore, llm_semaphore)
+        with logging_to(logger):  # the package's own logging during this evaluation goes to the answer's log
+            answer_bytes = answer_path.read_bytes()
+            answer_text = answer_bytes.decode("utf-8")
+            model = _judge_model(client)
+            logger.info(f"Evaluating {agent_name}/{task_id}/{answer_name} ({len(answer_text):,} characters) "
+                        f"with the judge {model}",
+                        extra={"task_id": task_id, "agent_name": agent_name, "answer_name": answer_name})
 
-        logger.info("🔄 Starting evaluation function")
+            dual_semaphore = DualSemaphore(webpage_semaphore, llm_semaphore)
+            result: Dict = await eval_fn(
+                client=client,
+                answer=answer_text,
+                agent_name=agent_name,
+                answer_name=answer_name,
+                cache=cache,
+                semaphore=dual_semaphore,
+                logger=logger,
+                model=model,
+            )
 
-        result: Dict = await eval_fn(
-            client=client,
-            answer=answer_text,
-            agent_name=agent_name,
-            answer_name=answer_name,
-            cache=cache,
-            semaphore=dual_semaphore,
-            logger=logger,
-            model=_judge_model(client),
-        )
+            # A judge request that failed for good leaves the score undetermined, even if
+            # the eval script caught the error and carried on.
+            usage = result.get("judge_usage") or {}
+            if usage.get("failed_requests", 0):
+                raise JudgeError(f"{usage['failed_requests']} judge request(s) failed; the answer is not scored")
+            if usage.get("harness_failures", 0):
+                raise HarnessError(f"{usage['harness_failures']} page load(s) failed because of the evaluation "
+                                   f"environment; the answer is not scored")
+            result["answer_sha256"] = hashlib.sha256(answer_bytes).hexdigest()  # what the result scored
+            result["eval_script_sha256"] = script_sha256  # the script that scored it
+            result["evaluator_config"] = EvaluatorConfig().as_dict()  # the defaults the script ran with
+            result["scoring_version"] = results.SCORING_VERSION  # the framework logic that scored it
+            result["eval_date"] = results.eval_date()  # the date that date-dependent scripts took as today
 
-        # A judge request that failed for good leaves the score undetermined, even if
-        # the eval script caught the error and carried on.
-        usage = result.get("judge_usage") or {}
-        if usage.get("failed_requests", 0):
-            raise JudgeError(f"{usage['failed_requests']} judge request(s) failed; the answer is not scored")
-        if usage.get("harness_failures", 0):
-            raise HarnessError(f"{usage['harness_failures']} page load(s) failed because of the evaluation "
-                               f"environment; the answer is not scored")
-        result["answer_sha256"] = hashlib.sha256(answer_bytes).hexdigest()  # what the result scored
-        result["eval_script_sha256"] = script_sha256  # the script that scored it
-        result["evaluator_config"] = EvaluatorConfig().as_dict()  # the defaults the script ran with
-        result["scoring_version"] = results.SCORING_VERSION  # the framework logic that scored it
-        result["eval_date"] = results.eval_date()  # the date that date-dependent scripts took as today
-
-        logger.info(
-            f"✅ Evaluation completed with score: {result.get('final_score', 'unknown')}",
-            extra={
-                "final_score": result.get("final_score"),
-                "operation": "eval_complete"
-            }
-        )
-
+            rejected = len(usage.get("rejections", []))
+            logger.info(f"Final score {float(result['final_score']):.3f}, from {usage.get('requests', 0)} judge "
+                        f"requests" + (f" and {rejected} rejected ones" if rejected else ""),
+                        extra={"final_score": result.get("final_score")})
     except Exception as exc:
-        logger.exception(
-            "❌ Evaluation raised an exception",
-            extra={
-                "error_type": type(exc).__name__,
-                "operation": "eval_error"
-            }
-        )
+        logger.error(f"Not scored: {type(exc).__name__}: {exc}", exc_info=exc)
         return exc
     finally:
-        # Clean up logger resources
-        try:
-            cleanup_logger(logger)
-        except Exception:
-            pass  # Cleanup failure should not affect main flow
+        cleanup_logger(logger)
 
-    # ---------- Save result ----------
     try:
-        if result is not None:
-            _save_result_json(result, output_dir / agent_name / task_id, timestamp)
-    except Exception as e:
-        logging.getLogger(__name__).error(f"Failed to save result for {agent_name}/{answer_name}: {e}")
-        return e
-
+        _save_result_json(result, output_dir / agent_name / task_id, timestamp)
+    except Exception as exc:
+        log.error(f"{task_id}/{answer_name}: the result could not be saved: {exc}", exc_info=exc)
+        return exc
     return result
 
 
@@ -292,6 +251,7 @@ async def evaluate_task(
         max_concurrent_answers: int = 3,
         webpage_semaphore: Optional[asyncio.Semaphore] = None,
         llm_semaphore: Optional[asyncio.Semaphore] = None,
+        progress: Optional[tqdm] = None,
 ) -> List[Dict]:
     """Evaluate all answers for a specific task and agent.
 
@@ -330,11 +290,19 @@ async def evaluate_task(
         Semaphore for controlling concurrent webpage retrieval operations
     llm_semaphore : Optional[asyncio.Semaphore], default None
         Semaphore for controlling concurrent LLM API requests
+    progress : Optional[tqdm], default None
+        Progress bar advanced once per answer; without it, the task shows
+        its own bar
 
     Returns
     -------
     List[Dict]
         List of evaluation results for all answers
+
+    Each answer's outcome is logged to the ``mind2web2.eval_runner`` logger:
+    at INFO when the answer was evaluated (its score) or could not be scored
+    (at ERROR, with the reason and where its log is), and at DEBUG when its
+    earlier result was reused.
 
     Live captures use the browser shared through
     :func:`mind2web2.eval_toolkit.shared_browser`, or else one browser for
@@ -353,6 +321,7 @@ async def evaluate_task(
             max_concurrent_answers=max_concurrent_answers,
             webpage_semaphore=webpage_semaphore,
             llm_semaphore=llm_semaphore,
+            progress=progress,
         )
 
 
@@ -368,114 +337,48 @@ async def _evaluate_task(
         max_concurrent_answers: int = 3,
         webpage_semaphore: Optional[asyncio.Semaphore] = None,
         llm_semaphore: Optional[asyncio.Semaphore] = None,
+        progress: Optional[tqdm] = None,
 ) -> List[Dict]:
     """The body of :func:`evaluate_task`, which runs it inside a shared browser."""
-
-    # ------------------------------------------------------------------
-    # 0. Setup paths & ensure dirs exist
-    # ------------------------------------------------------------------
     answer_root = Path(answer_dir) / agent_name / task_id
     output_root = Path(output_dir)
     cache_root = Path(cache_dir) / agent_name
-
     output_root.mkdir(parents=True, exist_ok=True)
     cache_root.mkdir(parents=True, exist_ok=True)
 
-    # Check if answer directory exists
     if not answer_root.exists():
-        logging.getLogger(__name__).warning(f"No answers found for {agent_name}/{task_id} at {answer_root}")
+        log.warning(f"{task_id}: no answers at {answer_root}")
         return []
 
-    # ------------------------------------------------------------------
-    # 1. Create main task logger (for overall progress tracking)
-    # ------------------------------------------------------------------
-    main_log_dir = output_root / agent_name / task_id / "main_logs"
-    main_log_dir.mkdir(parents=True, exist_ok=True)
-    main_logger, main_timestamp = create_logger(
-        f"main_{task_id}_{agent_name}",
-        str(main_log_dir),
-        enable_console=True  # Main logger can output to console
-    )
-
     try:
-        main_logger.info(
-            f"🎯 Starting task evaluation: {task_id} for agent: {agent_name}",
-            extra={
-                "task_id": task_id,
-                "agent_name": agent_name,
-                "max_concurrent_answers": max_concurrent_answers,
-                "operation": "task_start"
-            }
-        )
-
-        # ------------------------------------------------------------------
-        # 2. Load eval script & cache
-        # ------------------------------------------------------------------
-        main_logger.info("📜 Loading evaluation script")
         eval_fn = load_eval_script(script_path)
         script_sha256 = hashlib.sha256(Path(script_path).read_bytes()).hexdigest()
+        cache = CacheFileSys(task_dir=str(cache_root / task_id))
 
-        cache_path = cache_root / f"{task_id}"
-        cache = CacheFileSys(task_dir=str(cache_path))
-        main_logger.info(f"💾 Cache loaded from {cache_path}")
-
-        # ------------------------------------------------------------------
-        # 3. Collect answer files
-        # ------------------------------------------------------------------
         answer_paths = [a.path for a in list_answer_files(answer_root)]
         ignored = sorted(p.name for p in answer_root.iterdir()
                          if p.is_file() and p.suffix == ".md" and answer_run(p.name) is None)
         if ignored:
-            main_logger.warning(f"Ignoring files not named answer_<k>.md: {ignored}")
-        main_logger.info(
-            f"📁 Found {len(answer_paths)} answer files to evaluate",
-            extra={
-                "answer_count": len(answer_paths),
-                "answer_paths": [p.name for p in answer_paths]
-            }
-        )
-        main_logger.info(f"-->> Answer Root: {answer_root}")
-        main_logger.info(f"-->> Answers to Eval: {[p.name for p in answer_paths]}")
-
+            log.warning(f"{task_id}: ignoring files not named answer_<k>.md: {ignored}")
         if not answer_paths:
-            main_logger.warning(f"No answer files found in {answer_root}")
+            log.warning(f"{task_id}: no answer_<k>.md files in {answer_root}")
             return []
+        log.debug(f"{task_id}: evaluating {len(answer_paths)} answers with {script_path}",
+                  extra={"task_id": task_id, "answers": [p.name for p in answer_paths]})
 
-        ok_results: List[Dict] = []
-
-        # ------------------------------------------------------------------
-        # 4. Concurrency control
-        # ------------------------------------------------------------------
-        # Use an outer semaphore to control concurrent answer evaluations
         outer_semaphore = asyncio.Semaphore(max_concurrent_answers)
+        webpage_semaphore = webpage_semaphore or asyncio.Semaphore(5)
+        llm_semaphore = llm_semaphore or asyncio.Semaphore(30)
 
-        # Create default semaphores if not provided
-        if webpage_semaphore is None:
-            webpage_semaphore = asyncio.Semaphore(5)  # Default webpage limit
-        if llm_semaphore is None:
-            llm_semaphore = asyncio.Semaphore(30)  # Default LLM limit
-
-        # ------------------------------------------------------------------
-        # 5. Define per‑answer coroutine
-        # ------------------------------------------------------------------
         async def _process_answer(ans_path: Path):
-            async with outer_semaphore:  # Control concurrent answer evaluations
+            async with outer_semaphore:
                 answer_name = ans_path.name
-                answer_base = results.answer_base(answer_name)
+                name = f"{task_id}/{answer_name}"
+                context = {"task_id": task_id, "agent_name": agent_name, "answer_name": answer_name}
 
-                main_logger.info(
-                    f"👉 Processing {agent_name}/{answer_name}",
-                    extra={
-                        "agent_name": agent_name,
-                        "answer_name": answer_name,
-                        "operation": "answer_start"
-                    }
-                )
-                main_logger.info(f"👉 Starting {agent_name} {answer_name}")
-
-                # 5‑A. The answer folder keeps a copy of the answer (and its metadata) next to
+                # The answer folder keeps a copy of the answer (and its metadata) next to
                 # its results, so that metrics can be computed from the results folder alone.
-                answer_folder = output_root / agent_name / task_id / answer_base
+                answer_folder = output_root / agent_name / task_id / results.answer_base(answer_name)
                 answer_folder.mkdir(parents=True, exist_ok=True)
 
                 def copy_answer() -> None:
@@ -485,28 +388,21 @@ async def _evaluate_task(
                         else:  # a deleted metadata file must not live on in its copy
                             (answer_folder / src.name).unlink(missing_ok=True)
 
-                # 5‑B. Reuse the latest result if it scored this answer with this judge, script, and settings
+                # Reuse the latest result if it scored this answer with this judge, script, and settings
                 result_dir = answer_folder / "results"
                 latest = results.latest_result_file(result_dir)
                 if latest and not overwrite:
                     result, reason = _reusable_result(latest, ans_path, client, script_sha256)
                     if result is not None:
                         copy_answer()
-                        main_logger.info(
-                            f"⚠️ Using existing result for {agent_name}/{answer_name}",
-                            extra={
-                                "agent_name": agent_name,
-                                "answer_name": answer_name,
-                                "existing_result": str(latest),
-                                "final_score": result.get("final_score"),
-                                "operation": "reuse_result"
-                            }
-                        )
+                        log.debug(f"{name}: {float(result['final_score']):.3f} (earlier result reused)",
+                                  extra={**context, "final_score": result.get("final_score"),
+                                         "result_file": str(latest)})
                         return result
-                    main_logger.info(f"🔁 Evaluating {agent_name}/{answer_name} again: {reason}")
+                    log.debug(f"{name}: evaluating again, since {reason}", extra=context)
 
-                # 5‑C. Real evaluation.  Earlier results move aside first, so that a failed
-                # evaluation leaves the answer without a result instead of an outdated one.
+                # Earlier results move aside first, so that a failed evaluation leaves
+                # the answer without a result instead of an outdated one.
                 results.supersede_results(result_dir)
                 copy_answer()
                 try:
@@ -522,113 +418,42 @@ async def _evaluate_task(
                         output_root,
                         script_sha256,
                     )
-
-                    if isinstance(res, dict):
-                        main_logger.info(
-                            f"✅ Successfully evaluated {agent_name}/{answer_name}",
-                            extra={
-                                "agent_name": agent_name,
-                                "answer_name": answer_name,
-                                "final_score": res.get('final_score'),
-                                "operation": "answer_complete"
-                            }
-                        )
-                    else:
-                        main_logger.error(
-                            f"❌ Evaluation failed for {agent_name}/{answer_name}: {res}",
-                            extra={
-                                "agent_name": agent_name,
-                                "answer_name": answer_name,
-                                "error": str(res),
-                                "operation": "answer_error"
-                            }
-                        )
-
-                    return res
                 except Exception as exc:
-                    main_logger.exception(
-                        f"💥 Unexpected error evaluating {agent_name}/{answer_name}",
-                        extra={
-                            "agent_name": agent_name,
-                            "answer_name": answer_name,
-                            "error_type": type(exc).__name__,
-                            "operation": "answer_exception"
-                        }
-                    )
-                    return exc
+                    res = exc
+                    log.error(f"{name}: not scored: evaluating it raised {type(exc).__name__}: {exc}",
+                              exc_info=exc, extra=context)
+                    return res
+                if isinstance(res, dict):
+                    log.info(f"{name}: {float(res['final_score']):.3f}",
+                             extra={**context, "final_score": res.get("final_score")})
+                else:
+                    reason = (str(res).splitlines() or [""])[0][:300]
+                    log.error(f"{name}: not scored ({type(res).__name__}: {reason}); "
+                              f"see its log in {answer_folder / 'logs'}", extra={**context, "reason": str(res)})
+                return res
 
-        # ------------------------------------------------------------------
-        # 6. Kick off evaluations
-        # ------------------------------------------------------------------
-        main_logger.info(f"🚀 Starting concurrent evaluation of {len(answer_paths)} answers")
         tasks = [asyncio.create_task(_process_answer(p)) for p in answer_paths]
+        bar = progress if progress is not None else tqdm(total=len(tasks), desc=task_id, unit="answer")
+        ok_results: List[Dict] = []
+        try:
+            for coro in asyncio.as_completed(tasks):
+                res = await coro
+                if isinstance(res, dict):
+                    ok_results.append(res)
+                bar.update(1)
+        finally:
+            if progress is None:
+                bar.close()
 
-        completed_count = 0
-        for coro in tqdm(asyncio.as_completed(tasks), total=len(tasks), desc=f"[{task_id}/{agent_name}] Evaluating"):
-            res = await coro
-            completed_count += 1
-
-            if isinstance(res, dict):
-                ok_results.append(res)
-                main_logger.debug(
-                    f"✅ [{completed_count}/{len(tasks)}] Completed evaluation for {res.get('agent_name')}/{res.get('answer_name')}",
-                    extra={
-                        "completed_count": completed_count,
-                        "total_count": len(tasks),
-                        "agent_name": res.get('agent_name'),
-                        "answer_name": res.get('answer_name'),
-                        "final_score": res.get('final_score'),
-                        "operation": "progress_update"
-                    }
-                )
-            else:
-                main_logger.error(
-                    f"❌ [{completed_count}/{len(tasks)}] Evaluation failed with error: {res}",
-                    extra={
-                        "completed_count": completed_count,
-                        "total_count": len(tasks),
-                        "error": str(res),
-                        "operation": "progress_error"
-                    }
-                )
-
-        # ------------------------------------------------------------------
-        # 7. Save summary for this agent/task combination
-        # ------------------------------------------------------------------
         _save_agent_task_summary(output_root / agent_name / task_id, ok_results)
-        main_logger.info("📊 Summary saved successfully")
-
-        main_logger.info(
-            f"🎉 Task evaluation completed: {len(ok_results)}/{len(answer_paths)} successful results",
-            extra={
-                "task_id": task_id,
-                "agent_name": agent_name,
-                "successful_count": len(ok_results),
-                "total_count": len(answer_paths),
-                "success_rate": len(ok_results) / len(answer_paths) if answer_paths else 0,
-                "operation": "task_complete"
-            }
-        )
-
+        log.debug(f"{task_id}: {len(ok_results)} of {len(answer_paths)} answers scored",
+                  extra={"task_id": task_id, "scored": len(ok_results), "answers": len(answer_paths)})
         return ok_results
 
     except Exception as e:
-        main_logger.exception(
-            f"💥 Task evaluation failed: {e}",
-            extra={
-                "task_id": task_id,
-                "agent_name": agent_name,
-                "error_type": type(e).__name__,
-                "operation": "task_error"
-            }
-        )
+        log.error(f"{task_id}: evaluating the task failed: {type(e).__name__}: {e}", exc_info=e,
+                  extra={"task_id": task_id})
         raise
-    finally:
-        # Clean up main logger
-        try:
-            cleanup_logger(main_logger)
-        except Exception:
-            pass
 
 
 async def evaluate_tasks(
@@ -651,33 +476,47 @@ async def evaluate_tasks(
     by all tasks.  Returns, in the order of ``scripts``, each task's results as
     :func:`evaluate_task` returns them; a task whose evaluation raised is logged
     and maps to an empty list.  All tasks share one browser for live captures,
-    as :func:`evaluate_task` describes.
+    as :func:`evaluate_task` describes, and one progress bar over their answers.
     """
     task_semaphore = asyncio.Semaphore(max_concurrent_tasks)
     webpage_semaphore = webpage_semaphore or asyncio.Semaphore(5)
     llm_semaphore = llm_semaphore or asyncio.Semaphore(30)
 
-    async def evaluate_one(task_id: str):
+    counts = {task_id: len(list_answer_files(Path(answer_dir) / agent_name / task_id)) for task_id in scripts}
+
+    async def evaluate_one(task_id: str, bar: tqdm):
         async with task_semaphore:
+            task_bar = _CountingProgress(bar)
             try:
                 return task_id, await evaluate_task(
                     client=client, task_id=task_id, agent_name=agent_name, answer_dir=answer_dir,
                     cache_dir=cache_dir, output_dir=output_dir, script_path=scripts[task_id],
                     overwrite=overwrite, max_concurrent_answers=max_concurrent_answers,
-                    webpage_semaphore=webpage_semaphore, llm_semaphore=llm_semaphore,
+                    webpage_semaphore=webpage_semaphore, llm_semaphore=llm_semaphore, progress=task_bar,
                 )
             except Exception:
-                logging.getLogger(__name__).exception(f"Evaluation of task {task_id} failed")
-                return task_id, []
+                bar.update(max(counts[task_id] - task_bar.n, 0))  # the answers it did not get to
+                return task_id, []  # evaluate_task logged why
 
     results: Dict[str, List[Dict]] = {}
     async with browser_for_run():
-        with tqdm(total=len(scripts), desc="Evaluating tasks", unit="task") as bar:
-            for coro in asyncio.as_completed([evaluate_one(task_id) for task_id in scripts]):
+        with tqdm(total=sum(counts.values()), desc="Evaluating", unit="answer") as bar:
+            for coro in asyncio.as_completed([evaluate_one(task_id, bar) for task_id in scripts]):
                 task_id, task_results = await coro
                 results[task_id] = task_results
-                bar.update(1)
     return {task_id: results[task_id] for task_id in scripts}
+
+
+class _CountingProgress:
+    """Advances a shared progress bar and counts the steps one task made on it."""
+
+    def __init__(self, bar: tqdm):
+        self.bar = bar
+        self.n = 0
+
+    def update(self, n: int = 1) -> None:
+        self.n += n
+        self.bar.update(n)
 
 
 # --------------------------------------------------------------------------- #

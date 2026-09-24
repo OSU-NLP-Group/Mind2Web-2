@@ -283,17 +283,21 @@ class BaseEvaluator:
         self.usage.record(tokens)
         return result
 
-    def _record_rejection(self, op_id: str, url: Optional[str], error: JudgeContentError) -> None:
-        """Log and record a request that the judge rejected because of its content."""
-        self.logger.warning(f"[{op_id}] The judge rejected the request{f' for {url}' if url else ''}; "
-                            f"the check counts as failed: {error}")
-        self.usage.record_rejection(op_id, url, error)
+    def _record_rejection(self, context: dict, error: JudgeContentError) -> None:
+        """Log and record a request that the judge rejected because of its content.
+
+        ``context`` describes the extraction or check that sent it; the rejection
+        is recorded under its ``op_id`` and ``url``.
+        """
+        self.logger.warning(f"The judge rejected a request of {_subject(context)}; it counts as failed: {error}",
+                            extra={"op_id": context["op_id"]})
+        self.usage.record_rejection(context["op_id"], context.get("url"), error)
 
     async def _with_shorter_text_on_overflow(
             self,
             web_text: str,
             attempt: Callable[[str], Awaitable],
-            op_id: str,
+            context: dict,
     ):
         """``await attempt(web_text)``, cutting the page text in half and trying again while the request is too long.
 
@@ -301,7 +305,7 @@ class BaseEvaluator:
         to half the smaller of its token count and its token budget, up to
         ``config.max_text_shrinks`` times, so each attempt sends at most half
         the page text of the one before; the last :class:`ContextLengthError`
-        propagates.
+        propagates.  ``context`` describes the extraction or check, for the log.
         """
         budget = self.config.max_text_tokens
         for shrink in range(self.config.max_text_shrinks + 1):
@@ -312,8 +316,9 @@ class BaseEvaluator:
                     raise
                 try:
                     budget = min(budget, await asyncio.to_thread(count_tokens, web_text)) // 2
-                    self.logger.warning(f"[{op_id}] The request is too long for the judge; "
-                                        f"sending it again with the page text cut to {budget} tokens")
+                    self.logger.warning(f"A request of {_subject(context)} is too long for the judge; "
+                                        f"sending it again with the page text cut to {budget} tokens",
+                                        extra={"op_id": context["op_id"]})
                     web_text = await asyncio.to_thread(truncate_to_tokens, web_text, budget)
                 except HarnessError as exc:
                     self._count_harness_failure("Shortening a page text", exc)
@@ -376,7 +381,7 @@ class BaseEvaluator:
             if await is_pdf(url):
                 pdf_bytes = await self.pdf_parser.fetch(url)
                 if pdf_bytes is None:
-                    self.logger.info(f"{url} did not return a PDF; loading it in the browser")
+                    self.logger.debug(f"{url} did not return a PDF; loading it in the browser")
         if pdf_bytes is not None:
             await self._cache(self.cache.put_pdf, url, pdf_bytes)
             return await self.pdf_parser.extract(pdf_bytes)
@@ -443,7 +448,7 @@ class BaseEvaluator:
     async def _load_page(self, url: str, cancellation_event: Optional[asyncio.Event]):
         """The body of :meth:`get_page_info`, without the accounting of :class:`HarnessError`."""
         url = normalize_url_markdown(url)
-        self.logger.info(f"🌍Retrieving page info for {url}")
+        self.logger.debug(f"Loading {url}")
         if cancellation_event and cancellation_event.is_set():
             self.logger.debug(f"Page info retrieval cancelled for {url}")
             return None, None
@@ -463,11 +468,11 @@ class BaseEvaluator:
             self.logger.warning(f"{url} is unavailable: its capture failed ({failure['reason']})")
             return None, None
         else:
-            self.logger.warning(f"No cache for {url}, falling back to live capture")
+            self.logger.warning(f"{url} is not in the cache; capturing it live")
             screenshot_b64, page_text = await self._fetch_live(url)
 
         if page_text is None:
-            self.logger.warning(f"Failed to retrieve any content for {url}")
+            self.logger.warning(f"{url} is unavailable: no content could be retrieved")
             return None, None
 
         images = screenshot_b64 if isinstance(screenshot_b64, list) else [screenshot_b64]
@@ -505,6 +510,23 @@ class BaseEvaluator:
 
         # Re-encoding large screenshots and counting tokens in the event loop would stall concurrent evaluations
         return await asyncio.to_thread(_prepare)
+
+
+def _subject(context: dict) -> str:
+    """How log messages name the extraction or check that ``context`` describes, starting in lower case.
+
+    An extraction is "the extraction of <template> from <url or the answer>";
+    a check is "check <node id>" ("a check without a node" when it has none),
+    followed by "against <url>" when it verifies the claim against one page.
+    """
+    if "template" in context:
+        return f"the extraction of {context['template']} from {context.get('url') or 'the answer'}"
+    name = f"check {context['node_id']}" if context.get("node_id") else "a check without a node"
+    return f"{name} against {context['url']}" if context.get("url") else name
+
+
+def _capitalized(text: str) -> str:
+    return text[:1].upper() + text[1:]
 
 
 class Extractor(BaseEvaluator):
@@ -624,51 +646,32 @@ class Extractor(BaseEvaluator):
             message_content: Union[str, List[dict]],
             extract_context: dict
     ) -> BaseModel:
-        """Execute extraction and log results"""
-        op_id = extract_context["op_id"]
+        """Run the extraction and log its result, at INFO with the extracted fields as ``result``.
 
+        A rejected request or an error returns an empty extraction; a failed
+        judge request (:class:`JudgeError`) and :class:`ContextLengthError` propagate.
+        """
+        subject = _subject(extract_context)
         try:
-            # Call LLM
-            self.logger.debug(f"[{op_id}] Calling LLM for extraction")
             result = await self._core_extract(template_class, message_content)
-
-            # Get result dictionary
-            result_dict = result.dict() if hasattr(result, 'dict') else str(result)
-
-            # Log success result
-            self.logger.info(
-                f"✅ [{op_id}] Extraction completed successfully",
-                extra={
-                    **extract_context,
-                    "result": result_dict,
-                    "status": "success"
-                }
-            )
-
-            return result
-
         except ContextLengthError:
             raise  # the caller sends it again with a shorter page text, or records the rejection
-
         except JudgeContentError as e:
-            self._record_rejection(op_id, extract_context.get("url"), e)
+            self._record_rejection(extract_context, e)
             return empty_extraction(template_class)
-
         except JudgeError as e:
-            self.logger.error(f"❌ [{op_id}] Extraction aborted, judge request failed: {e}",
-                              extra={**extract_context, "status": "judge_error", "error": str(e)})
+            self.logger.error(f"{_capitalized(subject)} stopped: a judge request failed for good: {e}",
+                              extra={**extract_context, "status": "judge_error"})
             raise
-
         except Exception as e:
-            self.logger.error(
-                f"❌ [{op_id}] Extraction failed: {str(e)}",
-                extra={
-                    **extract_context,
-                    "status": "error",
-                    "error": str(e)
-                }
-            )
+            self.logger.error(f"{_capitalized(subject)} failed, so it counts as empty: {e}",
+                              extra={**extract_context, "status": "error"}, exc_info=True)
             return empty_extraction(template_class)
+
+        fields = result.model_dump() if isinstance(result, BaseModel) else result
+        self.logger.info(f"Extracted {template_class.__name__} from {extract_context.get('url') or 'the answer'}",
+                         extra={**extract_context, "result": fields, "status": "success"})
+        return result
 
     async def _core_extract(
             self,
@@ -697,11 +700,7 @@ class Extractor(BaseEvaluator):
             op_id, "simple", template_class, extraction_prompt
         )
 
-        # Log start
-        self.logger.info(
-            f"🔍 [{op_id}] Starting extraction from answer using {template_class.__name__}",
-            extra=extract_context
-        )
+        self.logger.debug(f"Extracting {template_class.__name__} from the answer", extra=extract_context)
 
         # Build prompt
         prompt = self.GENERAL_PROMPT.format(
@@ -715,7 +714,7 @@ class Extractor(BaseEvaluator):
         try:
             return await self._log_and_extract(template_class, prompt, extract_context)
         except ContextLengthError as e:
-            self._record_rejection(op_id, None, e)
+            self._record_rejection(extract_context, e)
             return empty_extraction(template_class)
 
     async def extract_from_url(
@@ -735,26 +734,15 @@ class Extractor(BaseEvaluator):
             op_id, "url", template_class, extraction_prompt, url, use_screenshot
         )
 
-        # Log start
-        self.logger.info(
-            f"🔍 [{op_id}] Starting URL extraction from {url} using {template_class.__name__}",
-            extra=extract_context
-        )
-
-        # Get page info
-        self.logger.debug(f"[{op_id}] Fetching page content from {url}")
+        self.logger.debug(f"Extracting {template_class.__name__} from {url}", extra=extract_context)
         screenshot_b64, web_text = await self.get_page_info(url)
 
         if screenshot_b64 is None or web_text is None:
-            self.logger.warning(
-                f"[{op_id}] Failed to get page info for URL {url}",
-                extra=extract_context
-            )
+            self.logger.info(f"Extracted nothing from {url}: the page is unavailable", extra=extract_context)
             return empty_extraction(template_class)
 
-        self.logger.debug(
-            f"[{op_id}] Page content retrieved: text_length={len(web_text) if web_text else 0}, has_screenshot={bool(screenshot_b64)}"
-        )
+        self.logger.debug(f"Loaded {url}: {len(web_text)} characters of text, {len(screenshot_b64)} screenshots",
+                          extra={"op_id": op_id})
 
         def extract(text: str) -> Awaitable[BaseModel]:
             prompt = self.URL_PROMPT.format(
@@ -767,9 +755,9 @@ class Extractor(BaseEvaluator):
             return self._log_and_extract(template_class, message_content, extract_context)
 
         try:
-            return await self._with_shorter_text_on_overflow(web_text, extract, op_id)
+            return await self._with_shorter_text_on_overflow(web_text, extract, extract_context)
         except ContextLengthError as e:
-            self._record_rejection(op_id, url, e)
+            self._record_rejection(extract_context, e)
             return empty_extraction(template_class)
 
 
@@ -868,13 +856,21 @@ class Verifier(BaseEvaluator):
             *,
             num_trials: int = 3,
             early_stop: bool = True,
-    ) -> BinaryEvalResult:
-        """Majority vote with external cancellation support"""
+    ) -> Tuple[BinaryEvalResult, List[bool]]:
+        """The majority's verdict over up to ``num_trials`` calls of ``run_once``, and every vote cast.
+
+        The verdict returned is the first call whose result agrees with the
+        majority.  With ``early_stop``, voting stops once at least two votes
+        are cast and either a majority passes or none does.  Raises
+        :class:`asyncio.CancelledError` when ``cancellation_event`` is set
+        before a call.
+        """
 
         assert num_trials % 2 == 1, "num_trials must be odd!"
 
         if num_trials <= 1:
-            return await run_once()
+            result = await run_once()
+            return result, [result.result]
 
         results = []
 
@@ -895,7 +891,7 @@ class Verifier(BaseEvaluator):
 
         # Calculate final majority result
         final_vote = sum(r.result for r in results) >= (len(results) / 2)
-        return next(r for r in results if r.result == final_vote)
+        return next(r for r in results if r.result == final_vote), [r.result for r in results]
 
     def _process_verify_params(self, **kwargs):
         """Process verification parameters, apply defaults"""
@@ -920,16 +916,20 @@ class Verifier(BaseEvaluator):
             claim: str,
             node: Optional[VerificationNode] = None,
             url: Optional[str] = None,
-            urls: Optional[List[str]] = None
+            urls: Optional[List[str]] = None,
+            node_id: Optional[str] = None,
     ) -> dict:
-        """Build verification context"""
+        """The fields logged with a check's records.
+
+        ``node_id`` is the check's node when ``node`` is None, as for one
+        source of a multi-URL check, whose node receives only the overall result.
+        """
         context = {
             "op_id": op_id,
             "verify_type": verify_type,
-            "id": node.id if node else None,
+            "node_id": node.id if node else node_id,
             "node_desc": node.desc if node else None,
             "claim": claim,
-            "claim_preview": claim[:150] + "..." if len(claim) > 150 else claim,
         }
 
         if url:
@@ -951,23 +951,14 @@ class Verifier(BaseEvaluator):
         if cancellation_event and cancellation_event.is_set():
             raise asyncio.CancelledError("Verification cancelled before LLM call")
 
-        self.logger.debug(f"[{op_id}] Sending request to LLM")
-
         result = await self.call_llm_with_semaphore(
             model=self.MODEL_NAME,
             messages=[{"role": "user", "content": message_content}],
             response_format=BinaryEvalResult,
         )
 
-        # Log LLM response
-        self.logger.debug(
-            f"[{op_id}] LLM returned: {'✅ PASS' if result.result else '❌ FAIL'}",
-            extra={
-                "op_id": op_id,
-                "result": result.result,
-                "reasoning": result.reasoning
-            }
-        )
+        self.logger.debug(f"The judge voted {'pass' if result.result else 'fail'}",
+                          extra={"op_id": op_id, "passed": result.result, "reasoning": result.reasoning})
 
         return result
 
@@ -981,17 +972,18 @@ class Verifier(BaseEvaluator):
             cancellation_event: Optional[asyncio.Event] = None,
             **kwargs
     ) -> bool:
-        """Core verification engine - handle all verification logic and logging"""
+        """Ask the judge (once, or by majority vote), log the outcome, and write it into ``node``.
+
+        The outcome is one INFO record naming the check, with the claim and
+        the judge's reasoning, and the votes under majority voting.  A
+        cancelled check is marked skipped and re-raises; an error other than
+        a judge failure counts as failed; :class:`JudgeError` and
+        :class:`ContextLengthError` propagate.
+        """
 
         op_id = verify_context["op_id"]
+        subject = _capitalized(_subject(verify_context))
         params = self._process_verify_params(**kwargs)
-
-        # Log verification parameters
-        if params.majority_vote and params.num_trials > 1:
-            self.logger.debug(
-                f"[{op_id}] Verification parameters: majority_vote={params.majority_vote}, trials={params.num_trials}",
-                extra={"op_id": op_id, "majority_vote": params.majority_vote, "num_trials": params.num_trials}
-            )
 
         try:
             # Create verification function
@@ -1004,62 +996,37 @@ class Verifier(BaseEvaluator):
                     raise  # the caller sends it again with a shorter page text, or records the rejection
                 except JudgeContentError as e:
                     # A rejected request is a failed vote; under majority voting the other trials still count
-                    self._record_rejection(op_id, verify_context.get("url"), e)
+                    self._record_rejection(verify_context, e)
                     return BinaryEvalResult(result=False, reasoning=f"The judge rejected the request: {e}")
 
             # Execute verification (single or majority vote)
             if params.majority_vote and params.num_trials > 1:
-                self.logger.debug(f"[{op_id}] Starting majority vote with {params.num_trials} trials")
-                final_result = await self._majority_vote(
+                final_result, votes = await self._majority_vote(
                     _verify_once,
                     cancellation_event,
                     num_trials=params.num_trials
                 )
-                result = final_result.result
-                reasoning = final_result.reasoning
+                vote_text = f" ({sum(votes)} of {len(votes)} votes pass)"
             else:
-                eval_result = await _verify_once()
-                result = eval_result.result
-                reasoning = eval_result.reasoning
-
-            # Log final result
+                final_result = await _verify_once()
+                votes, vote_text = [final_result.result], ""
+            result = final_result.result
             status = "passed" if result else "failed"
 
-            # Build desc
-            description = node.desc if node else verify_context.get("claim_preview", "Verification")
-            if verify_context.get("url"):
-                description += f" @ {verify_context['url']}"
+            self.logger.info(f"{subject} {status}{vote_text}",
+                             extra={**verify_context, "reasoning": final_result.reasoning, "passed": result,
+                                    "votes": votes, "status": status})
 
-            self.logger.info(
-                f"[{op_id}] {'✅ PASSED' if result else '❌ FAILED'} - {description}",
-                extra={
-                    **verify_context,
-                    "result": result,
-                    "reasoning": reasoning,
-                    "status": status
-                }
-            )
-
-            # Automatically assign result to node
             if node is not None:
                 node.score = 1.0 if result else 0.0
                 node.status = status
-                self.logger.debug(
-                    f"[{op_id}] Updated node status: score={node.score}, status={node.status}"
-                )
 
             return result
 
         except asyncio.CancelledError:
             status = "skipped"
-            description = node.desc if node else "Verification cancelled"
-            if verify_context.get("url"):
-                description += f" @ {verify_context['url']}"
-
-            self.logger.info(
-                f"[{op_id}] ⏭️ SKIPPED - {description}",
-                extra={**verify_context, "status": status}
-            )
+            self.logger.debug(f"{subject} stopped: another source already verified the claim",
+                              extra={**verify_context, "status": status})
 
             if node is not None:
                 node.score = 0.0
@@ -1070,20 +1037,13 @@ class Verifier(BaseEvaluator):
             raise  # the caller sends it again with a shorter page text, or records the rejection
 
         except JudgeError as e:
-            self.logger.error(f"[{op_id}] ❌ Verification aborted, judge request failed: {e}",
-                              extra={**verify_context, "status": "judge_error", "error": str(e)})
+            self.logger.error(f"{subject} stopped: a judge request failed for good: {e}",
+                              extra={**verify_context, "status": "judge_error"})
             raise
 
         except Exception as e:
-            status = "error"
-            description = node.desc if node else "Verification failed"
-            if verify_context.get("url"):
-                description += f" @ {verify_context['url']}"
-
-            self.logger.error(
-                f"[{op_id}] ❌ ERROR - {description}: {str(e)}",
-                extra={**verify_context, "status": status, "error": str(e)}
-            )
+            self.logger.error(f"{subject} failed with an error, so it counts as failed: {e}",
+                              extra={**verify_context, "status": "error"}, exc_info=True)
 
             if node is not None:
                 node.score = 0.0
@@ -1104,11 +1064,7 @@ class Verifier(BaseEvaluator):
         operation_id = op_id or self._generate_operation_id(node)
         verify_context = self._build_verify_context(operation_id, "simple", claim, node)
 
-        # Log start - use different emoji to avoid repeating with evaluator layer
-        self.logger.debug(  # Use debug level, because evaluator layer already has info
-            f"   🔍 [{operation_id}] Starting simple verification: {node.desc if node else claim[:100]}",
-            extra=verify_context
-        )
+        self.logger.debug(f"Checking {_subject(verify_context)} without a source", extra=verify_context)
 
         # Build prompt
         params = self._process_verify_params(**kwargs)
@@ -1125,7 +1081,7 @@ class Verifier(BaseEvaluator):
                 claim, prompt, prompt, verify_context, node, cancellation_event, **kwargs
             )
         except ContextLengthError as e:
-            self._record_rejection(operation_id, None, e)
+            self._record_rejection(verify_context, e)
             if node is not None:
                 node.score = 0.0
                 node.status = "failed"
@@ -1137,46 +1093,42 @@ class Verifier(BaseEvaluator):
             url: str,
             node: Optional[VerificationNode] = None,
             cancellation_event: Optional[asyncio.Event] = None,
-            op_id: Optional[str] = None,  # Added operation ID parameter
+            op_id: Optional[str] = None,
+            node_id: Optional[str] = None,
             **kwargs
     ) -> bool:
-        """Verify by URL"""
+        """Verify ``claim`` against the page at ``url``; an unavailable page fails the check.
 
-        # Use incoming op_id or generate new one
+        ``op_id`` identifies the check in the log (generated when None);
+        ``node_id`` names the check in the log when ``node`` is None, as for one
+        source of a multi-URL check.
+        """
+
         operation_id = op_id or self._generate_operation_id(node)
-        verify_context = self._build_verify_context(operation_id, "url", claim, node, url=url)
+        verify_context = self._build_verify_context(operation_id, "url", claim, node, url=url, node_id=node_id)
+        subject = _subject(verify_context)
 
-        # Log start
-        self.logger.debug(
-            f"   🌐 [{operation_id}] Starting URL verification: {node.desc if node else claim[:50]}... @ {url}",
-            extra=verify_context
-        )
+        self.logger.debug(f"Checking {subject}", extra=verify_context)
 
-        # Check if cancellation has occurred
         if cancellation_event and cancellation_event.is_set():
-            self.logger.debug(f"[{op_id}] Already cancelled before start")
+            self.logger.debug(f"{_capitalized(subject)} stopped before it started", extra={"op_id": operation_id})
             if node is not None:
                 node.score = 0.0
                 node.status = "skipped"
             return False
 
-        # Get page info
-        self.logger.debug(f"[{op_id}] Fetching page content from {url}")
         screenshot_b64, web_text = await self.get_page_info(url, cancellation_event)
 
         if screenshot_b64 is None or web_text is None:
-            self.logger.warning(
-                f"[{op_id}] Failed to retrieve page content from {url}",
-                extra=verify_context
-            )
+            self.logger.info(f"{_capitalized(subject)} failed: the page is unavailable",
+                             extra={**verify_context, "passed": False, "status": "failed"})
             if node is not None:
                 node.score = 0.0
                 node.status = "failed"
             return False
 
-        self.logger.debug(
-            f"[{op_id}] Page content retrieved: text_length={len(web_text) if web_text else 0}, has_screenshot={bool(screenshot_b64)}"
-        )
+        self.logger.debug(f"Loaded {url}: {len(web_text)} characters of text, {len(screenshot_b64)} screenshots",
+                          extra={"op_id": operation_id})
 
         params = self._process_verify_params(**kwargs)
 
@@ -1195,9 +1147,9 @@ class Verifier(BaseEvaluator):
             )
 
         try:
-            return await self._with_shorter_text_on_overflow(web_text, verify, operation_id)
+            return await self._with_shorter_text_on_overflow(web_text, verify, verify_context)
         except ContextLengthError as e:
-            self._record_rejection(operation_id, url, e)
+            self._record_rejection(verify_context, e)
             if node is not None:
                 node.score = 0.0
                 node.status = "failed"
@@ -1208,50 +1160,38 @@ class Verifier(BaseEvaluator):
             claim: str,
             urls: List[str],
             node: Optional[VerificationNode] = None,
-            op_id: Optional[str] = None,  # Added operation ID parameter
+            op_id: Optional[str] = None,
             **kwargs
     ) -> bool:
-        """Multi-URL verification"""
+        """Verify ``claim`` against each of ``urls`` concurrently; it passes when any one page supports it.
+
+        Each page's check is logged under the node's id; once one passes, the
+        others stop, and one INFO record gives the node's overall outcome.
+        """
         assert urls, "No URLs provided for verification"
 
-        # Generate operation ID and context
         main_op_id = op_id or self._generate_operation_id(node)
         verify_context = self._build_verify_context(main_op_id, "multi_url", claim, node, urls=urls)
+        subject = _capitalized(_subject(verify_context))
 
-        # Log start
-        self.logger.debug(
-            f"   🔗 [{main_op_id}] Starting multi-URL verification ({len(urls)} URLs): {node.desc if node else claim[:50]}...",
-            extra=verify_context
-        )
+        self.logger.debug(f"Checking {_subject(verify_context)} against {len(urls)} sources", extra=verify_context)
 
         cancellation_event = asyncio.Event()
+        node_id = verify_context["node_id"]
 
         async def _check_one(url: str, url_index: int) -> tuple[str, bool]:
-            # Generate sub-op_id, based on main op_id
             sub_op_id = f"{main_op_id}_url_{url_index + 1}"
-
             try:
-                self.logger.debug(
-                    f"     🔸 [{sub_op_id}] Checking URL {url_index + 1}/{len(urls)}: {url}",
-                    extra={"op_id": sub_op_id, "parent_op_id": main_op_id, "url": url, "url_index": url_index}
-                )
-
-                # Pass sub-op_id to single URL verification
-                result = await self.verify_by_url(claim, url, None, cancellation_event, op_id=sub_op_id, **kwargs)
-
-                self.logger.debug(
-                    f"     {'✅' if result else '❌'} [{sub_op_id}] URL {url_index + 1} result: {'PASS' if result else 'FAIL'}",
-                    extra={"op_id": sub_op_id, "parent_op_id": main_op_id, "url": url, "result": result}
-                )
-
+                result = await self.verify_by_url(claim, url, None, cancellation_event, op_id=sub_op_id,
+                                                  node_id=node_id, **kwargs)
                 return url, result
             except asyncio.CancelledError:
-                self.logger.debug(f"     ⏭️ [{sub_op_id}] Verification cancelled")
                 return url, False
             except JudgeError:
                 raise
             except Exception as e:
-                self.logger.error(f"     ❌ [{sub_op_id}] Error verifying URL: {e}")
+                self.logger.error(f"{subject} against {url} failed with an error, so it counts as failed: {e}",
+                                  extra={"op_id": sub_op_id, "url": url}, exc_info=True)
                 return url, False
 
         # Create all tasks
@@ -1259,13 +1199,13 @@ class Verifier(BaseEvaluator):
 
         try:
             # Wait for first successful result
-            for coro in asyncio.as_completed(tasks):
+            for checked, coro in enumerate(asyncio.as_completed(tasks), start=1):
                 try:
                     url, result = await coro
                     if result:
                         self.logger.info(
-                            f"[{op_id}] ✅ FOUND - Claim verified by URL: {url}",
-                            extra={**verify_context, "verified_by_url": url, "status": "passed"}
+                            f"{subject} passed: {url} supports the claim ({checked} of {len(urls)} sources checked)",
+                            extra={**verify_context, "verified_by_url": url, "passed": True, "status": "passed"}
                         )
 
                         # Cancel remaining tasks
@@ -1274,7 +1214,8 @@ class Verifier(BaseEvaluator):
 
                         cancelled = sum(1 for t in tasks if not t.done() and t.cancel())
                         if cancelled:
-                            self.logger.debug(f"[{op_id}] Cancelled {cancelled} remaining verification task(s)")
+                            self.logger.debug(f"Stopped the checks of {cancelled} other sources",
+                                              extra={"op_id": main_op_id})
 
                         # Assign successful result to node
                         if node is not None:
@@ -1294,10 +1235,9 @@ class Verifier(BaseEvaluator):
             # Ensure all tasks are completed
             await asyncio.gather(*tasks, return_exceptions=True)
 
-        # No verification found
         self.logger.info(
-            f"[{op_id}] ❌ NOT FOUND - Claim not verified by any of {len(urls)} URLs",
-            extra={**verify_context, "urls_checked": len(urls), "status": "failed"}
+            f"{subject} failed: none of the {len(urls)} sources supports the claim",
+            extra={**verify_context, "passed": False, "status": "failed"}
         )
 
         #  Assign failed result to node

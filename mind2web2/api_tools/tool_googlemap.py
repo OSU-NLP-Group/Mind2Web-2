@@ -1,7 +1,11 @@
 import argparse
 import asyncio
-import googlemaps
+import logging
 import os
+
+import googlemaps
+
+log = logging.getLogger(__name__)
 
 class GoogleMapsTool:
     def __init__(self):
@@ -22,7 +26,7 @@ class GoogleMapsTool:
         assert level in ['locality', 'sublocality'], "Invalid level. Must be 'locality' or 'sublocality'."
         if geocode_result:
             for component in geocode_result[0]['address_components']:
-                print(component)
+                log.debug("Address component of %r: %s", address, component)
                 if level in component['types']:
                     return component['long_name']
         return "City/Sub-city name not found"
@@ -36,7 +40,7 @@ class GoogleMapsTool:
         :return: str - The city or sub-city name.
         """
         geocode_result = await asyncio.to_thread(self.client.geocode, address)
-        print(geocode_result)
+        log.debug("Geocoding result of %r: %s", address, geocode_result)
 
         return geocode_result
 
