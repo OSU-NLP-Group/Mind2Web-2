@@ -11,8 +11,9 @@ A crawl has two stages for each task:
    fragment, UTM parameters, or percent-encoding.  Spellings that differ in
    letter case are never grouped, since a server may serve different pages for
    them, and a spelling with an encoded ``#`` or ``%`` (``?q=C%23``) is grouped
-   only with spellings stored under the same key, since decoding it can give
-   another page's URL (``?q=C``).  Each group is listed once, under its
+   only with spellings whose storage keys the cache matches to its own (keys
+   that differ at most in scheme, ``www.``, and UTM parameters), since decoding
+   it can give another page's URL (``?q=C``).  Each group is listed once, under its
    preferred spelling: one that the regular expression found in any of the
    answers, then an ``https`` one, then the shortest.  The result is written to ``<cache_root>/<agent>/<task_id>.json``::
 
@@ -66,7 +67,7 @@ from .api_tools.tool_pdf import PDFParser, is_pdf
 from .llm_client import DEFAULT_JUDGE_MODEL, LLMClient
 from .prompts.cache_prompts import llm_extraction_prompts
 from .submission import list_answer_files
-from .utils.cache_filesys import CacheFileSys, storage_key
+from .utils.cache_filesys import CacheFileSys, _raw_form, storage_key
 from .utils.page_info_retrieval import BatchBrowserManager, Capture
 from .utils.url_tools import URLs, normalize_url_keep_case, regex_find_urls, remove_utm_parameters
 
@@ -124,13 +125,14 @@ def _page_form(url: str) -> str:
     It is ``url`` under :func:`~mind2web2.utils.url_tools.normalize_url_keep_case`,
     except for a URL whose storage key
     :func:`~mind2web2.utils.cache_filesys.storage_key` would change again (an
-    encoded ``#`` or ``%``, as in ``?q=C%23``): its form is that storage key,
-    since normalizing it can give another page's URL (``?q=C``), and the cache
-    finds its page only by that key.  A URL that cannot be parsed is its own form.
+    encoded ``#`` or ``%``, as in ``?q=C%23``): its form is that storage key
+    with UTM parameters removed, ``http`` made ``https``, and ``www.`` dropped,
+    the form by which the cache matches such keys, since normalizing the URL
+    can give another page's URL (``?q=C``).  A URL that cannot be parsed is its own form.
     """
     try:
         key = storage_key(url)
-        return key if storage_key(key) != key else normalize_url_keep_case(url)
+        return _raw_form(key) if storage_key(key) != key else normalize_url_keep_case(url)
     except ValueError:
         return url
 
@@ -144,8 +146,9 @@ def group_url_variants(urls: Iterable[str], preferred: Collection[str] = ()) -> 
     the fragment, UTM parameters, or percent-encoding.  Spellings that differ
     in letter case are never grouped, since a server may serve different pages
     for them, and a spelling with an encoded ``#`` or ``%`` (``?q=C%23``) is
-    grouped only with spellings stored under the same key, since decoding it
-    can give another page's URL (``?q=C``).  Within a group, spellings in ``preferred`` come first, then
+    grouped only with spellings whose storage keys the cache matches to its
+    own (keys that differ at most in scheme, ``www.``, and UTM parameters),
+    since decoding it can give another page's URL (``?q=C``).  Within a group, spellings in ``preferred`` come first, then
     ``https`` spellings, then the shortest, then the alphabetically first.
     Groups are returned in order of their first spelling in ``urls``, and a
     spelling given several times appears once.

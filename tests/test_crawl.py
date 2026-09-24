@@ -72,10 +72,13 @@ def test_spellings_of_one_page_are_grouped_in_order_of_preference():
 def test_a_spelling_with_an_encoded_hash_is_not_grouped_with_the_page_it_decodes_to():
     """The cache stores ``?q=C%23`` under ``?q=C#``, which a lookup of ``?q=C`` never finds, and vice versa."""
     urls = ["https://example.com/search?q=C", "https://example.com/search?q=C%23",
-            "https://example.com/search?q=C%23#top", "https://example.com/search?q=C#top"]
+            "https://example.com/search?q=C%23#top", "https://example.com/search?q=C#top",
+            "http://www.example.com/search?q=C%23&utm_source=x"]
     assert group_url_variants(urls) == [
         ["https://example.com/search?q=C", "https://example.com/search?q=C#top"],
-        ["https://example.com/search?q=C%23", "https://example.com/search?q=C%23#top"],
+        # as the cache matches raw keys: scheme, www. and UTM parameters aside
+        ["https://example.com/search?q=C%23", "https://example.com/search?q=C%23#top",
+         "http://www.example.com/search?q=C%23&utm_source=x"],
     ]
 
 
