@@ -32,6 +32,13 @@ Scores are comparable only when one judge model produced them all, so the
 metrics count the results per configured judge model and per model that the
 server reported serving the requests, and the report warns when either count
 has more than one entry.
+
+A judge request that the judge rejected because of its content (a refusal, a
+content filter, an output cut off at the token limit, or a request too long
+even with the page text shortened) counts as a failed check, and the answer is
+scored as usual.  The report lists the answers with such requests
+(``rejected_requests``), since their scores depend on the judge's content
+policy as well as on the answer.
 """
 from __future__ import annotations
 
@@ -69,7 +76,9 @@ class AnswerRecord:
     ``"unknown"`` for a result that does not record it, and ``None`` without a
     score.  ``served_models`` names the models that the server reported
     serving the answer's judge requests; it is empty without a score or when
-    the result does not record them.
+    the result does not record them.  ``rejected_requests`` counts the judge
+    requests of a scored answer that the judge rejected because of their
+    content (``judge_usage.rejections``); each counted as a failed check.
     """
 
     task_id: str
@@ -81,6 +90,7 @@ class AnswerRecord:
     judge_model: str | None = None
     served_models: tuple[str, ...] = ()
     stale_result: bool = False
+    rejected_requests: int = 0
 
 
 def _mean_std(values: list[float]) -> dict:
@@ -188,6 +198,7 @@ def collect_records(
                 judge_model=_judge_model(result) if score is not None else None,
                 served_models=_served_models(result) if score is not None else (),
                 stale_result=stale,
+                rejected_requests=_rejected_requests(result) if score is not None else 0,
             ))
     return records, num_runs
 
@@ -195,6 +206,11 @@ def collect_records(
 def _served_models(result: dict) -> tuple[str, ...]:
     """The models that served a result's judge requests, from ``judge_usage.served_models``."""
     return tuple(sorted((result.get("judge_usage") or {}).get("served_models") or {}))
+
+
+def _rejected_requests(result: dict) -> int:
+    """The number of a result's judge requests that the judge rejected, from ``judge_usage.rejections``."""
+    return len((result.get("judge_usage") or {}).get("rejections") or [])
 
 
 def _judge_model(result: dict) -> str:
@@ -274,6 +290,10 @@ def compute_metrics(
         ],
         "stale_results": [
             {"task_id": rec.task_id, "run": rec.run} for rec in records if rec.stale_result
+        ],
+        "rejected_requests": [
+            {"task_id": rec.task_id, "run": rec.run, "requests": rec.rejected_requests}
+            for rec in records if rec.rejected_requests
         ],
         "per_task": {
             t: {"scores": [table[(t, r)].score for r in runs], "pass": passed[t]} for t in task_ids
@@ -402,6 +422,14 @@ def format_report(metrics: dict, max_listed: int = 20) -> str:
                 lines.append(f"    {item['task_id']} run {item['run']}")
             if len(items) > max_listed:
                 lines.append(f"    ... and {len(items) - max_listed} more")
+    rejected = metrics["rejected_requests"]
+    if rejected:
+        lines.append(f"  Answers with judge requests rejected for their content "
+                     f"(each counted as a failed check): {len(rejected)}")
+        for item in rejected[:max_listed]:
+            lines.append(f"    {item['task_id']} run {item['run']}: {item['requests']} requests")
+        if len(rejected) > max_listed:
+            lines.append(f"    ... and {len(rejected) - max_listed} more")
     if metrics["leaderboard_entry"] is None:
         lines.append(f"  No leaderboard entry: {no_leaderboard_entry_reason(metrics)}.")
     return "\n".join(lines)

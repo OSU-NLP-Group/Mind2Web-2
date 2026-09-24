@@ -135,6 +135,16 @@ def test_evaluation_stores_live_captures_and_pdf_downloads(tmp_path):
     assert browser.urls == [urls["/article"], urls["/landing.pdf"]]  # the fake PDF was loaded in the browser
 
 
+def test_evaluation_leaves_out_a_screenshot_that_cannot_be_decoded(tmp_path):
+    cache = CacheFileSys(str(tmp_path))
+    cache.put_web("https://example.com/a", "Page text", png_b64())
+    (stored,) = tmp_path.glob("*.jpg")
+    stored.write_bytes(b"not an image")
+    v = verifier(cache, StubBrowser(Capture(error="must not be used")))
+
+    assert asyncio.run(v.get_page_info("https://example.com/a")) == ([], "Page text")
+
+
 # ------------------------------------------------------------------ crawler
 
 def crawl(cache: CacheFileSys, browser: StubBrowser, url: str, retry_failed: bool = False) -> str:

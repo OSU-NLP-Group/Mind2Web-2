@@ -181,7 +181,7 @@ def test_a_result_is_reused_only_for_the_same_answer_judge_and_script(tmp_path, 
     evaluate(tmp_path, monkeypatch, client, revised, answer="Source: https://b.example/2")
     assert client.calls > 0  # only the eval script changed
 
-    monkeypatch.setattr(EvaluatorConfig, "image_max_height", EvaluatorConfig.image_max_height + 1)
+    monkeypatch.setattr(EvaluatorConfig, "image_max_parts", EvaluatorConfig.image_max_parts + 1)
     client = judged_by_other_judge()
     evaluate(tmp_path, monkeypatch, client, revised, answer="Source: https://b.example/2")
     assert client.calls > 0  # only the default evaluator settings changed

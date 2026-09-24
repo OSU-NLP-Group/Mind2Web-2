@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import functools
 import io
 import logging
 import random
-import textwrap
 import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -16,7 +16,9 @@ from pydantic import BaseModel, ValidationError
 
 from .api_tools import tool_pdf
 from .llm_client.base_client import LLMClient
-from .llm_client.judge import DEFAULT_JUDGE_MODEL, JudgeError, JudgeUsage
+from .llm_client.judge import (
+    DEFAULT_JUDGE_MODEL, ContextLengthError, JudgeContentError, JudgeError, JudgeUsage,
+)
 from .utils.cache_filesys import CacheFileSys
 from .utils.misc import (
     text_dedent, normalize_url_markdown
@@ -31,8 +33,10 @@ from .verification_tree import VerificationNode
 def empty_extraction(template_class: Type[BaseModel]) -> BaseModel:
     """What an extraction returns when there is nothing to extract from.
 
-    That is the case when the page is unavailable or the extraction request
-    failed for a reason other than a :class:`JudgeError`.  The result is
+    That is the case when the page is unavailable, when the judge rejected
+    the extraction request because of its content (:class:`JudgeContentError`),
+    and when the request failed for a reason other than a :class:`JudgeError`.
+    The result is
     ``template_class()`` when its fields all have defaults; otherwise it is an
     unvalidated instance with the defaults and ``None`` for each required
     field, so that a script reading it gets empty values instead of an
@@ -48,6 +52,67 @@ def empty_extraction(template_class: Type[BaseModel]) -> BaseModel:
 class BinaryEvalResult(BaseModel):
     reasoning: str
     result: bool
+
+
+#: The tokenizer that page-text budgets are counted in: the encoding of OpenAI's current models.
+TEXT_ENCODING = "o200k_base"
+TRUNCATION_MARKER = "\n… [CONTENT TRUNCATED]"
+
+
+@functools.lru_cache(maxsize=1)
+def _text_encoding():
+    import tiktoken  # loads (and on first use downloads) the encoding, so only when a text needs counting
+    return tiktoken.get_encoding(TEXT_ENCODING)
+
+
+def truncate_to_tokens(text: str, max_tokens: int) -> str:
+    """``text`` cut off after ``max_tokens`` tokens, with :data:`TRUNCATION_MARKER` appended; unchanged if it is not longer.
+
+    Tokens are counted in :data:`TEXT_ENCODING`.  Another judge's tokenizer
+    counts somewhat differently; the budget is set far enough below the judge's
+    context length to absorb that.  Every token covers at least one byte of
+    UTF-8, so a text of at most ``max_tokens`` bytes is returned without being
+    tokenized.  The cut keeps the text's whitespace and line breaks.
+    """
+    if len(text.encode("utf-8")) <= max_tokens:
+        return text
+    encoding = _text_encoding()
+    tokens = encoding.encode(text, disallowed_special=())
+    if len(tokens) <= max_tokens:
+        return text
+    return encoding.decode(tokens[:max_tokens]).rstrip("\ufffd") + TRUNCATION_MARKER
+
+
+def split_screenshot(image: Image.Image, part_height: int, overlap: int, max_parts: int) -> List[Image.Image]:
+    """``image`` as parts of at most ``part_height`` pixels, top to bottom, each overlapping the previous one by ``overlap`` pixels.
+
+    An image no taller than ``part_height`` is returned as its only part,
+    unchanged.  At most ``max_parts`` parts are made, so an image taller than
+    ``part_height + (max_parts - 1) * (part_height - overlap)`` pixels loses
+    its bottom.
+    """
+    if image.height <= part_height:
+        return [image]
+    parts: List[Image.Image] = []
+    top = 0
+    while len(parts) < max_parts:
+        bottom = min(top + part_height, image.height)
+        parts.append(image.crop((0, top, image.width, bottom)))
+        if bottom == image.height:
+            break
+        top = bottom - overlap
+    return parts
+
+
+class Screenshots(list):
+    """The base64 JPEG images of one page that go to the judge, in order.
+
+    ``split`` is true when a screenshot was split into parts
+    (:func:`split_screenshot`), so that the judge request says how the parts
+    fit together.
+    """
+
+    split: bool = False
 
 
 _shared_browser: ContextVar[Optional[BatchBrowserManager]] = ContextVar("mind2web2_shared_browser", default=None)
@@ -79,10 +144,26 @@ def _new_browser() -> BatchBrowserManager:
 
 
 class EvaluatorConfig:
-    """Evaluator configuration settings"""
-    max_text_chars: int = 400_000
-    image_max_width: int = 1100
-    image_max_height: int = 10000
+    """Evaluator configuration settings.
+
+    The page limits keep each judge request within what the judge model reads
+    in full.  Page text is cut off after ``max_text_tokens`` tokens, far below
+    the context length of current judges and below the 272K input tokens above
+    which ``gpt-6-luna`` bills a request at twice the rate.  A screenshot is
+    scaled down to ``image_max_width`` pixels wide and split into parts of at
+    most ``image_part_height`` pixels, each overlapping the previous one by
+    ``image_part_overlap`` pixels; a 1100 x 2000 part is within the size that
+    OpenAI's models accept at ``detail: "high"`` without scaling it down
+    further, while a whole long screenshot would be scaled down until its text
+    is hard to read.  At most ``image_max_parts`` parts are sent per
+    screenshot, so the judge sees the top 9,600 pixels of a long page.
+    """
+    max_text_tokens: int = 100_000  # tokens of page text, counted in TEXT_ENCODING
+    max_text_shrinks: int = 2       # times the page text is halved when a request exceeds the judge's context length
+    image_max_width: int = 1100     # pixels; a wider screenshot is scaled down to this width
+    image_part_height: int = 2000   # pixels, after that scaling; a taller screenshot is split into parts
+    image_part_overlap: int = 100   # pixels shared by consecutive parts
+    image_max_parts: int = 5        # parts per screenshot; the rest of a taller screenshot is left out
     jpeg_quality: int = 85
     default_num_trials: int = 3
     default_majority_vote: bool = True
@@ -135,7 +216,9 @@ class BaseEvaluator:
         later requests raise :class:`JudgeError` at once without being sent;
         its message names the first failure, so that whichever of the errors
         reaches the log (concurrent checks can finish in any order) names the
-        cause.
+        cause.  A :class:`JudgeContentError` (the judge rejected this request's
+        content) is raised without counting as a failed request: callers score
+        the check that made the request as failed and record the rejection.
         """
         # Use LLM semaphore if available, fallback to default semaphore
         semaphore_to_use = getattr(self.semaphore, 'llm', self.semaphore)
@@ -145,6 +228,8 @@ class BaseEvaluator:
                                  f"({self.usage.first_failure}); no further requests are sent for it")
             try:
                 result, tokens = await self.client.async_response(count_token=True, **kwargs)
+            except JudgeContentError:
+                raise
             except JudgeError as exc:
                 self.usage.failed_requests += 1
                 if self.usage.first_failure is None:
@@ -153,11 +238,47 @@ class BaseEvaluator:
         self.usage.record(tokens)
         return result
 
+    def _record_rejection(self, op_id: str, url: Optional[str], error: JudgeContentError) -> None:
+        """Log and record a request that the judge rejected because of its content."""
+        self.logger.warning(f"[{op_id}] The judge rejected the request{f' for {url}' if url else ''}; "
+                            f"the check counts as failed: {error}")
+        self.usage.record_rejection(op_id, url, error)
+
+    async def _with_shorter_text_on_overflow(
+            self,
+            web_text: str,
+            attempt: Callable[[str], Awaitable],
+            op_id: str,
+    ):
+        """``await attempt(web_text)``, cutting the page text in half and trying again while the request is too long.
+
+        When the judge answers :class:`ContextLengthError`, the page text is cut
+        to half the smaller of its size in bytes and its token budget, up to
+        ``config.max_text_shrinks`` times; the last :class:`ContextLengthError`
+        propagates.
+        """
+        budget = self.config.max_text_tokens
+        for shrink in range(self.config.max_text_shrinks + 1):
+            try:
+                return await attempt(web_text)
+            except ContextLengthError:
+                if shrink == self.config.max_text_shrinks:
+                    raise
+                budget = min(budget, len(web_text.encode("utf-8"))) // 2
+                self.logger.warning(f"[{op_id}] The request is too long for the judge; "
+                                    f"sending it again with the page text cut to {budget} tokens")
+                web_text = await asyncio.to_thread(truncate_to_tokens, web_text, budget)
+
     def _build_message_content(self, prompt: str, screenshot_b64: List[str], use_screenshot: bool = True):
         """Build message content"""
         if use_screenshot and screenshot_b64:
-            msg_content = [{"type": "text",
-                            "text": prompt + "\n\nBelow are rendered page screenshots to provide non-textual context:"}]
+            intro = "\n\nBelow are rendered page screenshots to provide non-textual context:"
+            if getattr(screenshot_b64, "split", False):
+                intro = ("\n\nBelow are rendered page screenshots to provide non-textual context. A screenshot "
+                         f"taller than {self.config.image_part_height} pixels is split into consecutive parts "
+                         f"from top to bottom, each overlapping the previous part by "
+                         f"{self.config.image_part_overlap} pixels:")
+            msg_content = [{"type": "text", "text": prompt + intro}]
             image_content = [
                 {
                     "type": "image_url",
@@ -216,8 +337,16 @@ class BaseEvaluator:
         an earlier evaluation) is unavailable, and it is not captured again,
         so that its result does not depend on when the evaluation runs.  Any
         other URL is fetched live and stored (see :meth:`_fetch_live`).
-        Screenshots are resized JPEGs; text longer than
-        ``config.max_text_chars`` is truncated.
+
+        The screenshots come back as :class:`Screenshots`, JPEGs of at most
+        ``config.image_max_width`` by ``config.image_part_height`` pixels (1100
+        by 2000 by default): a wider screenshot is scaled down to that width,
+        and a taller one is then split into overlapping parts, at most
+        ``config.image_max_parts`` of them (:func:`split_screenshot`), so the
+        judge sees the top 9,600 pixels of a long page at full scale.  A
+        screenshot that cannot be processed this way, such as a corrupt file,
+        is left out rather than sent unchecked.  Text longer than
+        ``config.max_text_tokens`` tokens is cut off (:func:`truncate_to_tokens`).
         """
 
         url = normalize_url_markdown(url)
@@ -243,41 +372,41 @@ class BaseEvaluator:
             self.logger.warning(f"Failed to retrieve any content for {url}")
             return None, None
 
-        if len(page_text) > self.config.max_text_chars:
-            page_text = textwrap.shorten(
-                page_text,
-                self.config.max_text_chars,
-                placeholder="… [CONTENT TRUNCATED]",
-            )
         images = screenshot_b64 if isinstance(screenshot_b64, list) else [screenshot_b64]
 
-        def _resize_b64_image(b64_str: str) -> str:
+        def _encode(image: Image.Image) -> str:
+            buf = io.BytesIO()
+            image.save(buf, format="JPEG", optimize=True, quality=self.config.jpeg_quality)
+            return base64.b64encode(buf.getvalue()).decode()
+
+        def _parts(b64_str: str) -> Optional[List[str]]:
             try:
-                data = base64.b64decode(b64_str)
-                with Image.open(io.BytesIO(data)) as im:
+                with Image.open(io.BytesIO(base64.b64decode(b64_str))) as im:
                     # Pillow PNG/GIF needs to be converted to RGB before saving as JPEG
                     if im.mode not in ("RGB", "L"):
                         im = im.convert("RGB")
-
                     if im.width > self.config.image_max_width:
                         new_h = int(im.height * self.config.image_max_width / im.width)
                         im = im.resize((self.config.image_max_width, new_h), Image.LANCZOS)
-
-                    if im.height > self.config.image_max_height:
-                        im = im.crop((0, 0, im.width, self.config.image_max_height))
-
-                    buf = io.BytesIO()
-                    im.save(buf, format="JPEG", optimize=True, quality=self.config.jpeg_quality)
-                    return base64.b64encode(buf.getvalue()).decode()
-
+                    parts = split_screenshot(im, self.config.image_part_height,
+                                             self.config.image_part_overlap, self.config.image_max_parts)
+                    return [_encode(part) for part in parts]
             except Exception as e:
-                # If error, record and return original image to ensure no interruption
-                self.logger.warning("Image resize failed: %s", e)
-                return b64_str
+                # Sent unchanged, the image could exceed the size limits above
+                self.logger.warning("Left out a screenshot of %s that could not be processed: %s", url, e)
+                return None
 
-        # Re-encoding large screenshots in the event loop would stall concurrent evaluations
-        resized = await asyncio.to_thread(lambda: [_resize_b64_image(b64) for b64 in images])
-        return resized, page_text
+        def _prepare() -> Tuple[Screenshots, str]:
+            screenshots = Screenshots()
+            for b64 in images:
+                parts = _parts(b64)
+                if parts:
+                    screenshots.extend(parts)
+                    screenshots.split = screenshots.split or len(parts) > 1
+            return screenshots, truncate_to_tokens(page_text, self.config.max_text_tokens)
+
+        # Re-encoding large screenshots and counting tokens in the event loop would stall concurrent evaluations
+        return await asyncio.to_thread(_prepare)
 
 
 class Extractor(BaseEvaluator):
@@ -420,6 +549,13 @@ class Extractor(BaseEvaluator):
 
             return result
 
+        except ContextLengthError:
+            raise  # the caller sends it again with a shorter page text, or records the rejection
+
+        except JudgeContentError as e:
+            self._record_rejection(op_id, extract_context.get("url"), e)
+            return empty_extraction(template_class)
+
         except JudgeError as e:
             self.logger.error(f"❌ [{op_id}] Extraction aborted, judge request failed: {e}",
                               extra={**extract_context, "status": "judge_error", "error": str(e)})
@@ -478,7 +614,11 @@ class Extractor(BaseEvaluator):
         )
 
         # Execute extraction
-        return await self._log_and_extract(template_class, prompt, extract_context)
+        try:
+            return await self._log_and_extract(template_class, prompt, extract_context)
+        except ContextLengthError as e:
+            self._record_rejection(op_id, None, e)
+            return empty_extraction(template_class)
 
     async def extract_from_url(
             self,
@@ -518,19 +658,21 @@ class Extractor(BaseEvaluator):
             f"[{op_id}] Page content retrieved: text_length={len(web_text) if web_text else 0}, has_screenshot={bool(screenshot_b64)}"
         )
 
-        # Build prompt
-        prompt = self.URL_PROMPT.format(
-            extraction_prompt=extraction_prompt,
-            task_description=self.task_description,
-            additional_instruction=additional_instruction,
-            web_text=web_text
-        )
+        def extract(text: str) -> Awaitable[BaseModel]:
+            prompt = self.URL_PROMPT.format(
+                extraction_prompt=extraction_prompt,
+                task_description=self.task_description,
+                additional_instruction=additional_instruction,
+                web_text=text
+            )
+            message_content = self._build_message_content(prompt, screenshot_b64, use_screenshot)
+            return self._log_and_extract(template_class, message_content, extract_context)
 
-        # Build message content
-        message_content = self._build_message_content(prompt, screenshot_b64, use_screenshot)
-
-        # Execute extraction
-        return await self._log_and_extract(template_class, message_content, extract_context)
+        try:
+            return await self._with_shorter_text_on_overflow(web_text, extract, op_id)
+        except ContextLengthError as e:
+            self._record_rejection(op_id, url, e)
+            return empty_extraction(template_class)
 
 
 class Verifier(BaseEvaluator):
@@ -775,9 +917,16 @@ class Verifier(BaseEvaluator):
         try:
             # Create verification function
             async def _verify_once() -> BinaryEvalResult:
-                return await self._execute_single_verification(
-                    prompt, message_content, op_id, cancellation_event
-                )
+                try:
+                    return await self._execute_single_verification(
+                        prompt, message_content, op_id, cancellation_event
+                    )
+                except ContextLengthError:
+                    raise  # the caller sends it again with a shorter page text, or records the rejection
+                except JudgeContentError as e:
+                    # A rejected request is a failed vote; under majority voting the other trials still count
+                    self._record_rejection(op_id, verify_context.get("url"), e)
+                    return BinaryEvalResult(result=False, reasoning=f"The judge rejected the request: {e}")
 
             # Execute verification (single or majority vote)
             if params.majority_vote and params.num_trials > 1:
@@ -838,6 +987,9 @@ class Verifier(BaseEvaluator):
                 node.status = status
             raise
 
+        except ContextLengthError:
+            raise  # the caller sends it again with a shorter page text, or records the rejection
+
         except JudgeError as e:
             self.logger.error(f"[{op_id}] ❌ Verification aborted, judge request failed: {e}",
                               extra={**verify_context, "status": "judge_error", "error": str(e)})
@@ -889,9 +1041,16 @@ class Verifier(BaseEvaluator):
         )
 
         # Call core verification
-        return await self._core_verify(
-            claim, prompt, prompt, verify_context, node, cancellation_event, **kwargs
-        )
+        try:
+            return await self._core_verify(
+                claim, prompt, prompt, verify_context, node, cancellation_event, **kwargs
+            )
+        except ContextLengthError as e:
+            self._record_rejection(operation_id, None, e)
+            if node is not None:
+                node.score = 0.0
+                node.status = "failed"
+            return False
 
     async def verify_by_url(
             self,
@@ -940,23 +1099,30 @@ class Verifier(BaseEvaluator):
             f"[{op_id}] Page content retrieved: text_length={len(web_text) if web_text else 0}, has_screenshot={bool(screenshot_b64)}"
         )
 
-        # Build prompt
         params = self._process_verify_params(**kwargs)
-        prompt = self.URL_PROMPT.format(
-            task_description=self.task_description,
-            answer=self.answer,
-            claim=claim,
-            additional_instruction=params.additional_instruction,
-            web_text=web_text,
-            url=url
-        )
 
-        message_content = self._build_message_content(prompt, screenshot_b64, params.use_screenshot)
+        def verify(text: str) -> Awaitable[bool]:
+            prompt = self.URL_PROMPT.format(
+                task_description=self.task_description,
+                answer=self.answer,
+                claim=claim,
+                additional_instruction=params.additional_instruction,
+                web_text=text,
+                url=url
+            )
+            message_content = self._build_message_content(prompt, screenshot_b64, params.use_screenshot)
+            return self._core_verify(
+                claim, prompt, message_content, verify_context, node, cancellation_event, **kwargs
+            )
 
-        # Call core verification
-        return await self._core_verify(
-            claim, prompt, message_content, verify_context, node, cancellation_event, **kwargs
-        )
+        try:
+            return await self._with_shorter_text_on_overflow(web_text, verify, operation_id)
+        except ContextLengthError as e:
+            self._record_rejection(operation_id, url, e)
+            if node is not None:
+                node.score = 0.0
+                node.status = "failed"
+            return False
 
     async def verify_by_urls(
             self,

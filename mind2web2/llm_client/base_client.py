@@ -12,7 +12,7 @@ from typing import Any
 import openai
 import pydantic
 
-from .judge import JudgeConfig, JudgeError
+from .judge import ContextLengthError, JudgeConfig, JudgeContentError, JudgeError
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
@@ -25,6 +25,8 @@ MIN_ATTEMPT_SECONDS = 1.0
 
 _REQUEST_ERRORS = (openai.OpenAIError, pydantic.ValidationError, json.JSONDecodeError)
 _JUDGE_PARAMS = ("model", "reasoning_effort", "temperature")
+#: Error codes of HTTP 400 responses that reject a request because of its content.
+CONTENT_REJECTION_CODES = ("content_filter", "content_policy_violation", "invalid_prompt")
 
 
 class LLMClient:
@@ -48,8 +50,12 @@ class LLMClient:
     timeouts, and HTTP 408, 409, 429, and 5xx responses, unless the response's
     ``x-should-retry`` header says otherwise; exhausted quota (HTTP 429 with
     code ``insufficient_quota``) is not retried.  A failure that is not retried,
-    or that outlasts the retry budget, raises :class:`JudgeError`, as does a
-    response without the requested structured output.
+    or that outlasts the retry budget, raises :class:`JudgeError`.  A rejection
+    of the request's content raises its subclass :class:`JudgeContentError`: a
+    refusal, a response without the requested structured output, an output cut
+    off at the token limit, a response stopped by the content filter, and HTTP
+    400 with one of :data:`CONTENT_REJECTION_CODES`.  HTTP 400 with code
+    ``context_length_exceeded`` raises :class:`ContextLengthError`.
 
     The first attempt may take up to ``timeout`` seconds, and each retry's
     timeout is cut to the time left in the budget, so a request takes about
@@ -250,7 +256,16 @@ def _sdk_client(provider: str, is_async: bool, base_url: str | None, timeout: fl
 
 
 def _failure(request: dict[str, Any], exc: BaseException) -> JudgeError:
-    return JudgeError(f"Request to {request.get('model')} failed: {type(exc).__name__}: {exc}")
+    """The :class:`JudgeError` for a request that failed for good with ``exc``, of the class its cause calls for."""
+    message = f"Request to {request.get('model')} failed: {type(exc).__name__}: {exc}"
+    if isinstance(exc, openai.APIStatusError) and exc.status_code == 400:
+        if exc.code == "context_length_exceeded":
+            return ContextLengthError(message)
+        if exc.code in CONTENT_REJECTION_CODES:
+            return JudgeContentError(message)
+    if isinstance(exc, (openai.LengthFinishReasonError, openai.ContentFilterFinishReasonError)):
+        return JudgeContentError(message)
+    return JudgeError(message)
 
 
 def _log_retry(request: dict[str, Any], exc: BaseException, wait: float) -> None:
@@ -266,8 +281,8 @@ def _unpack(completion: Any, request: dict[str, Any], structured: bool, count_to
         content = message.parsed
         if content is None:
             refusal = getattr(message, "refusal", None)
-            raise JudgeError(f"{request.get('model')} returned no structured output"
-                             + (f" (refusal: {refusal})" if refusal else ""))
+            raise JudgeContentError(f"{request.get('model')} returned no structured output"
+                                    + (f" (refusal: {refusal})" if refusal else ""))
     else:
         content = message.content
     if not count_token:

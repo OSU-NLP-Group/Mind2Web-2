@@ -14,7 +14,9 @@ import openai
 import pytest
 from pydantic import BaseModel
 
-from mind2web2.llm_client import DEFAULT_JUDGE_MODEL, JudgeConfig, JudgeError, LLMClient, base_client
+from mind2web2.llm_client import (
+    DEFAULT_JUDGE_MODEL, ContextLengthError, JudgeConfig, JudgeContentError, JudgeError, LLMClient, base_client,
+)
 
 # openai>=3 builds on httpx2; earlier releases on httpx.
 hx = importlib.import_module("httpx2" if importlib.util.find_spec("httpx2") else "httpx")
@@ -224,11 +226,43 @@ def test_an_unreachable_server_fails_later_requests_at_their_first_attempt(monke
     assert endpoint.calls == 2
 
 
-def test_missing_structured_output_raises_judge_error(monkeypatch):
+def test_a_refusal_raises_judge_content_error(monkeypatch):
     completions = ScriptedCompletions(completion(parsed=None, refusal="I can't help with that."))
     client = make_client(completions, monkeypatch, judge=JudgeConfig())
-    with pytest.raises(JudgeError, match="refusal: I can't help with that"):
+    with pytest.raises(JudgeContentError, match="refusal: I can't help with that"):
         asyncio.run(client.async_response(messages=MESSAGES, response_format=Verdict))
+
+
+@pytest.mark.parametrize("error, expected", [
+    (status_error(openai.BadRequestError, 400, code="context_length_exceeded"), ContextLengthError),
+    (status_error(openai.BadRequestError, 400, code="content_policy_violation"), JudgeContentError),
+    (status_error(openai.BadRequestError, 400, code="invalid_prompt"), JudgeContentError),
+    (status_error(openai.BadRequestError, 400, code="content_filter"), JudgeContentError),
+    (openai.LengthFinishReasonError(completion=completion()), JudgeContentError),
+    (openai.ContentFilterFinishReasonError(), JudgeContentError),
+])
+def test_rejections_of_a_requests_content_raise_judge_content_error(monkeypatch, error, expected):
+    completions = ScriptedCompletions(error)
+    client = make_client(completions, monkeypatch, judge=JudgeConfig())
+    with pytest.raises(JudgeError) as raised:
+        asyncio.run(client.async_response(messages=MESSAGES, response_format=Verdict))
+    assert type(raised.value) is expected
+    assert len(completions.calls) == 1
+
+
+@pytest.mark.parametrize("error", [
+    status_error(openai.BadRequestError, 400),
+    status_error(openai.BadRequestError, 400, code="unsupported_parameter"),
+    status_error(openai.AuthenticationError, 401),
+    status_error(openai.NotFoundError, 404, code="model_not_found"),
+    status_error(openai.RateLimitError, 429, code="insufficient_quota"),
+])
+def test_failures_of_the_judges_configuration_or_account_are_not_content_rejections(monkeypatch, error):
+    completions = ScriptedCompletions(error)
+    client = make_client(completions, monkeypatch, judge=JudgeConfig())
+    with pytest.raises(JudgeError) as raised:
+        asyncio.run(client.async_response(messages=MESSAGES, response_format=Verdict))
+    assert type(raised.value) is JudgeError
 
 
 def test_synchronous_client_behaves_like_the_async_one(monkeypatch):
