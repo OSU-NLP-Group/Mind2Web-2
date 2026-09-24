@@ -70,10 +70,6 @@ export async function getIssues() {
     return (await request('GET', '/api/issues')).json();
 }
 
-export async function scanAll() {
-    return (await request('POST', '/api/scan')).json();
-}
-
 export async function startBatch(items) {
     return (await request('POST', '/api/capture/batch/start', { items })).json();
 }

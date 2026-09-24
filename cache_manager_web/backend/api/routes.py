@@ -785,19 +785,6 @@ async def upload_pdf(task_id: str, url: str = Query(...), file: UploadFile = Fil
     return {"ok": True, "url": stored, "content_type": "pdf"}
 
 
-# ---------------------------------------------------------------------------
-# Scan
-# ---------------------------------------------------------------------------
-
-@router.post("/scan")
-async def scan_all():
-    """Scan every URL for issues again, in a worker thread."""
-    global _url_issue_cache
-    _require_loaded()
-    _url_issue_cache = await asyncio.to_thread(_scan_issues, _cm)
-    issue_index = _issue_index(_url_issue_cache)
-    return {"issue_count": len(issue_index), "issues": issue_index}
-
 
 # ---------------------------------------------------------------------------
 # Helpers

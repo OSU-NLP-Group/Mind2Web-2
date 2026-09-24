@@ -193,7 +193,7 @@ def test_failed_urls_are_definite_issues_and_a_capture_replaces_them(tmp_path):
         assert {url: state[0] for url, state in url_states(c).items()} == {
             A: "web", "https://example.com/blocked": "web"}
         assert c.get("/api/issues").json()["issue_index"] == []
-        assert c.post("/api/scan").json()["issue_count"] == 0
+        assert c.post("/api/load", json={"path": str(tmp_path / "agent")}).json()["issue_index"] == []
 
 
 def test_flagging_keeps_the_stored_page(tmp_path):
