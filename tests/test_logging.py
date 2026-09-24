@@ -100,6 +100,29 @@ def test_package_records_during_an_answer_go_to_its_log_and_the_others_to_the_ru
     assert "Request details" in read(answer_stem, ".jsonl")
 
 
+def test_warnings_of_other_loggers_are_routed_like_the_packages(tmp_path, capsys):
+    """The OpenAI SDK, the browser library, and an eval script's own module logger are outside the package."""
+    other = logging.getLogger("openai._base_client")
+    answer_logger, timestamp = create_logger("answer_1.md", str(tmp_path / "answer"), enable_console=False)
+    run_log = configure_run_logging(tmp_path / "run", "evaluate")
+    try:
+        other.warning("Outside any answer")
+        other.info("Too detailed for the run log")
+        with logging_to(answer_logger):
+            other.warning("During the answer")
+    finally:
+        close_run_logging()
+        cleanup_logger(answer_logger)
+    other.warning("After the run")  # to the root logger's handlers as usual
+
+    run_text = read(run_log, ".log")
+    assert "Outside any answer" in run_text and "During the answer" not in run_text
+    assert "Too detailed" not in read(run_log, ".jsonl")
+    assert "During the answer" in read(tmp_path / "answer" / f"{timestamp}_answer_1.md", ".log")
+    err = capsys.readouterr().err
+    assert "Outside any answer" in err and "During the answer" not in err
+
+
 def test_the_console_leaves_out_records_marked_for_the_files_only(tmp_path, capsys):
     run_log = configure_run_logging(tmp_path, "evaluate")
     try:
@@ -113,12 +136,12 @@ def test_the_console_leaves_out_records_marked_for_the_files_only(tmp_path, caps
 
 
 def test_closing_the_run_log_lets_the_package_logger_propagate_again(tmp_path):
-    package = logging.getLogger("mind2web2")
-    before = (package.level, package.propagate, list(package.handlers))
+    package, root = logging.getLogger("mind2web2"), logging.getLogger()
+    before = (package.level, package.propagate, list(package.handlers), list(root.handlers))
     configure_run_logging(tmp_path, "evaluate", console=False)
     assert package.propagate is False
     close_run_logging()
-    assert (package.level, package.propagate, list(package.handlers)) == before
+    assert (package.level, package.propagate, list(package.handlers), list(root.handlers)) == before
 
 
 def test_answers_with_the_same_file_name_get_their_own_loggers_which_are_forgotten_when_closed(tmp_path):

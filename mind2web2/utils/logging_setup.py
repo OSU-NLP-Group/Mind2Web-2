@@ -22,9 +22,11 @@ The package's own modules (the judge client, the page cache, the browser)
 log through ordinary module loggers under ``mind2web2``.  While a command's
 logging is configured, a record they emit during an answer's evaluation (see
 :func:`logging_to`) goes to that answer's log instead of the run's, so a judge
-request's retries appear next to the check that made it.  Without
-:func:`configure_run_logging`, as when the package is used as a library, those
-module loggers propagate to the root logger as usual.
+request's retries appear next to the check that made it.  Warnings and
+errors of other loggers (the OpenAI SDK, the browser library, an eval
+script's own module logger) are routed the same way.  Without
+:func:`configure_run_logging`, as when the package is used as a library, the
+package's module loggers propagate to the root logger as usual.
 """
 from __future__ import annotations
 
@@ -185,8 +187,13 @@ def cleanup_logger(logger: Logger) -> None:
 
 @contextmanager
 def logging_to(logger: Logger) -> Iterator[None]:
-    """Inside this block (and in asyncio tasks and threads started in it), the package's module loggers
-    write to ``logger`` instead of the run's log, while :func:`configure_run_logging` is in effect."""
+    """Inside this block, the package's module loggers write to ``logger`` instead of the run's log.
+
+    This holds while :func:`configure_run_logging` is in effect, and also in
+    the asyncio tasks created in the block and in the functions it runs with
+    ``asyncio.to_thread``, which inherit the block's context; a thread
+    started with ``threading.Thread`` does not.
+    """
     token = _answer_logger.set(logger)
     try:
         yield
@@ -207,6 +214,13 @@ def _for_console(record: logging.LogRecord) -> bool:
     return getattr(record, "console", True)
 
 
+class _ToPackageHandlers(logging.Handler):
+    """Handles a record of a logger outside the package with the ``mind2web2`` logger's handlers."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        logging.getLogger(_PACKAGE).handle(record)
+
+
 class _OutsideAnswers(logging.Filter):
     """Passes only the records emitted outside an answer's evaluation; those inside go to its log."""
 
@@ -216,6 +230,7 @@ class _OutsideAnswers(logging.Filter):
 
 _PACKAGE = "mind2web2"
 _run_handlers: list[logging.Handler] = []
+_root_handler: Optional[logging.Handler] = None
 _saved_package_state: Optional[tuple[int, bool]] = None
 
 
@@ -227,9 +242,12 @@ def configure_run_logging(log_dir: Optional[Path], name: str, console: bool = Tr
     Records of the ``mind2web2`` loggers emitted during an answer's evaluation
     go to that answer's log instead (:func:`logging_to`).  The ``mind2web2``
     logger stops propagating to the root logger until
-    :func:`close_run_logging`, which a command calls when it ends.
+    :func:`close_run_logging`, which a command calls when it ends, and the
+    root logger gets a handler that routes the WARNING and higher records of
+    every other logger the same way, so that they are neither lost nor
+    printed through the progress bars.
     """
-    global _saved_package_state
+    global _saved_package_state, _root_handler
     close_run_logging()
     package = logging.getLogger(_PACKAGE)
     _saved_package_state = (package.level, package.propagate)
@@ -253,12 +271,17 @@ def configure_run_logging(log_dir: Optional[Path], name: str, console: bool = Tr
     for handler in handlers:
         package.addHandler(handler)
     _run_handlers[:] = handlers
+    _root_handler = _ToPackageHandlers(logging.WARNING)
+    logging.getLogger().addHandler(_root_handler)
     return stem
 
 
 def close_run_logging() -> None:
     """Undo :func:`configure_run_logging`: close the run log and let the ``mind2web2`` logger propagate again."""
-    global _saved_package_state
+    global _saved_package_state, _root_handler
+    if _root_handler is not None:
+        logging.getLogger().removeHandler(_root_handler)
+        _root_handler = None
     package = logging.getLogger(_PACKAGE)
     for handler in _run_handlers:
         package.removeHandler(handler)
