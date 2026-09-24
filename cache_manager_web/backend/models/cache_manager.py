@@ -44,7 +44,7 @@ from dataclasses import dataclass
 import logging
 
 # _write_atomic: the cache's atomic, fsynced file replacement, used for the review-state files too
-from mind2web2.utils.cache_filesys import CacheFileSys, _write_atomic, storage_key
+from mind2web2.utils.cache_filesys import CacheFileSys, _raw_form, _write_atomic, storage_key
 from mind2web2.utils.url_tools import normalize_url_simple
 
 logger = logging.getLogger(__name__)
@@ -677,14 +677,15 @@ def _page_form(url: str) -> str:
     It is the URL's normalized form (:func:`normalize_url_simple`), which the
     cache also matches stored pages by, except for a URL whose storage key
     :func:`storage_key` would change again (a percent-decoded ``#`` or
-    ``%XX``): such a URL is matched only by its storage key, because
-    normalizing it can turn it into another page's URL, as with
-    ``.../search?q=C%23`` and ``.../search?q=C``.  A URL that cannot be parsed
-    is its own form.
+    ``%XX``): such a URL is matched by its storage key with UTM parameters
+    removed, ``http`` made ``https``, and ``www.`` dropped, as the cache
+    matches such keys, because normalizing it can turn it into another page's
+    URL, as with ``.../search?q=C%23`` and ``.../search?q=C``.  A URL that
+    cannot be parsed is its own form.
     """
     try:
         key = storage_key(url)
-        return key if storage_key(key) != key else normalize_url_simple(url)
+        return _raw_form(key) if storage_key(key) != key else normalize_url_simple(url)
     except ValueError:
         return url
 

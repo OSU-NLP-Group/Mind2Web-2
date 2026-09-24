@@ -348,6 +348,19 @@ def test_two_managers_add_one_pending_entry_for_two_spellings_of_a_page(tmp_path
     assert second.url_state("task", "https://example.com/new") == "pending"
 
 
+def test_a_pending_spelling_with_an_encoded_hash_is_matched_as_the_cache_matches_its_key(tmp_path):
+    """``?q=C%23`` names another page than ``?q=C``; its spellings that differ in scheme, ``www.``, or UTM
+    parameters name the same page."""
+    CacheFileSys(str(tmp_path / "agent" / "task")).put_web(A, "page a", png_bytes())
+    manager = CacheManager()
+    manager.load_agent_cache(tmp_path / "agent")
+
+    assert manager.add_pending_url("task", "https://example.com/search?q=C%23")
+    assert manager.add_pending_url("task", "https://example.com/search?q=C")
+    assert not manager.add_pending_url("task", "http://www.example.com/search?q=C%23&utm_source=x")
+    assert sorted(pending(tmp_path)) == ["https://example.com/search?q=C", "https://example.com/search?q=C%23"]
+
+
 def test_deleting_a_pending_url_deletes_its_other_spellings(tmp_path):
     task_dir = tmp_path / "agent" / "task"
     CacheFileSys(str(task_dir)).put_web(A, "page a", png_bytes())
