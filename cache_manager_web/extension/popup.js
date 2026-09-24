@@ -215,6 +215,11 @@ captureBtn.addEventListener('click', async () => {
             captureBtn.textContent = 'Captured, but not marked fixed';
             captureBtn.className = 'capture-btn error';
             targetSection.insertAdjacentHTML('beforeend', `<div class="no-target">${escHtml(result.warning)}</div>`);
+            setTimeout(() => {  // the warning stays; the page can be captured again
+                captureBtn.textContent = 'Capture Again';
+                captureBtn.className = 'capture-btn';
+                captureBtn.disabled = false;
+            }, 3000);
         } else if (result?.success) {
             captureBtn.textContent = 'Captured!';
             captureBtn.className = 'capture-btn success';

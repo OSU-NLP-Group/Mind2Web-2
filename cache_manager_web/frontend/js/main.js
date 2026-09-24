@@ -368,11 +368,15 @@ async function onBatchRecapture() {
  */
 async function onStopBatch() {
     if (!confirm('Stop the batch? URLs it has not captured yet stay red.')) return;
+    const button = $('#btn-batch-stop');
+    button.disabled = true;  // one stop request at a time
     try {
         await api.stopBatch();
         setState({ batchActive: false, batchCompleted: 0, batchTotal: 0 });
     } catch (err) {
         toast('Stopping the batch failed: ' + err.message, 'error');
+    } finally {
+        button.disabled = false;
     }
 }
 

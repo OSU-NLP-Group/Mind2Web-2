@@ -3,6 +3,7 @@
 from __future__ import annotations
 import asyncio
 import base64
+import ipaddress
 import json
 import logging
 import os
@@ -20,7 +21,6 @@ from mind2web2.utils.page_info_retrieval import html_to_markdown
 from mind2web2.utils.url_tools import normalize_url_simple
 
 from .. import config
-from ..config import LOOPBACK_HOSTS
 from ..models import CacheManager, KeywordDetector
 
 logger = logging.getLogger(__name__)
@@ -932,9 +932,10 @@ def _redirect_url(actual_url: Optional[str], request: Request) -> Optional[str]:
     """The URL a capture was redirected to, if the page is to be stored under it too; else ``None``.
 
     ``actual_url`` counts only when it is an http(s) URL that the cache can
-    store (see :func:`_valid_url`) and its host is not this server's own
-    (the ``Host`` of ``request``; the loopback names count as one host), so
-    a capture never adds the Cache Manager's own address to a task.
+    store (see :func:`_valid_url`) and its host is neither the ``Host`` of
+    ``request`` nor an address of this machine (:func:`_names_this_machine`),
+    whichever address the reviewer reached the server at, so a capture never
+    adds the Cache Manager's own address to a task.
     """
     if not actual_url:
         return None
@@ -942,10 +943,25 @@ def _redirect_url(actual_url: Optional[str], request: Request) -> Optional[str]:
         url = _valid_url(actual_url)
     except HTTPException:
         return None
-    host = lambda name: "loopback" if name in LOOPBACK_HOSTS else name
-    if host(urlparse(url).hostname) == host((request.url.hostname or "").strip("[]").lower()):
+    host = urlparse(url).hostname or ""
+    if _names_this_machine(host) or host == (request.url.hostname or "").strip("[]").lower():
         return None
     return url
+
+
+def _names_this_machine(host: str) -> bool:
+    """Whether ``host`` (lowercase, without brackets) is a loopback name or address, or the unspecified address.
+
+    A server bound to a wildcard address answers at all of these, and no page
+    that an answer cites is served from them.
+    """
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return address.is_loopback or address.is_unspecified
 
 
 async def _read_upload(file: UploadFile) -> bytes:

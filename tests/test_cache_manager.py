@@ -648,6 +648,18 @@ def test_captures_and_uploads_need_an_http_url_and_never_store_the_servers_own_a
         assert set(url_states(c)) == {A, B}
 
 
+@pytest.mark.parametrize("target", ["http://localhost:8000/", "http://127.0.0.2/", "http://[::1]:8000/",
+                                    "http://0.0.0.0:8000/", "http://review.localhost/", "http://192.168.1.20:8000/"])
+def test_a_redirect_to_this_machine_is_ignored_whatever_address_the_server_was_reached_at(target):
+    """A server bound to 0.0.0.0 and reached at its LAN address still answers at its loopback addresses."""
+    from starlette.requests import Request
+    from cache_manager_web.backend.api.routes import _redirect_url
+    request = Request({"type": "http", "method": "POST", "scheme": "http", "path": "/api/capture",
+                       "query_string": b"", "headers": [(b"host", b"192.168.1.20:8000")]})
+    assert _redirect_url(target, request) is None
+    assert _redirect_url("http://192.168.1.21/page", request) == "http://192.168.1.21/page"
+
+
 def test_a_redirect_never_replaces_a_page_listed_under_a_url_that_differs_in_letter_case(tmp_path):
     news, other = "https://example.com/News", "https://example.com/other"
     task_dir = tmp_path / "agent" / "task"
