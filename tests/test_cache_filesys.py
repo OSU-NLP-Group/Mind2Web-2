@@ -142,6 +142,14 @@ def test_a_url_finds_the_page_stored_with_its_own_letter_case_first(tmp_path):
     assert CacheFileSys(str(tmp_path)).lookup("https://example.com/docs/PAGE") == "https://example.com/DOCS/page"
 
 
+def test_a_raw_url_without_its_own_page_finds_no_other_page(tmp_path):
+    """``?q=C%23`` normalizes to ``?q=C``; the cached ``?q=C`` page is not the page it names."""
+    cache = CacheFileSys(str(tmp_path))
+    cache.put_web("https://example.com/search?q=C", "C", png_bytes())
+    assert cache.lookup("https://example.com/search?q=C%23") is None
+    assert cache.lookup("https://example.com/tags/%23python") is None
+
+
 def test_raw_keys_match_their_own_urls_and_capture_no_others(tmp_path):
     """A key that percent-decoding would change again is found only through its own URL."""
     cache = CacheFileSys(str(tmp_path))

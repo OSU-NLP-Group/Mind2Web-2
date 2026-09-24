@@ -13,7 +13,8 @@ named by the MD5 hex digest of that key (``<stem>``).  Lookups accept other
 surface forms of a stored URL; see :meth:`CacheFileSys.lookup`.
 
 Every change is written to disk, and fsynced, before the call returns.
-Content files and ``index.json`` are replaced atomically, and each change,
+Each content file and ``index.json`` is replaced atomically (a page's text and
+screenshot are two files, each replaced on its own), and each change,
 from writing the content files to deleting files the change replaced, happens
 under a lock, with ``index.json`` re-read and merged before it is written.
 Several processes (the crawler, an evaluation run, the Cache Manager) can
@@ -41,7 +42,7 @@ from .url_tools import normalize_url_keep_case, normalize_url_simple, remove_utm
 
 try:
     import fcntl
-except ImportError:  # Windows: index updates are serialized within one process only.
+except ImportError:  # Windows: index updates are serialized only within one CacheFileSys instance.
     fcntl = None
 
 ContentType = Literal["web", "pdf"]
@@ -138,8 +139,7 @@ class _UrlIndex:
             if key in self._keys:
                 return key
             raw_keys = self._raw_by_form.get(_raw_form(key))
-            if raw_keys:
-                return raw_keys[0]
+            return raw_keys[0] if raw_keys else None
         if url in self._keys and not _is_raw(url):
             return url
         for normalize, by_form in ((normalize_url_keep_case, self._by_case),
@@ -239,9 +239,10 @@ class CacheFileSys:
         found only for a ``url`` whose storage key is that key, or is raw too
         and has the same :func:`_raw_form` (UTM parameters, scheme, and
         ``www.`` disregarded; among several such keys, the one stored first
-        wins).  These checks come before the rules above, which would let such
-        a key capture other pages: the key of ``.../search?q=C%23`` has the
-        normalized form of ``.../search?q=C``.
+        wins).  Such a ``url`` finds no other key: the rules above would match
+        it to another page, since ``.../search?q=C%23`` has the normalized form
+        of ``.../search?q=C``.  For the same reason these checks come before
+        the rules, so that a raw key never captures another page's URL.
 
         The URL returned is the key, or for a raw key a re-encoded form whose
         storage key is the key, so that passing it to any method of this class
@@ -280,7 +281,9 @@ class CacheFileSys:
     def get_web(self, url: str, get_screenshot: bool = True) -> Tuple[str, Optional[bytes]]:
         """The cached text and JPEG screenshot of a web page (screenshot ``None`` if not requested).
 
-        Raises ``KeyError`` if no web page is cached for ``url``.
+        Raises ``KeyError`` if no web page is cached for ``url``, and
+        ``OSError`` if its files cannot be read, for example because another
+        process removed the page after this instance read the index.
         """
         key = self._find_key(url)
         if key is None or self._types[key] != "web":
@@ -294,7 +297,7 @@ class CacheFileSys:
         return text, screenshot
 
     def get_pdf(self, url: str) -> bytes:
-        """The cached PDF bytes; raises ``KeyError`` if no PDF is cached for ``url``."""
+        """The cached PDF bytes; raises ``KeyError`` if no PDF is cached for ``url``, ``OSError`` as :meth:`get_web`."""
         key = self._find_key(url)
         if key is None or self._types[key] != "pdf":
             raise KeyError(f"No PDF content found for URL: {url}")
