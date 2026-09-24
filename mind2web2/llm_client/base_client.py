@@ -66,7 +66,8 @@ class LLMClient:
     parameters and return the parsed Pydantic object (structured output) or the
     message text; with ``count_token=True`` they return ``(result, tokens)``
     where ``tokens`` has ``input_tokens``, ``cached_input_tokens``,
-    ``output_tokens``, and ``reasoning_tokens``.
+    ``output_tokens``, ``reasoning_tokens``, and ``served_model`` (the model
+    the server reports serving the request, when it reports one).
     """
 
     def __init__(
