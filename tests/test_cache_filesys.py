@@ -343,6 +343,16 @@ def test_removing_a_page_keeps_failures_of_other_urls(tmp_path):
     assert list(cache.failures()) == ["https://example.com/c"]
 
 
+def test_removing_a_page_keeps_the_failure_of_a_url_differing_in_letter_case(tmp_path):
+    cache = CacheFileSys(str(tmp_path))
+    cache.put_web("https://example.com/docs/Page", "page", png_bytes())
+    cache.record_failure("https://example.com/docs/page", "HTTP 503")  # its own record: maybe another page
+    cache.record_failure("https://example.com/docs/Page/", "timed out")  # this page's URL: hidden
+    assert cache.failures() == {}
+    assert cache.remove("https://example.com/docs/Page") == "web"
+    assert list(cache.failures()) == ["https://example.com/docs/page"]
+
+
 def test_failure_records_are_matched_by_the_page_rules(tmp_path):
     cache = CacheFileSys(str(tmp_path))
     cache.record_failure("https://example.com/Docs/Page", "HTTP 503")

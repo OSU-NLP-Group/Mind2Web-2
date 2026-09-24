@@ -425,9 +425,12 @@ class CacheFileSys:
         If another process has removed the page, no files are deleted and
         ``None`` is returned.
 
-        Failure records that :meth:`failure` ignores because this page is
-        stored for their URL are deleted with the page, so that they do not
-        reappear.  Other failure records are left to :meth:`clear_failure`.
+        Failure records that storing this page would have deleted (those
+        whose URL finds the page by a rule that respects letter case), and
+        that :meth:`failure` ignores while the page is stored, are deleted
+        with the page, so that they do not reappear.  Other failure records,
+        including one for a URL that differs from the page's in letter case
+        only and that a server may serve as another page, are kept.
         """
         with self._index_lock():
             key = self._find_key(url)
@@ -435,7 +438,7 @@ class CacheFileSys:
                 return None
             failures = self._load_failures()
             hidden = [failure_key for failure_key in failures
-                      if self._stored_key(_address(failure_key)) == key]
+                      if self._stored_key(_address(failure_key), ignore_case=False) == key]
             on_disk = self._update_json(self.index_file, key, None)
             content_type = on_disk if on_disk in FILE_EXTENSIONS else None
             self._discard(key)
@@ -501,10 +504,13 @@ class CacheFileSys:
         return {key: record for key, record in self._read_json(self.failures_file).items()
                 if isinstance(record, dict)}
 
-    def _stored_key(self, url: str) -> Optional[str]:
-        """The key of the page ``url`` refers to, or ``None``, also when ``url`` cannot be parsed."""
+    def _stored_key(self, url: str, ignore_case: bool = True) -> Optional[str]:
+        """The key of the page ``url`` refers to, or ``None``, also when ``url`` cannot be parsed.
+
+        ``ignore_case`` is as in :meth:`_UrlIndex.find`.
+        """
         try:
-            return self._find_key(url)
+            return self._pages.find(url, ignore_case)
         except ValueError:
             return None
 
