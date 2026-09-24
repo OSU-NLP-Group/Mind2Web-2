@@ -263,10 +263,17 @@ def _unpack(completion: Any, request: dict[str, Any], structured: bool, count_to
                              + (f" (refusal: {refusal})" if refusal else ""))
     else:
         content = message.content
-    return (content, _token_counts(completion.usage)) if count_token else content
+    if not count_token:
+        return content
+    tokens: dict[str, Any] = _token_counts(completion.usage)
+    served_model = getattr(completion, "model", None)
+    if served_model:
+        tokens["served_model"] = served_model
+    return content, tokens
 
 
 def _token_counts(usage: Any) -> dict[str, int]:
+    """Token counts of one completion, with 0 for the counts the server omits."""
     if usage is None:  # some OpenAI-compatible servers omit usage
         return {}
     prompt_details = getattr(usage, "prompt_tokens_details", None)

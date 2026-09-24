@@ -28,8 +28,9 @@ include a ``leaderboard_entry`` only when they are computed over a task list
 with exactly 3 runs, the leaderboard's setting; otherwise it is ``None``.
 
 Scores are comparable only when one judge model produced them all, so the
-metrics count the results per judge model and the report warns when there is
-more than one.
+metrics count the results per configured judge model and per model that the
+server reported serving the requests, and the report warns when either count
+has more than one entry.
 """
 from __future__ import annotations
 
@@ -63,8 +64,11 @@ class AnswerRecord:
     usable evaluation result; ``word_count`` is ``None`` when there is no
     answer.  ``stale_result`` is true when the answer's latest result records
     the SHA-256 of a different answer file, which leaves ``score`` ``None``.
-    ``judge_model`` is the model that scored the answer, ``"unknown"`` for a
-    result that does not record it, and ``None`` without a score.
+    ``judge_model`` is the configured judge model that scored the answer,
+    ``"unknown"`` for a result that does not record it, and ``None`` without a
+    score.  ``served_models`` names the models that the server reported
+    serving the answer's judge requests; it is empty without a score or when
+    the result does not record them.
     """
 
     task_id: str
@@ -74,6 +78,7 @@ class AnswerRecord:
     word_count: int | None = None
     time_seconds: float | None = None
     judge_model: str | None = None
+    served_models: tuple[str, ...] = ()
     stale_result: bool = False
 
 
@@ -180,9 +185,15 @@ def collect_records(
                 word_count=count_words(text),
                 time_seconds=metadata.time_seconds if metadata else None,
                 judge_model=_judge_model(result) if score is not None else None,
+                served_models=_served_models(result) if score is not None else (),
                 stale_result=stale,
             ))
     return records, num_runs
+
+
+def _served_models(result: dict) -> tuple[str, ...]:
+    """The models that served a result's judge requests, from ``judge_usage.served_models``."""
+    return tuple(sorted((result.get("judge_usage") or {}).get("served_models") or {}))
 
 
 def _judge_model(result: dict) -> str:
@@ -251,6 +262,8 @@ def compute_metrics(
         ),
         "judge_models": dict(sorted(Counter(
             rec.judge_model for rec in records if rec.judge_model is not None).items())),
+        "served_models": dict(sorted(Counter(
+            model for rec in records for model in rec.served_models).items())),
         "missing_answers": [
             {"task_id": rec.task_id, "run": rec.run} for rec in records if not rec.answer_present
         ],
@@ -354,6 +367,11 @@ def format_report(metrics: dict, max_listed: int = 20) -> str:
         counts = ", ".join(f"{model}: {n}" for model, n in judges.items())
         lines.append(f"  WARNING: results come from different judge models ({counts}); "
                      f"re-evaluate with one judge before comparing scores")
+    served = metrics["served_models"]
+    if len(served) > 1:
+        counts = ", ".join(f"{model}: {n}" for model, n in served.items())
+        lines.append(f"  WARNING: the server reported different models serving the judge requests "
+                     f"(answers per model: {counts}); scores from different models are not comparable")
 
     if metrics["by_domain"]:
         lines.append("  By domain (Partial Completion / Success Rate):")

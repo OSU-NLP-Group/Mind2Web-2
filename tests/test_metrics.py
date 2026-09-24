@@ -41,10 +41,10 @@ def answer_text(words: int) -> str:
     return " ".join(["https://example.com/source"] + ["word"] * (words - 1))
 
 
-def write_result(results_root: Path, task: str, run: int, score: float, timestamp: str) -> None:
+def write_result(results_root: Path, task: str, run: int, score: float, timestamp: str, **fields) -> None:
     result_dir = answer_output_dir(results_root, AGENT, task, f"answer_{run}.md") / "results"
     result_dir.mkdir(parents=True, exist_ok=True)
-    result = {"agent_name": AGENT, "answer_name": f"answer_{run}.md", "final_score": score}
+    result = {"agent_name": AGENT, "answer_name": f"answer_{run}.md", "final_score": score, **fields}
     (result_dir / result_file_name(timestamp, f"answer_{run}.md")).write_text(json.dumps(result))
 
 
@@ -154,6 +154,25 @@ def test_tasks_are_discovered_only_where_there_are_answers(tmp_path):
     (answers_root / AGENT / "t9").mkdir()
     (answers_root / AGENT / "t9" / "notes.txt").write_text("not an answer")
     assert discover_tasks(AGENT, answers_root, results_root) == ["t1", "t2", "t3"]
+
+
+def test_metrics_count_configured_and_served_judge_models(tmp_path):
+    answers_root, results_root = build_submission(tmp_path)
+
+    def judged(task: str, run: int, model: str, served: dict) -> None:
+        write_result(results_root, task, run, 1.0, "20260103_120000",
+                     judge={"model": model}, judge_usage={"served_models": served})
+
+    judged("t1", 1, "gpt-6-luna", {"gpt-6-luna-2026-05-01": 40})
+    judged("t1", 2, "gpt-6-luna", {"gpt-6-luna-2026-08-01": 38})
+    records, num_runs = collect_records(AGENT, ["t1"], answers_root, results_root)
+    metrics = compute_metrics(records, [TaskInfo("t1")], num_runs, AGENT)
+
+    assert metrics["judge_models"] == {"gpt-6-luna": 2, "unknown": 1}
+    assert metrics["served_models"] == {"gpt-6-luna-2026-05-01": 1, "gpt-6-luna-2026-08-01": 1}
+    report = format_report(metrics)
+    assert "results come from different judge models" in report
+    assert "different models serving the judge requests" in report
 
 
 def test_latest_result_is_chosen_by_timestamp(tmp_path):

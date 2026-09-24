@@ -8,7 +8,7 @@ one answer, and :class:`JudgeError` marks a request that failed for good.
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 DEFAULT_JUDGE_MODEL = "gpt-6-luna"
@@ -60,7 +60,15 @@ class JudgeError(RuntimeError):
 
 @dataclass
 class JudgeUsage:
-    """Judge requests made while evaluating one answer, with their token usage."""
+    """Judge requests made while evaluating one answer, with their token usage.
+
+    ``served_models`` counts the successful requests per model name that the
+    server reported in its responses.  It can differ from the configured
+    model: an alias such as ``gpt-6-luna`` names a dated snapshot, an Azure
+    deployment name can point at any model, and a server behind
+    ``--judge_base_url`` may map names.  Servers that report no model are not
+    counted.
+    """
 
     requests: int = 0
     failed_requests: int = 0
@@ -68,14 +76,18 @@ class JudgeUsage:
     cached_input_tokens: int = 0
     output_tokens: int = 0
     reasoning_tokens: int = 0
+    served_models: dict[str, int] = field(default_factory=dict)
 
-    def record(self, tokens: dict[str, int]) -> None:
-        """Add one successful request with the token counts returned by the client."""
+    def record(self, tokens: dict[str, Any]) -> None:
+        """Add one successful request with the token counts and served model returned by the client."""
         self.requests += 1
         self.input_tokens += tokens.get("input_tokens", 0)
         self.cached_input_tokens += tokens.get("cached_input_tokens", 0)
         self.output_tokens += tokens.get("output_tokens", 0)
         self.reasoning_tokens += tokens.get("reasoning_tokens", 0)
+        served_model = tokens.get("served_model")
+        if served_model:
+            self.served_models[served_model] = self.served_models.get(served_model, 0) + 1
 
-    def as_dict(self) -> dict[str, int]:
+    def as_dict(self) -> dict[str, Any]:
         return asdict(self)

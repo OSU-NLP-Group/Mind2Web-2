@@ -38,7 +38,7 @@ def completion(parsed=None, content=None, refusal=None):
         completion_tokens_details=SimpleNamespace(reasoning_tokens=3),
     )
     message = SimpleNamespace(parsed=parsed, content=content, refusal=refusal)
-    return SimpleNamespace(choices=[SimpleNamespace(message=message)], usage=usage)
+    return SimpleNamespace(choices=[SimpleNamespace(message=message)], usage=usage, model="snapshot-2026-01-01")
 
 
 class ScriptedCompletions:
@@ -92,7 +92,8 @@ def test_every_request_goes_to_the_judge_model_with_the_judge_parameters(monkeyp
     result, tokens = asyncio.run(client.async_response(
         model="o4-mini", temperature=0.0, messages=MESSAGES, response_format=Verdict, count_token=True))
     assert result is verdict
-    assert tokens == {"input_tokens": 10, "cached_input_tokens": 4, "output_tokens": 5, "reasoning_tokens": 3}
+    assert tokens == {"input_tokens": 10, "cached_input_tokens": 4, "output_tokens": 5, "reasoning_tokens": 3,
+                      "served_model": "snapshot-2026-01-01"}
     method, sent = completions.calls[0]
     assert method == "parse"
     assert sent == {"model": DEFAULT_JUDGE_MODEL, "reasoning_effort": "high",
