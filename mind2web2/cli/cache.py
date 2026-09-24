@@ -53,7 +53,7 @@ def register(subparsers) -> None:
                                             "<answers-dir>/<agent>/ with answer_<k>.md files)")
     parser.add_argument("--max-pages", type=_common.positive_int, default=5,
                         help="Browser pages open at once, across all tasks (default: %(default)s).")
-    parser.add_argument("--page-timeout", type=float, default=90.0,
+    parser.add_argument("--page-timeout", type=_common.positive_seconds, default=90.0,
                         help="Seconds one capture attempt may take (default: %(default)s).")
     parser.add_argument("--attempts", type=_common.positive_int, default=1,
                         help="Capture attempts per page when an attempt raises or times out (default: %(default)s).")

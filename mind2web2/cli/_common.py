@@ -18,6 +18,17 @@ def positive_int(text: str) -> int:
     return value
 
 
+def positive_seconds(text: str) -> float:
+    """``argparse`` type for a duration: a finite number of seconds greater than 0."""
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a number: {text!r}") from None
+    if not 0 < value < float("inf"):
+        raise argparse.ArgumentTypeError(f"must be a number of seconds greater than 0, got {text}")
+    return value
+
+
 def add_agent(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("agent", help="Agent name: the agent's directory name under the answers, cache, and results directories.")
 

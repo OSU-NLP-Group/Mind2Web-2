@@ -10,9 +10,11 @@ A crawl has two stages for each task:
    spellings that differ only in scheme, ``www.``, a trailing slash, the
    fragment, UTM parameters, or percent-encoding.  Spellings that differ in
    letter case are never grouped, since a server may serve different pages for
-   them.  Each group is listed once, under its preferred spelling: one that the
-   regular expression found in any of the answers, then an ``https`` one, then
-   the shortest.  The result is written to ``<cache_root>/<agent>/<task_id>.json``::
+   them, and a spelling with an encoded ``#`` or ``%`` (``?q=C%23``) is grouped
+   only with spellings stored under the same key, since decoding it can give
+   another page's URL (``?q=C``).  Each group is listed once, under its
+   preferred spelling: one that the regular expression found in any of the
+   answers, then an ``https`` one, then the shortest.  The result is written to ``<cache_root>/<agent>/<task_id>.json``::
 
        {"agent_name", "task_id", "total_unique_urls",
         "all_unique_urls": [url, ...],                 # case-insensitively sorted
@@ -64,7 +66,7 @@ from .api_tools.tool_pdf import PDFParser, is_pdf
 from .llm_client import DEFAULT_JUDGE_MODEL, LLMClient
 from .prompts.cache_prompts import llm_extraction_prompts
 from .submission import list_answer_files
-from .utils.cache_filesys import CacheFileSys
+from .utils.cache_filesys import CacheFileSys, storage_key
 from .utils.page_info_retrieval import BatchBrowserManager, Capture
 from .utils.url_tools import URLs, normalize_url_keep_case, regex_find_urls, remove_utm_parameters
 
@@ -116,6 +118,23 @@ class LLMUrlExtractor:
             return None
 
 
+def _page_form(url: str) -> str:
+    """The form by which spellings of one page are told apart from other pages' (see :func:`group_url_variants`).
+
+    It is ``url`` under :func:`~mind2web2.utils.url_tools.normalize_url_keep_case`,
+    except for a URL whose storage key
+    :func:`~mind2web2.utils.cache_filesys.storage_key` would change again (an
+    encoded ``#`` or ``%``, as in ``?q=C%23``): its form is that storage key,
+    since normalizing it can give another page's URL (``?q=C``), and the cache
+    finds its page only by that key.  A URL that cannot be parsed is its own form.
+    """
+    try:
+        key = storage_key(url)
+        return key if storage_key(key) != key else normalize_url_keep_case(url)
+    except ValueError:
+        return url
+
+
 def group_url_variants(urls: Iterable[str], preferred: Collection[str] = ()) -> List[List[str]]:
     """Group the spellings in ``urls`` that name one page, each group in order of preference.
 
@@ -124,14 +143,16 @@ def group_url_variants(urls: Iterable[str], preferred: Collection[str] = ()) -> 
     same form: when they differ only in scheme, ``www.``, a trailing slash,
     the fragment, UTM parameters, or percent-encoding.  Spellings that differ
     in letter case are never grouped, since a server may serve different pages
-    for them.  Within a group, spellings in ``preferred`` come first, then
+    for them, and a spelling with an encoded ``#`` or ``%`` (``?q=C%23``) is
+    grouped only with spellings stored under the same key, since decoding it
+    can give another page's URL (``?q=C``).  Within a group, spellings in ``preferred`` come first, then
     ``https`` spellings, then the shortest, then the alphabetically first.
     Groups are returned in order of their first spelling in ``urls``, and a
     spelling given several times appears once.
     """
     groups: Dict[str, List[str]] = {}
     for url in dict.fromkeys(urls):
-        groups.setdefault(normalize_url_keep_case(url), []).append(url)
+        groups.setdefault(_page_form(url), []).append(url)
     return [sorted(group, key=lambda u: (u not in preferred, not u.startswith("https://"), len(u), u.lower()))
             for group in groups.values()]
 
@@ -316,14 +337,6 @@ async def _store_page(url: str, cache: CacheFileSys, pdf_parser: PDFParser,
     return capture
 
 
-def _page_form(url: str) -> str:
-    """``url`` under :func:`~mind2web2.utils.url_tools.normalize_url_keep_case`, or as is if it cannot be parsed."""
-    try:
-        return normalize_url_keep_case(url)
-    except ValueError:
-        return url
-
-
 @dataclass
 class TaskCrawl:
     """What a crawl did with one task: its URL count, how many URLs ended in each outcome, and what went wrong."""
@@ -363,8 +376,9 @@ async def cache_answers(
     gains the content type of every cached URL and the reason of every failure.
 
     With ``retry_failed``, the failure records of each task's cache whose URLs
-    are not in the task's URL list are crawled too: evaluation records them
-    for the URLs it captures live, and they would otherwise stay for good.
+    are not in the task's URL list are crawled too, also for a task whose
+    answers cite no URL: evaluation records them for the URLs it captures
+    live, and they would otherwise stay for good.
 
     A task whose URL discovery raises, whose cache cannot be opened (an
     unreadable ``index.json`` or ``failures.json``), or whose metadata file
@@ -384,7 +398,7 @@ async def cache_answers(
             report.error = f"URL discovery failed: {type(exc).__name__}: {exc}"
             return task_id, {}
         report.urls, report.url_extraction_complete = len(found.urls), found.complete
-        if found.urls:
+        if found.urls or (retry_failed and (cache_root / agent / task_id).is_dir()):
             try:
                 caches[task_id] = CacheFileSys(str(cache_root / agent / task_id))
             except Exception as exc:  # CacheIndexError when index.json or failures.json cannot be read
@@ -413,7 +427,7 @@ async def cache_answers(
     jobs = [(t, url) for t, urls in task_urls.items() for url in urls]
     if retry_failed:
         for task_id, urls in task_urls.items():
-            if not urls:
+            if task_id not in caches:
                 continue
             listed = {_page_form(url) for url in urls}
             unlisted = [url for url in caches[task_id].failures() if _page_form(url) not in listed]

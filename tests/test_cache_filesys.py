@@ -160,6 +160,11 @@ def test_ignore_case_false_finds_only_pages_and_failures_in_the_urls_own_letter_
     assert cache.failure("https://example.com/docs/other", ignore_case=False) is None
     assert cache.failure("https://example.com/docs/other")["reason"] == "HTTP 503"
 
+    # A page in another letter case hides the record only when case is ignored.
+    cache.put_web("https://example.com/docs/other", "lower case", png_bytes())
+    assert cache.failure("https://example.com/Docs/Other", ignore_case=False)["reason"] == "HTTP 503"
+    assert cache.failure("https://example.com/Docs/Other") is None
+
 
 def test_raw_keys_match_their_own_urls_and_capture_no_others(tmp_path):
     """A key that percent-decoding would change again is found only through its own URL."""
@@ -402,6 +407,6 @@ def test_failure_records_being_read_are_never_changed(tmp_path, monkeypatch):
     assert all(records == copy for records, copy in installed)
 
     # A change after failure() found the record does not make it lose the record.
-    monkeypatch.setattr(cache, "_is_stored", lambda url: cache.clear_failure(url) and False)
+    monkeypatch.setattr(cache, "_is_stored", lambda url, ignore_case=True: cache.clear_failure(url) and False)
     assert cache.failure("https://example.com/b")["reason"] == "HTTP 503"
     assert CacheFileSys(str(tmp_path)).failures() == {}

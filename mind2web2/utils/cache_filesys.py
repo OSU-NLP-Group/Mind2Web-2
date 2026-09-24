@@ -332,13 +332,15 @@ class CacheFileSys:
         Matched like pages (see :meth:`lookup`, also for ``ignore_case``).  A record has ``reason`` (text), ``blocked`` (the site
         refused an automated browser, so a person may still capture it),
         ``attempts``, and ``time`` (ISO 8601, UTC, of the latest attempt).  A
-        record is ignored while a page is stored for its URL.  Storing a page
+        record is ignored while a page is stored for its URL (found by the
+        same rules, so with ``ignore_case=False`` only a page in the URL's own
+        letter case hides it).  Storing a page
         deletes its URL's record, so this happens when a process that has not
         seen a page another process stored records a failure for its URL.
         """
         failures = self._failures
         key = failures.find(url, ignore_case)
-        if key is None or self._is_stored(_address(key)):
+        if key is None or self._is_stored(_address(key), ignore_case):
             return None
         return dict(failures.records[key])
 
@@ -516,8 +518,8 @@ class CacheFileSys:
         except ValueError:
             return None
 
-    def _is_stored(self, url: str) -> bool:
-        return self._stored_key(url) is not None
+    def _is_stored(self, url: str, ignore_case: bool = True) -> bool:
+        return self._stored_key(url, ignore_case) is not None
 
     @staticmethod
     def _read_json(path: str) -> Dict[str, Any]:

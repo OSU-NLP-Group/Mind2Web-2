@@ -69,6 +69,16 @@ def test_spellings_of_one_page_are_grouped_in_order_of_preference():
     assert group_url_variants(urls, preferred={"http://www.example.com/a/"})[0][0] == "http://www.example.com/a/"
 
 
+def test_a_spelling_with_an_encoded_hash_is_not_grouped_with_the_page_it_decodes_to():
+    """The cache stores ``?q=C%23`` under ``?q=C#``, which a lookup of ``?q=C`` never finds, and vice versa."""
+    urls = ["https://example.com/search?q=C", "https://example.com/search?q=C%23",
+            "https://example.com/search?q=C%23#top", "https://example.com/search?q=C#top"]
+    assert group_url_variants(urls) == [
+        ["https://example.com/search?q=C", "https://example.com/search?q=C#top"],
+        ["https://example.com/search?q=C%23", "https://example.com/search?q=C%23#top"],
+    ]
+
+
 def test_the_regex_spelling_wins_and_llm_urls_are_added(tmp_path):
     write_answers(tmp_path, ["See http://www.example.com/a/ for details."])
     found = asyncio.run(discover_task_urls(
@@ -305,6 +315,16 @@ def test_retry_failed_also_retries_failures_that_evaluation_recorded(tmp_path, m
     meta = json.loads((tmp_path / "cache" / "agent" / "task.json").read_text())
     assert meta["url_types"] == {listed: "web"}  # the metadata file lists the answers' URLs only
 
+    # A task whose answers cite no URL still has its failure records retried.
+    write_answers(tmp_path, ["No sources."])
+    other = "https://docs.test/another-page-seen-in-evaluation"
+    cache.record_failure(other, "HTTP 503")
+    site = CaseSensitiveSite({other: "Another page"})
+    [report] = asyncio.run(crawl.cache_answers(
+        "agent", ["task"], answers_root=tmp_path / "answers", cache_root=tmp_path / "cache", browser=site,
+        extractor=None, logger=LOGGER, show_progress=False, retry_failed=True, refresh_urls=True))
+    assert (report.urls, dict(report.outcomes), site.urls) == (0, {"stored": 1}, [other])
+
 
 def test_failure_records_are_written_off_the_event_loop(tmp_path, monkeypatch):
     threads = []
@@ -432,6 +452,14 @@ def test_cache_command_counts_must_be_at_least_1(option, value, capsys):
     with pytest.raises(SystemExit) as exc:
         cli.build_parser().parse_args(["cache", "agent", option, value])
     assert exc.value.code == 2 and "must be at least 1" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("value", ["0", "-5", "nan", "inf", "soon"])
+def test_cache_command_page_timeout_must_be_positive_seconds(value, capsys):
+    with pytest.raises(SystemExit) as exc:
+        cli.build_parser().parse_args(["cache", "agent", "--page-timeout", value])
+    assert exc.value.code == 2 and "--page-timeout" in capsys.readouterr().err
+    assert cli.build_parser().parse_args(["cache", "agent", "--page-timeout", "2.5"]).page_timeout == 2.5
 
 
 def test_cache_command_skips_tasks_without_answer_files(tmp_path, monkeypatch, capsys):
