@@ -28,6 +28,7 @@ module loggers propagate to the root logger as usual.
 """
 from __future__ import annotations
 
+import itertools
 import json
 import logging
 import os
@@ -144,6 +145,10 @@ def _file_handlers(stem: Path) -> list[logging.Handler]:
     return [readable, json_lines]
 
 
+_LOGGER_PREFIX = "mind2web2-log:"
+_logger_ids = itertools.count(1)
+
+
 def create_logger(lgr_nm: str, log_folder: str, enable_console: bool = True) -> tuple[Logger, str]:
     """A new logger that writes ``<log_folder>/<timestamp>_<lgr_nm>.log`` and ``.jsonl``, and its timestamp.
 
@@ -154,9 +159,9 @@ def create_logger(lgr_nm: str, log_folder: str, enable_console: bool = True) -> 
     :func:`cleanup_logger` when it is no longer needed, to close its files.
     """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    # A top-level name (no dots), outside the package's logger hierarchy
-    logger = logging.getLogger(f"mind2web2-log:{lgr_nm}:{timestamp}:{id(log_folder)}".replace(".", "_"))
-    cleanup_logger(logger)
+    # A top-level name (no dots), outside the package's logger hierarchy, and unique in the process:
+    # answers of different tasks share file names and can start in the same second
+    logger = logging.getLogger(f"{_LOGGER_PREFIX}{next(_logger_ids)}:{lgr_nm}".replace(".", "_"))
     logger.setLevel(logging.DEBUG)
     logger.propagate = False
     for handler in _file_handlers(Path(log_folder) / f"{timestamp}_{lgr_nm}"):
@@ -170,10 +175,12 @@ def create_logger(lgr_nm: str, log_folder: str, enable_console: bool = True) -> 
 
 
 def cleanup_logger(logger: Logger) -> None:
-    """Remove and close every handler of ``logger``."""
+    """Remove and close every handler of ``logger``; a logger made by :func:`create_logger` is also forgotten."""
     for handler in logger.handlers[:]:
         logger.removeHandler(handler)
         handler.close()
+    if logger.name.startswith(_LOGGER_PREFIX):
+        logging.Logger.manager.loggerDict.pop(logger.name, None)
 
 
 @contextmanager

@@ -379,50 +379,12 @@ async def _evaluate_task(
                 # The answer folder keeps a copy of the answer (and its metadata) next to
                 # its results, so that metrics can be computed from the results folder alone.
                 answer_folder = output_root / agent_name / task_id / results.answer_base(answer_name)
-                answer_folder.mkdir(parents=True, exist_ok=True)
-
-                def copy_answer() -> None:
-                    for src in (ans_path, metadata_path(ans_path)):
-                        if src.exists():
-                            shutil.copyfile(src, answer_folder / src.name)
-                        else:  # a deleted metadata file must not live on in its copy
-                            (answer_folder / src.name).unlink(missing_ok=True)
-
-                # Reuse the latest result if it scored this answer with this judge, script, and settings
-                result_dir = answer_folder / "results"
-                latest = results.latest_result_file(result_dir)
-                if latest and not overwrite:
-                    result, reason = _reusable_result(latest, ans_path, client, script_sha256)
-                    if result is not None:
-                        copy_answer()
-                        log.debug(f"{name}: {float(result['final_score']):.3f} (earlier result reused)",
-                                  extra={**context, "final_score": result.get("final_score"),
-                                         "result_file": str(latest)})
-                        return result
-                    log.debug(f"{name}: evaluating again, since {reason}", extra=context)
-
-                # Earlier results move aside first, so that a failed evaluation leaves
-                # the answer without a result instead of an outdated one.
-                results.supersede_results(result_dir)
-                copy_answer()
                 try:
-                    res = await _eval_one_answer(
-                        eval_fn,
-                        client,
-                        task_id,
-                        agent_name,
-                        ans_path,
-                        cache,
-                        webpage_semaphore,
-                        llm_semaphore,
-                        output_root,
-                        script_sha256,
-                    )
-                except Exception as exc:
-                    res = exc
+                    res = await _reuse_or_evaluate(ans_path, answer_folder, name, context)
+                except Exception as exc:  # also a failure to prepare the answer folder: this answer only
                     log.error(f"{name}: not scored: evaluating it raised {type(exc).__name__}: {exc}",
                               exc_info=exc, extra=context)
-                    return res
+                    return exc
                 if isinstance(res, dict):
                     log.info(f"{name}: {float(res['final_score']):.3f}",
                              extra={**context, "final_score": res.get("final_score")})
@@ -431,6 +393,47 @@ async def _evaluate_task(
                     log.error(f"{name}: not scored ({type(res).__name__}: {reason}); "
                               f"see its log in {answer_folder / 'logs'}", extra={**context, "reason": str(res)})
                 return res
+
+        async def _reuse_or_evaluate(ans_path: Path, answer_folder: Path, name: str, context: dict):
+            """The answer's reusable latest result, else the outcome of evaluating it (a result or an exception)."""
+            answer_folder.mkdir(parents=True, exist_ok=True)
+
+            def copy_answer() -> None:
+                for src in (ans_path, metadata_path(ans_path)):
+                    if src.exists():
+                        shutil.copyfile(src, answer_folder / src.name)
+                    else:  # a deleted metadata file must not live on in its copy
+                        (answer_folder / src.name).unlink(missing_ok=True)
+
+            # Reuse the latest result if it scored this answer with this judge, script, and settings
+            result_dir = answer_folder / "results"
+            latest = results.latest_result_file(result_dir)
+            if latest and not overwrite:
+                result, reason = _reusable_result(latest, ans_path, client, script_sha256)
+                if result is not None:
+                    copy_answer()
+                    log.debug(f"{name}: {float(result['final_score']):.3f} (earlier result reused)",
+                              extra={**context, "final_score": result.get("final_score"),
+                                     "result_file": str(latest)})
+                    return result
+                log.debug(f"{name}: evaluating again, since {reason}", extra=context)
+
+            # Earlier results move aside first, so that a failed evaluation leaves
+            # the answer without a result instead of an outdated one.
+            results.supersede_results(result_dir)
+            copy_answer()
+            return await _eval_one_answer(
+                eval_fn,
+                client,
+                task_id,
+                agent_name,
+                ans_path,
+                cache,
+                webpage_semaphore,
+                llm_semaphore,
+                output_root,
+                script_sha256,
+            )
 
         tasks = [asyncio.create_task(_process_answer(p)) for p in answer_paths]
         bar = progress if progress is not None else tqdm(total=len(tasks), desc=task_id, unit="answer")

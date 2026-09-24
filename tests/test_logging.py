@@ -12,7 +12,9 @@ import sys
 
 import pytest
 
-from mind2web2 import Evaluator
+from mind2web2 import Evaluator, results
+from mind2web2.eval_toolkit import Verifier
+from mind2web2.llm_client import ContextLengthError
 from mind2web2.cli import evaluate as evaluate_command
 from mind2web2.eval_toolkit import shared_browser
 from mind2web2.utils.logging_setup import (MAX_DETAIL_CHARS, JsonLinesFormatter, ReadableFormatter,
@@ -21,6 +23,7 @@ from mind2web2.utils.logging_setup import (MAX_DETAIL_CHARS, JsonLinesFormatter,
 
 from offline_eval import FakeLLMClient, SyntheticCache
 from test_evaluate import BrokenJudge, RecordingBrowser, run_evaluate  # noqa: F401  (run_evaluate is a fixture)
+from test_judge_input_limits import LOGGER, ScriptedJudge, evaluator, page_cache
 
 
 def record(message: str, level: int = logging.INFO, exc_info=None, **extra) -> logging.LogRecord:
@@ -118,6 +121,16 @@ def test_closing_the_run_log_lets_the_package_logger_propagate_again(tmp_path):
     assert (package.level, package.propagate, list(package.handlers)) == before
 
 
+def test_answers_with_the_same_file_name_get_their_own_loggers_which_are_forgotten_when_closed(tmp_path):
+    first, _ = create_logger("answer_1.md", str(tmp_path / "t1"), enable_console=False)
+    second, _ = create_logger("answer_1.md", str(tmp_path / "t2"), enable_console=False)
+    assert first is not second and first.handlers and second.handlers
+    for logger in (first, second):
+        cleanup_logger(logger)
+    assert first.name not in logging.Logger.manager.loggerDict
+    assert second.name not in logging.Logger.manager.loggerDict
+
+
 # ------------------------------------------------------------------ checks
 
 class RejectingEverything(FakeLLMClient):
@@ -145,6 +158,15 @@ def test_a_multi_url_check_logs_each_source_under_its_node_and_then_the_node_out
     assert any(m.startswith("Check sources against https://s.example/") and "votes pass" in m for m in messages)
     assert re.fullmatch(outcome, messages[-1])
     assert all(getattr(r, "node_id", None) == "sources" for r in caplog.records if r.levelno >= logging.INFO)
+
+
+def test_a_check_whose_request_stays_too_long_logs_its_outcome(tmp_path, caplog):
+    verifier = evaluator(Verifier, page_cache(tmp_path), ScriptedJudge(ContextLengthError("too long")))
+    with caplog.at_level(logging.INFO, logger=LOGGER.name):
+        assert asyncio.run(verifier.simple_verify("X is Y.")) is False
+    [outcome] = [r for r in caplog.records if r.levelno == logging.INFO]
+    assert outcome.getMessage().endswith("failed: the request was too long for the judge")
+    assert (outcome.status, outcome.passed, outcome.claim) == ("failed", False, "X is Y.")
 
 
 # ------------------------------------------------------------------ mind2web2 evaluate
@@ -184,3 +206,20 @@ def test_evaluate_reports_an_unscored_answer_on_the_console_and_keeps_its_traceb
     assert "Not scored: JudgeError: judge unavailable" in answer_text
     assert "Traceback (most recent call last):" in answer_text
     assert logging.getLogger("mind2web2").propagate is True
+
+
+def test_a_failure_to_prepare_one_answer_leaves_only_that_answer_unscored(tmp_path, run_evaluate, monkeypatch,
+                                                                         capsys):
+    supersede = results.supersede_results
+
+    def fail_for_one_answer(result_dir):
+        if result_dir.parent.name == "answer_1":
+            raise PermissionError(13, "Permission denied", str(result_dir))
+        supersede(result_dir)
+
+    monkeypatch.setattr(results, "supersede_results", fail_for_one_answer)
+    assert run_evaluate("--task", "t1") == 1
+    err = capsys.readouterr().err
+    assert "t1/answer_1.md: not scored: evaluating it raised PermissionError" in err
+    [run_log] = (tmp_path / "results" / "agent" / "logs").glob("*_evaluate.log")
+    assert "t1/answer_2.md: 1.000" in run_log.read_text()

@@ -1081,11 +1081,7 @@ class Verifier(BaseEvaluator):
                 claim, prompt, prompt, verify_context, node, cancellation_event, **kwargs
             )
         except ContextLengthError as e:
-            self._record_rejection(verify_context, e)
-            if node is not None:
-                node.score = 0.0
-                node.status = "failed"
-            return False
+            return self._fail_too_long(verify_context, e, node)
 
     async def verify_by_url(
             self,
@@ -1149,11 +1145,21 @@ class Verifier(BaseEvaluator):
         try:
             return await self._with_shorter_text_on_overflow(web_text, verify, verify_context)
         except ContextLengthError as e:
-            self._record_rejection(verify_context, e)
-            if node is not None:
-                node.score = 0.0
-                node.status = "failed"
-            return False
+            return self._fail_too_long(verify_context, e, node)
+
+    def _fail_too_long(self, context: dict, error: ContextLengthError, node: Optional[VerificationNode]) -> bool:
+        """Fail the check that ``context`` describes because its request stayed too long for the judge; return ``False``.
+
+        The rejection is recorded (:meth:`_record_rejection`), and the check's
+        outcome is logged at INFO like that of any judged check.
+        """
+        self._record_rejection(context, error)
+        self.logger.info(f"{_capitalized(_subject(context))} failed: the request was too long for the judge",
+                         extra={**context, "passed": False, "status": "failed"})
+        if node is not None:
+            node.score = 0.0
+            node.status = "failed"
+        return False
 
     async def verify_by_urls(
             self,
