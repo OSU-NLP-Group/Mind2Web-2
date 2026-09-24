@@ -236,20 +236,6 @@ class FakeGoogleMapsTool:
         return 600
 
 
-class _DualSemaphore:
-    """Mirrors ``eval_runner.DualSemaphore``: separate webpage and LLM limits."""
-
-    def __init__(self) -> None:
-        self.webpage = asyncio.Semaphore(10)
-        self.llm = asyncio.Semaphore(30)
-
-    async def __aenter__(self):
-        return await self.webpage.__aenter__()
-
-    async def __aexit__(self, *exc):
-        return await self.webpage.__aexit__(*exc)
-
-
 # --------------------------------------------------------------------------- #
 # Running a script                                                            #
 # --------------------------------------------------------------------------- #
@@ -290,10 +276,15 @@ async def run_script(script: Path, policy: str, answer: str, model: str = "o4-mi
     Returns ``{"ok": True, "final_score", "tree", "llm_calls", "models_requested"}``
     on success and ``{"ok": False, "error", "traceback"}`` when the script raises.
     """
+    import mind2web2
+    from mind2web2 import api_tools
     from mind2web2.api_tools import tool_googlemap
+    from mind2web2.eval_runner import DualSemaphore
     from mind2web2.utils.load_eval_script import load_eval_script
 
-    tool_googlemap.GoogleMapsTool = FakeGoogleMapsTool  # scripts import it at load time
+    # Scripts import the tool at load time, from any of the modules that export it
+    for module in (tool_googlemap, api_tools, mind2web2):
+        module.GoogleMapsTool = FakeGoogleMapsTool
 
     logger = logging.getLogger(f"offline.{script.stem}.{policy}")
     logger.handlers = [logging.NullHandler()]
@@ -304,7 +295,8 @@ async def run_script(script: Path, policy: str, answer: str, model: str = "o4-mi
             evaluate_answer = load_eval_script(str(script))
             result = await evaluate_answer(
                 client=client, answer=answer, agent_name="offline", answer_name="answer_1.md",
-                cache=SyntheticCache(), semaphore=_DualSemaphore(), logger=logger, model=model,
+                cache=SyntheticCache(), logger=logger, model=model,
+                semaphore=DualSemaphore(asyncio.Semaphore(10), asyncio.Semaphore(30)),
             )
         tree = result["eval_breakdown"][0]["verification_tree"]
         return {
