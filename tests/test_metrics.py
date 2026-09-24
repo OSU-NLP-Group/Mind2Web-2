@@ -12,7 +12,7 @@ import pytest
 from mind2web2 import eval_runner
 from mind2web2.api_tools import tool_googlemap
 from mind2web2.cli import main as cli_main
-from mind2web2.metrics import collect_records, compute_metrics, is_success
+from mind2web2.metrics import collect_records, compute_metrics, discover_tasks, format_report, is_success
 from mind2web2.results import answer_output_dir, latest_result_file, result_file_name
 from mind2web2.submission import TaskInfo
 
@@ -70,7 +70,7 @@ def test_metrics_match_hand_computed_values(tmp_path):
     answers_root, results_root = build_submission(tmp_path)
     records, num_runs = collect_records(AGENT, [t.task_id for t in TASKS], answers_root, results_root)
     assert num_runs == 3
-    metrics = compute_metrics(records, TASKS, num_runs, AGENT)
+    metrics = compute_metrics(records, TASKS, num_runs, AGENT, task_list=Path("split.csv"))
 
     pc = metrics["partial_completion"]
     assert pc["per_run"] == pytest.approx([1.25 / 3, 2.2499999 / 3, 1 / 3])
@@ -126,12 +126,33 @@ def test_answer_copies_next_to_results_replace_a_missing_answers_dir(tmp_path):
     assert metrics() == expected
 
 
-def test_pass3_and_time_are_unavailable_without_three_runs_or_metadata(tmp_path):
+def test_leaderboard_entry_needs_a_task_list_and_three_runs(tmp_path):
     answers_root, results_root = build_submission(tmp_path)
-    records, num_runs = collect_records(AGENT, ["t3"], answers_root, results_root)
-    entry = compute_metrics(records, [TaskInfo("t3")], num_runs, AGENT)["leaderboard_entry"]
-    assert num_runs == 2
-    assert (entry["pass3"], entry["time"]) == ("-", "-")
+    split = Path("split.csv")
+
+    def metrics(task_ids: list[str], task_list: Path | None, num_runs: int | None = None) -> dict:
+        records, runs = collect_records(AGENT, task_ids, answers_root, results_root, num_runs)
+        return compute_metrics(records, [TaskInfo(t) for t in task_ids], runs, AGENT, task_list)
+
+    answered = metrics(["t1", "t2", "t3"], None)
+    assert answered["leaderboard_entry"] is None
+    assert answered["task_selection"]["source"] == "answers"
+    assert answered["task_selection"]["path"] is None
+    assert "No leaderboard entry" in format_report(answered)
+
+    listed = metrics(["t3", "t1", "t2"], split)
+    assert listed["task_selection"] == {**answered["task_selection"], "source": "task_list", "path": "split.csv"}
+    assert "No leaderboard entry" not in format_report(listed)
+
+    assert metrics(["t1", "t2", "t3"], split, num_runs=2)["leaderboard_entry"] is None
+    assert metrics(["t2"], split)["leaderboard_entry"]["time"] == "-"  # no answer reports a time
+
+
+def test_tasks_are_discovered_only_where_there_are_answers(tmp_path):
+    answers_root, results_root = build_submission(tmp_path)
+    (answers_root / AGENT / "t9").mkdir()
+    (answers_root / AGENT / "t9" / "notes.txt").write_text("not an answer")
+    assert discover_tasks(AGENT, answers_root, results_root) == ["t1", "t2", "t3"]
 
 
 def test_latest_result_is_chosen_by_timestamp(tmp_path):
@@ -154,6 +175,7 @@ def test_metrics_command_prints_report_and_saves_json(tmp_path, capsys):
     assert "t2 run 3" in out
     saved = json.loads((results_root / AGENT / "metrics.json").read_text())
     assert saved["leaderboard_entry"]["pass3"] == "0.67"
+    assert saved["task_selection"]["path"] == str(task_list)
 
     assert cli_main(argv + ["--json", "--no-save"]) == 0
     assert json.loads(capsys.readouterr().out)["num_tasks"] == 3

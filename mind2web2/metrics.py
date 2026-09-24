@@ -20,9 +20,14 @@ result, scores 0 in the first three metrics, and the report lists every such
 pair so that it can be fixed.  Time and Answer Length describe the answers
 themselves: an answer that exists counts toward them whether or not it has an
 evaluation result, and a missing answer file does not.
+
+The metrics record which tasks they cover (``task_selection``), and they
+include a ``leaderboard_entry`` only when they are computed over a task list
+with exactly 3 runs, the leaderboard's setting; otherwise it is ``None``.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import statistics
 from dataclasses import dataclass
@@ -69,13 +74,33 @@ def _mean_std(values: list[float]) -> dict:
 def discover_tasks(agent_name: str, answers_root: Path, results_root: Path) -> list[str]:
     """Return the IDs of the tasks an agent has answers for.
 
-    These are the task directories under ``<answers_root>/<agent_name>/``, or,
-    when the agent has no answers directory, under ``<results_root>/<agent_name>/``.
+    These are the task directories under ``<answers_root>/<agent_name>/`` that
+    contain at least one ``answer_<k>.md``, or, when the agent has no answers
+    directory, the task directories under ``<results_root>/<agent_name>/`` that
+    hold a copy of one (see :func:`discover_answers`).
     """
     for agent_dir in (Path(answers_root) / agent_name, Path(results_root) / agent_name):
         if agent_dir.is_dir():
-            return sorted(p.name for p in agent_dir.iterdir() if p.is_dir() and not p.name.startswith("."))
+            candidates = sorted(p.name for p in agent_dir.iterdir() if p.is_dir() and not p.name.startswith("."))
+            return [t for t in candidates if discover_answers(agent_name, t, answers_root, results_root)]
     return []
+
+
+def task_selection(task_ids: Iterable[str], task_list: Path | None) -> dict:
+    """Describe the tasks that metrics cover, as recorded in ``metrics.json``.
+
+    ``source`` is ``"task_list"`` with the list's ``path`` when the tasks come
+    from a task list, and ``"answers"`` (``path`` ``None``) when they are the
+    tasks the agent has answers for.  ``task_ids_sha256`` is the SHA-256 of the
+    sorted task IDs joined by newlines, so that two metrics files can be checked
+    for covering the same tasks.
+    """
+    digest = hashlib.sha256("\n".join(sorted(task_ids)).encode("utf-8")).hexdigest()
+    return {
+        "source": "answers" if task_list is None else "task_list",
+        "path": None if task_list is None else str(task_list),
+        "task_ids_sha256": digest,
+    }
 
 
 def discover_answers(agent_name: str, task_id: str, answers_root: Path, results_root: Path) -> list[AnswerFile]:
@@ -147,12 +172,15 @@ def compute_metrics(
         tasks: list[TaskInfo],
         num_runs: int,
         agent_name: str = "",
+        task_list: Path | None = None,
 ) -> dict:
     """Compute the leaderboard metrics; see the module docstring for definitions.
 
     ``records`` must contain one record per (task, run) for every task in
     ``tasks`` and every run in ``1..num_runs``, as returned by
-    :func:`collect_records`.  The result is JSON-serializable.
+    :func:`collect_records`.  ``task_list`` is the task list that ``tasks``
+    came from, or ``None`` when they are the tasks the agent has answers for;
+    it is recorded, not read.  The result is JSON-serializable.
     """
     table = {(r.task_id, r.run): r for r in records}
     task_ids = [t.task_id for t in tasks]
@@ -184,6 +212,7 @@ def compute_metrics(
 
     metrics = {
         "agent_name": agent_name,
+        "task_selection": task_selection(task_ids, task_list),
         "num_tasks": len(task_ids),
         "num_runs": num_runs,
         "partial_completion": {**_mean_std(pc_per_run), "per_run": pc_per_run},
@@ -230,19 +259,23 @@ def _by_domain(tasks: list[TaskInfo], runs: range, score) -> dict | None:
     return out
 
 
-def leaderboard_entry(metrics: dict) -> dict:
+def leaderboard_entry(metrics: dict) -> dict | None:
     """The ``eval_set`` block of an entry in the leaderboard's ``leaderboard_data.json``.
 
-    Values are strings as on the leaderboard: two decimals, the answer length
-    as an integer, and ``"-"`` when unavailable (Pass@3 needs exactly 3 runs).
+    Returns ``None`` unless the metrics cover a task list with exactly 3 runs,
+    so that metrics over a subset of a split, or over another number of runs,
+    cannot be mistaken for a leaderboard entry.  Values are strings as on the
+    leaderboard: two decimals, the answer length as an integer, and ``"-"``
+    when unavailable.
     """
+    if metrics["task_selection"]["source"] != "task_list" or metrics["num_runs"] != 3:
+        return None
     time = metrics["time_minutes"]
     length = metrics["answer_length_words"]
-    pass_at_k = metrics["pass_at_k"]
     return {
         "partial_completion": f"{metrics['partial_completion']['mean']:.2f}",
         "success_rate": f"{metrics['success_rate']['mean']:.2f}",
-        "pass3": f"{pass_at_k['value']:.2f}" if pass_at_k["k"] == 3 else "-",
+        "pass3": f"{metrics['pass_at_k']['value']:.2f}",
         "time": f"{time['mean']:.2f}" if time else "-",
         "answer_length": f"{length['mean']:.0f}" if length else "-",
     }
@@ -265,8 +298,11 @@ def format_report(metrics: dict, max_listed: int = 20) -> str:
         return "  ".join("-" if v is None else f"{v:{fmt}}" for v in values)
 
     k = metrics["pass_at_k"]["k"]
+    selection = metrics["task_selection"]
+    source = (f"from {selection['path']}" if selection["source"] == "task_list"
+              else "that have answers")
     lines = [
-        f"Agent {metrics['agent_name']!r}: {metrics['num_tasks']} tasks x {metrics['num_runs']} runs",
+        f"Agent {metrics['agent_name']!r}: {metrics['num_tasks']} tasks ({source}) x {metrics['num_runs']} runs",
         f"  Partial Completion  {mean_std(metrics['partial_completion'], '.4f')}"
         f"    per run: {per_run(metrics['partial_completion']['per_run'], '.4f')}",
         f"  Success Rate        {mean_std(metrics['success_rate'], '.4f')}"
@@ -298,5 +334,7 @@ def format_report(metrics: dict, max_listed: int = 20) -> str:
                 lines.append(f"    {item['task_id']} run {item['run']}")
             if len(items) > max_listed:
                 lines.append(f"    ... and {len(items) - max_listed} more")
+    if metrics["leaderboard_entry"] is None:
+        lines.append("  No leaderboard entry: it needs --task-list with the full split and 3 runs.")
     return "\n".join(lines)
 

@@ -54,16 +54,12 @@ def run(args: argparse.Namespace) -> int:
     except (OSError, ValueError) as exc:
         print(f"Cannot read an answer: {exc}", file=sys.stderr)
         return 1
-    metrics = compute_metrics(records, tasks, num_runs, args.agent)
+    metrics = compute_metrics(records, tasks, num_runs, args.agent, args.task_list)
 
     if args.json:
         print(json.dumps(metrics, indent=2, ensure_ascii=False))
     else:
         print(format_report(metrics))
-        if args.task_list is None:
-            print("Scored over the tasks the agent has answers for; pass --task-list to score a full "
-                  "split, where tasks without answers count as 0, and --num-runs 3 for the "
-                  "leaderboard's three runs.")
     if not args.no_save:
         path = save_metrics(metrics, args.results_dir, args.agent)
         print(f"Saved {path}", file=sys.stderr)
