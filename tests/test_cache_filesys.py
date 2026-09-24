@@ -148,6 +148,19 @@ def test_a_raw_url_without_its_own_page_finds_no_other_page(tmp_path):
     assert cache.lookup("https://example.com/tags/%23python") is None
 
 
+def test_ignore_case_false_finds_only_pages_and_failures_in_the_urls_own_letter_case(tmp_path):
+    cache = CacheFileSys(str(tmp_path))
+    cache.put_web("https://example.com/Docs/Page", "title case", png_bytes())
+    cache.record_failure("https://example.com/Docs/Other", "HTTP 503")
+
+    assert cache.lookup("http://www.example.com/Docs/Page/#intro", ignore_case=False) == "https://example.com/Docs/Page"
+    assert cache.lookup("https://example.com/docs/page", ignore_case=False) is None
+    assert cache.lookup("https://example.com/docs/page") == "https://example.com/Docs/Page"
+    assert cache.failure("https://www.example.com/Docs/Other/", ignore_case=False)["reason"] == "HTTP 503"
+    assert cache.failure("https://example.com/docs/other", ignore_case=False) is None
+    assert cache.failure("https://example.com/docs/other")["reason"] == "HTTP 503"
+
+
 def test_raw_keys_match_their_own_urls_and_capture_no_others(tmp_path):
     """A key that percent-decoding would change again is found only through its own URL."""
     cache = CacheFileSys(str(tmp_path))

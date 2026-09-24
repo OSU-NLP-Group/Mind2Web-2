@@ -126,7 +126,7 @@ def discover_answers(agent_name: str, task_id: str, answers_root: Path, results_
     """Find a task's answer files.
 
     Answers come from ``<answers_root>/<agent_name>/<task_id>/``.  When the agent
-    has no answers directory at all, the copies that ``run_eval.py`` stores next
+    has no answers directory at all, the copies that evaluation stores next
     to the results are used instead, so metrics can be computed from a results
     folder alone.
     """

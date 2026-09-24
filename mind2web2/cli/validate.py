@@ -23,17 +23,14 @@ def register(subparsers) -> None:
     )
     _common.add_agent(parser)
     _common.add_answers_dir(parser)
-    _common.add_task_selection(parser)
+    _common.add_task_selection(parser, default="the task directories under <answers-dir>/<agent>/")
     parser.set_defaults(run=run)
 
 
 def run(args: argparse.Namespace) -> int:
     agent_dir = args.answers_dir / args.agent
-    discovered = sorted(
-        p.name for p in agent_dir.iterdir() if p.is_dir() and not p.name.startswith(".")
-    ) if agent_dir.is_dir() else []
     try:
-        tasks = _common.resolve_tasks(args.task_list, discovered)
+        tasks = _common.resolve_tasks(args.task_list, _common.answer_task_ids(agent_dir))
     except (OSError, ValueError) as exc:
         print(f"Cannot read the task list: {exc}", file=sys.stderr)
         return 1

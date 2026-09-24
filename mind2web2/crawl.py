@@ -1,495 +1,463 @@
+"""Cache the webpages that an agent's answers cite, so that evaluation reads them from disk.
+
+A crawl has two stages for each task:
+
+1. **URL discovery.** Every ``answer_<k>.md`` of the task is scanned with the
+   regular expression of :func:`~mind2web2.utils.url_tools.regex_find_urls` and,
+   optionally, with LLMs (:class:`LLMUrlExtractor`), which also recover URLs
+   written without a scheme or split across lines.  The spellings that the
+   task's answers use for one page are grouped (:func:`group_url_variants`):
+   spellings that differ only in scheme, ``www.``, a trailing slash, the
+   fragment, UTM parameters, or percent-encoding.  Spellings that differ in
+   letter case are never grouped, since a server may serve different pages for
+   them.  Each group is listed once, under its preferred spelling: one that the
+   regular expression found in any of the answers, then an ``https`` one, then
+   the shortest.  The result is written to ``<cache_root>/<agent>/<task_id>.json``::
+
+       {"agent_name", "task_id", "total_unique_urls",
+        "all_unique_urls": [url, ...],                 # case-insensitively sorted
+        "urls": {url: [answer file, ...]},             # answers citing any spelling of url; most-cited first
+        "url_variants": {url: [spelling, ...]},        # url's other spellings, in order of preference
+        "answer_digests": {answer file: sha256},       # the answers the URLs came from
+        "url_models": [model, ...],                    # the LLMs that extracted URLs; [] for regex only
+        "url_extraction_complete": bool,               # false if an LLM request failed
+        "url_types": {url: "web" | "pdf"},             # filled in after the crawl
+        "cached_url_count", "failed_urls": {url: reason}}
+
+   ``url_variants`` lists only the URLs that have other spellings.  A later
+   crawl reuses this file instead of extracting again while the task's answer
+   files are the same files with the same content (``answer_digests``), the URL
+   models are the same, the file has ``url_variants``, and the extraction was
+   complete, unless asked to refresh it.  An incomplete list is still written,
+   so that it can be reviewed, and is used for the crawl that wrote it.  A task
+   without answer files has no URLs, and its file is left as it is.
+
+2. **Capture.** Each URL is stored in the task's cache
+   (``<cache_root>/<agent>/<task_id>/``, a :class:`CacheFileSys`): PDFs are
+   downloaded, everything else is captured in the browser.  When the capture of
+   a URL fails, its other spellings are tried in order, and the first one
+   captured is stored under its own spelling.  The spellings of a group share
+   the normalized form by which the cache's lookup matches URLs, so the page
+   is found under each of them.  A URL none of whose spellings can be captured
+   is recorded as a failure in the cache instead of being stored.
+
+All tasks of a crawl share one browser, so ``max_concurrent_pages`` of the
+:class:`BatchBrowserManager` bounds the pages open across the whole crawl, and
+at most ``max_concurrent_urls`` URLs are processed at once, which bounds the
+PDF checks and downloads that run outside the browser.
 """
-Batch crawler using CacheFileSys (v2) - file-based cache with single-task design.
-
-Key changes from the old batch_cache.py:
-- Uses CacheFileSys instead of CacheClass (one cache instance per task)
-- Stores content in task directories instead of PKL files
-- Uses put_web(url, text, screenshot) instead of separate put_text/put_screenshot
-- Removes MHTML storage (not supported in CacheFileSys)
-- Memory efficient: only indexes in memory, content loaded on-demand
-
-Depends on unified path management (`PathConfig`), which auto-detects the
-project root and subdirectories like dataset/workspace. No manual path
-concatenation needed.
-"""
-
 from __future__ import annotations
 
-import argparse
 import asyncio
-import contextlib
+import hashlib
 import json
 import random
 from collections import Counter
+from dataclasses import dataclass, field
 from logging import Logger
 from pathlib import Path
-from typing import Any, Dict, List, Tuple, Optional
+from typing import Collection, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from tqdm import tqdm
 
-# -------------------------------------------------------------------- #
-# Mind2Web2 imports
-# -------------------------------------------------------------------- #
-from mind2web2.llm_client import DEFAULT_JUDGE_MODEL, LLMClient
-from mind2web2.utils.page_info_retrieval import BatchBrowserManager
-from mind2web2.api_tools.tool_pdf import is_pdf, PDFParser
-from mind2web2.utils.cache_filesys import CacheFileSys
-from mind2web2.utils.logging_setup import create_logger
-from mind2web2.utils.path_config import PathConfig
-from mind2web2.prompts.cache_prompts import llm_extraction_prompts
-from mind2web2.utils.url_tools import (
-    remove_utm_parameters, normalize_url_keep_case, normalize_url_simple, regex_find_urls, URLs,
-)
+from .api_tools.tool_pdf import PDFParser, is_pdf
+from .llm_client import DEFAULT_JUDGE_MODEL, LLMClient
+from .prompts.cache_prompts import llm_extraction_prompts
+from .submission import list_answer_files
+from .utils.cache_filesys import CacheFileSys
+from .utils.page_info_retrieval import BatchBrowserManager, Capture
+from .utils.url_tools import URLs, normalize_url_keep_case, regex_find_urls, remove_utm_parameters
 
-# -------------------------------------------------------------------- #
-# Constants
-# -------------------------------------------------------------------- #
-MAX_LLM_CONCURRENCY = 30  # Concurrent LLM calls for URL extraction
+#: Models that :class:`LLMUrlExtractor` asks by default.  Two different models
+#: miss different URLs, so their union has higher recall than either one.
+DEFAULT_URL_MODELS = (DEFAULT_JUDGE_MODEL, "gpt-4.1")
+
+#: What :func:`crawl_one_page` can report for a URL.
+OUTCOMES = ("cached", "skipped", "stored", "failed", "blocked", "error")
 
 
-# -------------------------------------------------------------------- #
-# Helpers for URL extraction
-# -------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# URL discovery                                                               #
+# --------------------------------------------------------------------------- #
 
-async def llm_extract_urls_with_model(
-    client: LLMClient,
-    answer_text: str,
-    model: str,
-    llm_semaphore: asyncio.Semaphore,
-    logger: Logger,
-) -> List[str]:
-    """Extract URLs using specified LLM model with enhanced prompt."""
-    try:
-        async with llm_semaphore:
-            result: URLs = await client.async_response(
-                model=model,
-                messages=[{"role": "system", "content": llm_extraction_prompts}, {"role": "user", "content": answer_text}],
-                response_format=URLs,
-            )
-        return result.urls or []
-    except Exception as e:
-        logger.warning(f"LLM extraction failed with model {model}: {e}")
-        return []
+class LLMUrlExtractor:
+    """Extracts the URLs of an answer with several LLMs and returns their union.
 
-
-async def llm_extract_urls_multi_model(
-    client: LLMClient,
-    answer_text: str,
-    llm_semaphore: asyncio.Semaphore,
-    logger: Logger,
-    models: List[str] = None,
-) -> List[str]:
-    """Extract URLs using multiple LLM models concurrently and merge results."""
-    if models is None:
-        models = [DEFAULT_JUDGE_MODEL, "gpt-4.1"]
-
-    # Run all models concurrently
-    tasks = [
-        llm_extract_urls_with_model(client, answer_text, model, llm_semaphore, logger)
-        for model in models
-    ]
-
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-
-    # Merge all results
-    all_urls = set()
-    for result in results:
-        if isinstance(result, list):
-            all_urls.update(result)
-        elif isinstance(result, Exception):
-            logger.warning(f"Model extraction failed: {result}")
-
-    return list(all_urls)
-
-
-def filter_url_variants(urls: List[str], priorities: Dict[str, int] | None = None) -> List[str]:
-    """Filter out URL variants to keep only unique URLs.
-
-    Args:
-        urls: URL candidates (duplicates allowed).
-        priorities: Optional map assigning lower scores to preferred originals.
+    A model whose request fails contributes nothing (the failure is logged, and
+    :meth:`extract` reports the extraction as incomplete), so one unavailable
+    model lowers recall without stopping the crawl.
     """
-    if not urls:
-        return []
 
-    # Group URLs by normalized form
-    url_groups: Dict[str, List[str]] = {}
-    for url in urls:
-        normalized = normalize_url_simple(url)
-        if normalized not in url_groups:
-            url_groups[normalized] = []
-        url_groups[normalized].append(url)
+    def __init__(self, client: LLMClient, models: Sequence[str] = DEFAULT_URL_MODELS,
+                 max_concurrent_requests: int = 30):
+        self.client = client
+        self.models = tuple(models)
+        self._semaphore = asyncio.Semaphore(max_concurrent_requests)
 
-    # Select representative URL from each group
-    unique_urls = []
-    priority_lookup = priorities or {}
-    default_priority = 1 if priorities else 0
-    for group in url_groups.values():
-        # Prefer https over http, then prefer shorter URLs
-        group.sort(key=lambda u: (
-            priority_lookup.get(u, default_priority),
-            0 if u.startswith('https://') else 1,  # https first
-            len(u),  # shorter first
-            u.lower()  # alphabetical
-        ))
-        unique_urls.append(group[0])
+    async def extract(self, answer_text: str, logger: Logger) -> Tuple[List[str], bool]:
+        """The union of the URLs the models found, and whether every model's request succeeded."""
+        results = await asyncio.gather(*(self._extract_with(model, answer_text, logger) for model in self.models))
+        urls = list(dict.fromkeys(url for found in results if found is not None for url in found))
+        return urls, all(found is not None for found in results)
 
-    return unique_urls
-
-
-async def extract_from_file(
-    client: LLMClient | None,
-    ans_path: Path,
-    rel_source: str,
-    llm_semaphore: asyncio.Semaphore,
-    logger: Logger,
-    llm_models: List[str] = None,
-) -> Tuple[Dict[str, List[str]], int]:
-    """Enhanced URL extraction with multi-model LLM and comprehensive regex + variant filtering."""
-    text = ans_path.read_text(encoding="utf-8")
-
-    # --- Enhanced regex extraction ---
-    urls_regex = regex_find_urls(text)
-
-    # --- Multi-model LLM extraction ---
-    urls_llm: List[str] = []
-    if client is not None:
-        urls_llm = await llm_extract_urls_multi_model(client, text, llm_semaphore, logger, llm_models)
-
-    # --- Merge all results ---
-    priorities: Dict[str, int] = {}
-    for url in urls_regex:
-        priorities[url] = 0
-    for url in urls_llm:
-        priorities.setdefault(url, 1)
-
-    all_urls = urls_regex + urls_llm
-
-    # --- Filter variants to avoid duplicates ---
-    unique_urls = filter_url_variants(all_urls, priorities if priorities else None)
-
-    mapping = {u: [rel_source] for u in unique_urls}
-    return mapping, len(unique_urls)
+    async def _extract_with(self, model: str, answer_text: str, logger: Logger) -> Optional[List[str]]:
+        """The URLs ``model`` found, or ``None`` if its request failed."""
+        try:
+            async with self._semaphore:
+                result: URLs = await self.client.async_response(
+                    model=model,
+                    messages=[{"role": "system", "content": llm_extraction_prompts},
+                              {"role": "user", "content": answer_text}],
+                    response_format=URLs,
+                )
+            return result.urls or []
+        except Exception as exc:
+            logger.warning(f"URL extraction with {model} failed: {exc}")
+            return None
 
 
-# -------------------------------------------------------------------- #
-# Crawling helpers
-# -------------------------------------------------------------------- #
+def group_url_variants(urls: Iterable[str], preferred: Collection[str] = ()) -> List[List[str]]:
+    """Group the spellings in ``urls`` that name one page, each group in order of preference.
+
+    Two spellings name one page when
+    :func:`~mind2web2.utils.url_tools.normalize_url_keep_case` gives them the
+    same form: when they differ only in scheme, ``www.``, a trailing slash,
+    the fragment, UTM parameters, or percent-encoding.  Spellings that differ
+    in letter case are never grouped, since a server may serve different pages
+    for them.  Within a group, spellings in ``preferred`` come first, then
+    ``https`` spellings, then the shortest, then the alphabetically first.
+    Groups are returned in order of their first spelling in ``urls``, and a
+    spelling given several times appears once.
+    """
+    groups: Dict[str, List[str]] = {}
+    for url in dict.fromkeys(urls):
+        groups.setdefault(normalize_url_keep_case(url), []).append(url)
+    return [sorted(group, key=lambda u: (u not in preferred, not u.startswith("https://"), len(u), u.lower()))
+            for group in groups.values()]
+
+
+async def extract_answer_urls(answer_text: str, extractor: Optional[LLMUrlExtractor],
+                              logger: Logger) -> Tuple[List[str], List[str], bool]:
+    """The URLs that the regular expression finds in one answer, those the LLMs find, and whether every LLM answered."""
+    found_by_llm, complete = await extractor.extract(answer_text, logger) if extractor is not None else ([], True)
+    return regex_find_urls(answer_text), found_by_llm, complete
+
+
+def _sorted_ci(items: Iterable[str]) -> List[str]:
+    return sorted(items, key=str.lower)
+
+
+@dataclass
+class TaskUrls:
+    """The URLs of one task's answers, as :func:`discover_task_urls` returns them."""
+
+    urls: Dict[str, List[str]]  # each URL to capture -> the other spellings of its page, in order of preference
+    complete: bool = True  # false when a URL-extraction request failed, so URLs may be missing
+
+
+async def discover_task_urls(
+        agent: str,
+        task_id: str,
+        *,
+        answers_root: Path,
+        cache_root: Path,
+        extractor: Optional[LLMUrlExtractor],
+        logger: Logger,
+        refresh: bool = False,
+) -> TaskUrls:
+    """Return the task's URLs, from its metadata file or by extracting them from its answers.
+
+    Each URL comes with the other spellings of its page that the answers use
+    (see :func:`group_url_variants`).  The metadata file is reused when it was
+    written for the answer files the task has now, with the same content, by
+    the same URL models (none when ``extractor`` is ``None``), lists the other
+    spellings of its URLs (``url_variants``), and no LLM request failed while
+    writing it.  Otherwise (or when the file is missing or unreadable, or with
+    ``refresh``), the answers are scanned again and the file is rewritten.  A
+    task without answer files has no URLs, and its file is not touched.  See
+    the module docstring for the file's layout.
+    """
+    meta_path = cache_root / agent / f"{task_id}.json"
+    answers = list_answer_files(answers_root / agent / task_id)
+    if not answers:
+        return TaskUrls({})
+    texts = [a.path.read_text(encoding="utf-8") for a in answers]
+    digests = {a.path.name: hashlib.sha256(text.encode("utf-8")).hexdigest() for a, text in zip(answers, texts)}
+    url_models = list(extractor.models) if extractor is not None else []
+    if meta_path.exists() and not refresh:
+        try:
+            meta = json.loads(meta_path.read_text("utf-8"))
+        except ValueError:
+            meta = {}
+        if not isinstance(meta, dict):
+            meta = {}
+        if meta.get("answer_digests") != digests:
+            reason = "does not match the current answers"
+        elif meta.get("url_models") != url_models:
+            reason = f"lists the URLs found by {meta.get('url_models')}, not {url_models}"
+        elif meta.get("url_extraction_complete") is not True:
+            reason = "is incomplete: a URL-extraction request failed when it was written"
+        elif not isinstance(meta.get("url_variants"), dict):
+            reason = "does not list the other spellings of its URLs"
+        else:
+            variants = meta["url_variants"]
+            return TaskUrls({url: list(variants.get(url, [])) for url in meta["all_unique_urls"]})
+        logger.info(f"[{agent}/{task_id}] {meta_path.name} {reason}; extracting the URLs again")
+
+    extracted = await asyncio.gather(*(extract_answer_urls(text, extractor, logger) for text in texts))
+    complete = all(ok for _, _, ok in extracted)
+    cited_by: Dict[str, set] = {}
+    found_by_regex: set = set()
+    for answer, (by_regex, by_llm, _) in zip(answers, extracted):
+        found_by_regex.update(by_regex)
+        for url in by_regex + by_llm:
+            cited_by.setdefault(url, set()).add(answer.path.name)
+    # Answers may spell one page differently: list it once, under its preferred spelling across the answers.
+    groups = {group[0]: group for group in group_url_variants(cited_by, preferred=found_by_regex)}
+    files = {url: set().union(*(cited_by[spelling] for spelling in group)) for url, group in groups.items()}
+
+    by_citations = sorted(files.items(), key=lambda kv: (-len(kv[1]), kv[0].lower()))
+    all_urls = _sorted_ci(groups)
+    meta_path.parent.mkdir(parents=True, exist_ok=True)
+    meta_path.write_text(json.dumps({
+        "agent_name": agent,
+        "task_id": task_id,
+        "total_unique_urls": len(all_urls),
+        "all_unique_urls": all_urls,
+        "urls": {url: _sorted_ci(answer_files) for url, answer_files in by_citations},
+        "url_variants": {url: groups[url][1:] for url in all_urls if len(groups[url]) > 1},
+        "answer_digests": digests,
+        "url_models": url_models,
+        "url_extraction_complete": complete,
+        "url_types": {},
+    }, ensure_ascii=False, indent=2), "utf-8")
+    logger.info(f"[{agent}/{task_id}] {len(all_urls)} URLs in {len(answers)} answers -> {meta_path}")
+    if not complete:
+        logger.warning(f"[{agent}/{task_id}] Some URL-extraction requests failed, so URLs may be missing; "
+                       f"the next crawl extracts the URLs again")
+    return TaskUrls({url: groups[url][1:] for url in all_urls}, complete)
+
+
+# --------------------------------------------------------------------------- #
+# Capture                                                                     #
+# --------------------------------------------------------------------------- #
 
 async def crawl_one_page(
-    url: str,
-    cache: CacheFileSys,
-    pdf_parser: PDFParser,
-    browser_manager: BatchBrowserManager,
-    logger: Logger,
-    retry_failed: bool = False,
-    pdf_semaphore: Optional[asyncio.Semaphore] = None,
+        url: str,
+        cache: CacheFileSys,
+        pdf_parser: PDFParser,
+        browser_manager: BatchBrowserManager,
+        logger: Logger,
+        retry_failed: bool = False,
+        variants: Sequence[str] = (),
 ) -> str:
     """Cache one page: download it if it is a PDF, otherwise capture it in the shared browser.
 
-    URLs that are already cached are skipped, and so are URLs with a failure
-    record unless ``retry_failed``.  A failed capture is recorded in the
-    cache.  Every step has its own time limit, so no URL can stall the crawl.
-    The PDF check and download run under ``pdf_semaphore`` when one is given,
-    so that a task citing many documents on one site does not send all its
-    requests at once.
+    ``variants`` are other spellings of the page (see :func:`group_url_variants`).
+    When the capture of ``url`` fails, they are tried in order, and the first
+    one captured is stored.  If none can be captured, one failure is recorded
+    in the cache, under ``url``, with the reason of each spelling tried; it
+    counts as a refusal only when every spelling was refused.
+
+    The page is skipped when the cache holds a page for ``url`` and, unless
+    ``retry_failed``, when it holds a failure record for it, both looked up
+    with ``ignore_case=False`` (see :meth:`CacheFileSys.lookup`): a page or
+    record under a URL that differs in letter case does not count, since it
+    may be a different page.  Every step has its own time limit, so no URL
+    can stall the crawl.
 
     Returns what happened: ``"cached"`` (already cached), ``"skipped"`` (a
     failure record, not retried), ``"stored"``, ``"failed"``, ``"blocked"``
-    (the site refused the browser), or ``"error"`` (an unexpected exception,
+    (every spelling was refused), or ``"error"`` (an unexpected exception,
     which is logged).
     """
     try:
-        if cache.has(url):
+        if cache.lookup(url, ignore_case=False) is not None:
             return "cached"
-        if not retry_failed and cache.failure(url) is not None:
+        if not retry_failed and cache.failure(url, ignore_case=False) is not None:
             return "skipped"
         url = remove_utm_parameters(url)
-        logger.info(f"Crawling {url}")
-        async with pdf_semaphore or contextlib.nullcontext():
-            pdf_bytes = None
-            if await is_pdf(url):
-                await asyncio.sleep(0.2 * random.random())
-                pdf_bytes = await pdf_parser.fetch(url)
-                if pdf_bytes is None:
-                    logger.info(f"{url} did not return a PDF; loading it in the browser")
-        if pdf_bytes is not None:
-            await asyncio.to_thread(cache.put_pdf, url, pdf_bytes)
-            return "stored"
-
-        capture = await browser_manager.capture(url, logger)
-        if capture.ok:
-            await asyncio.to_thread(cache.put_web, url, capture.text, capture.screenshot_b64)
-            return "stored"
-        logger.warning(f"Could not capture {url}: {capture.error}")
-        await asyncio.to_thread(cache.record_failure, url, capture.error, blocked=capture.blocked)
-        return "blocked" if capture.blocked else "failed"
+        failed: List[Tuple[str, Capture]] = []
+        for spelling in dict.fromkeys([url, *map(remove_utm_parameters, variants)]):
+            capture = await _store_page(spelling, cache, pdf_parser, browser_manager, logger)
+            if capture is None:
+                if failed:
+                    logger.info(f"Stored {url} from its spelling {spelling}")
+                return "stored"
+            failed.append((spelling, capture))
+        reason = "; ".join([failed[0][1].error] + [f"also tried {s}: {c.error}" for s, c in failed[1:]])
+        blocked = all(c.blocked for _, c in failed)
+        await asyncio.to_thread(cache.record_failure, url, reason, blocked=blocked)
+        return "blocked" if blocked else "failed"
     except Exception:
         logger.error(f"Error crawling {url}", exc_info=True)
         return "error"
 
 
-# -------------------------------------------------------------------- #
-# Utilities
-# -------------------------------------------------------------------- #
+async def _store_page(url: str, cache: CacheFileSys, pdf_parser: PDFParser,
+                      browser_manager: BatchBrowserManager, logger: Logger) -> Optional[Capture]:
+    """Store the PDF that ``url`` serves, or else its capture in the browser.
 
-def sort_ci(iterable):
-    """Case-insensitive sorting."""
-    return sorted(iterable, key=lambda s: s.lower())
-
-
-# -------------------------------------------------------------------- #
-# Main pipeline per task
-# -------------------------------------------------------------------- #
-
-async def process_cache(
-    agent_name: str,
-    task_id: str,
-    llm_provider: str = "openai",
-    max_concurrent_pages: int = 30,
-    max_retries: int = 1,
-    page_timeout: float = 90.0,
-    retry_failed: bool = False,
-    headless: bool = False,
-    answers_root: Optional[Path] = None,
-    cache_root: Optional[Path] = None,
-    logger: Optional[Logger] = None,
-) -> None:
+    Returns ``None`` when the page was stored, and the failed :class:`Capture` otherwise.
     """
-    1) Discover and aggregate all URLs in answers; write to <cache_root>/<agent_name>/<task_id>.json
-    2) Crawl web/PDF content by unique URL; write to <cache_root>/<agent_name>/<task_id>/ directory
+    logger.info(f"Crawling {url}")
+    if await is_pdf(url):
+        await asyncio.sleep(0.2 * random.random())
+        pdf_bytes = await pdf_parser.fetch(url)
+        if pdf_bytes is not None:
+            await asyncio.to_thread(cache.put_pdf, url, pdf_bytes)
+            return None
+        logger.info(f"{url} did not return a PDF; loading it in the browser")
+    capture = await browser_manager.capture(url, logger)
+    if capture.ok:
+        await asyncio.to_thread(cache.put_web, url, capture.text, capture.screenshot_b64)
+        return None
+    logger.warning(f"Could not capture {url}: {capture.error}")
+    return capture
 
-    Args:
-        page_timeout: Time limit in seconds for one attempt at capturing a page in the browser.
-        retry_failed: Crawl URLs whose capture failed in an earlier run again, including
-            failure records for URLs that evaluation captured live and the answers'
-            URL list does not contain.
-        answers_root: Base directory containing answers. If None, uses PathConfig defaults.
-        cache_root: Base directory for cache storage. If None, uses PathConfig defaults.
-        logger: Logger instance. If None, creates a default one.
-    """
-    # Resolve defaults lazily
-    if answers_root is None or cache_root is None:
-        paths = PathConfig(Path(__file__).resolve().parents[1])
-        if answers_root is None:
-            answers_root = paths.answers_root
-        if cache_root is None:
-            cache_root = paths.cache_root
 
-    if logger is None:
-        logger, _ = create_logger(__name__, "tmp_logs")
-
-    llm_semaphore = asyncio.Semaphore(MAX_LLM_CONCURRENCY)
-
-    answer_root = answers_root / agent_name / task_id
-    agent_cache_root = cache_root / agent_name
-    agent_cache_root.mkdir(parents=True, exist_ok=True)
-
-    meta_json = agent_cache_root / f"{task_id}.json"
-    cache_task_dir = agent_cache_root / task_id
-
-    # ------------------------------------------------- #
-    # Step 1: URL discovery
-    # ------------------------------------------------- #
-    meta_data: Dict[str, Any]
-
-    if meta_json.exists():
-        logger.info(f"[{agent_name}/{task_id}] Found existing {meta_json.name}, skipping extraction ...")
-        data = json.loads(meta_json.read_text("utf-8"))
-        url_meta: Dict[str, List[str]] = data["urls"]
-        all_unique_urls: List[str] = data["all_unique_urls"]
-        meta_data = data
-    else:
-        client = LLMClient(provider=llm_provider, is_async=True)
-        url_meta: Dict[str, List[str]] = {}
-
-        # All .md answer files
-        answer_files = [p for p in answer_root.rglob("*.md") if p.is_file()]
-        logger.info(f"[{agent_name}/{task_id}] Extracting URLs from {len(answer_files)} .md answer files ...")
-
-        async def handle_file(p: Path):
-            rel_path = p.relative_to(answer_root)
-            rel_source = str(rel_path)
-            mapping, _ = await extract_from_file(client, p, rel_source, llm_semaphore, logger)
-            return mapping
-
-        # Progress bar: extraction
-        with tqdm(total=len(answer_files), desc="Extracting", unit="file", ncols=80) as bar:
-            coros = [handle_file(p) for p in answer_files]
-            for coro in asyncio.as_completed(coros):
-                mapping = await coro
-                for u, srcs in mapping.items():
-                    url_meta.setdefault(u, []).extend(srcs)
-                bar.update(1)
-
-        # Deduplicate + sort
-        url_meta = {u: sort_ci(list(set(srcs))) for u, srcs in url_meta.items()}
-        ordered_items = sorted(url_meta.items(), key=lambda kv: (-len(kv[1]), kv[0].lower()))
-        url_meta_ordered = {u: srcs for u, srcs in ordered_items}
-        all_unique_urls = sort_ci(url_meta_ordered.keys())
-
-        payload = {
-            "agent_name": agent_name,
-            "task_id": task_id,
-            "total_unique_urls": len(all_unique_urls),
-            "all_unique_urls": all_unique_urls,
-            "urls": url_meta_ordered,
-            "url_types": {},
-        }
-        meta_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2), "utf-8")
-        logger.info(f"[{agent_name}/{task_id}] Wrote URL metadata -> {meta_json}")
-        url_meta = url_meta_ordered
-        meta_data = payload
-
-    # ------------------------------------------------- #
-    # Step 2: Crawl & cache (using shared browser instance)
-    # ------------------------------------------------- #
-    logger.info(f"[{agent_name}/{task_id}] Total unique URLs to crawl: {len(all_unique_urls)}")
-
-    pdf_parser = PDFParser()
-    pdf_semaphore = asyncio.Semaphore(max_concurrent_pages)
-    cache = CacheFileSys(str(cache_task_dir))
-    to_crawl = list(all_unique_urls)
-    if retry_failed:
-        # Evaluation records failures for the URLs it captures live, which are
-        # not in the URL list; retrying only the list would leave them for good.
-        listed = {normalize_url_keep_case(url) for url in all_unique_urls}
-        unlisted = [url for url in cache.failures() if normalize_url_keep_case(url) not in listed]
-        if unlisted:
-            logger.info(f"[{agent_name}/{task_id}] Also retrying {len(unlisted)} failed URLs "
-                        f"that are not in the answers' URL list")
-            to_crawl += unlisted
-
-    # Use BatchBrowserManager to share browser instance; supports high concurrency
-    logger.info(f"[{agent_name}/{task_id}] Headless mode: {headless}")
-
-    async with BatchBrowserManager(
-        headless=headless,
-        max_concurrent_pages=max_concurrent_pages,
-        max_retries=max_retries,
-        page_timeout=page_timeout,
-    ) as browser_manager:
-        logger.info(f"[{agent_name}/{task_id}] Browser manager initialized")
-
-        async def crawl_all(urls: List[str], retry: bool, desc: str) -> Dict[str, str]:
-            outcomes: Dict[str, str] = {}
-
-            async def crawl(url: str):
-                outcomes[url] = await crawl_one_page(url, cache, pdf_parser, browser_manager, logger,
-                                                     retry_failed=retry, pdf_semaphore=pdf_semaphore)
-                bar.update(1)
-
-            with tqdm(total=len(urls), desc=desc, unit="url", ncols=80) as bar:
-                await asyncio.gather(*(crawl(url) for url in urls))
-            return outcomes
-
-        outcomes = await crawl_all(to_crawl, retry_failed, "Crawling")
-        # A failure that is not a refusal is often transient (a slow, overloaded,
-        # or rate-limiting site): retry those from this run once, when nothing
-        # else is queued.
-        transient = [url for url, outcome in outcomes.items() if outcome == "failed"]
-        if transient:
-            logger.info(f"[{agent_name}/{task_id}] Retrying {len(transient)} failed URLs once")
-            outcomes.update(await crawl_all(transient, True, "Retrying"))
-        logger.info(f"[{agent_name}/{task_id}] Crawl outcomes: {dict(Counter(outcomes.values()))}")
-
-        logger.info(f"[{agent_name}/{task_id}] Browser manager will be cleaned up automatically")
-
-    # Update metadata with cached content types
+def _page_form(url: str) -> str:
+    """``url`` under :func:`~mind2web2.utils.url_tools.normalize_url_keep_case`, or as is if it cannot be parsed."""
     try:
-        url_types: Dict[str, str] = {}
-        failed_urls: Dict[str, str] = {}
-        for url in all_unique_urls:
-            content_type = cache.has(url)
-            if content_type:
-                url_types[url] = content_type
-            elif (failure := cache.failure(url)) is not None:
-                failed_urls[url] = failure["reason"]
-
-        meta_data.update({
-            "agent_name": agent_name,
-            "task_id": task_id,
-            "total_unique_urls": len(all_unique_urls),
-            "all_unique_urls": all_unique_urls,
-            "urls": url_meta,
-            "url_types": url_types,
-            "cached_url_count": len(url_types),
-            "failed_urls": failed_urls,
-        })
-        meta_json.write_text(json.dumps(meta_data, ensure_ascii=False, indent=2), "utf-8")
-        logger.info(f"[{agent_name}/{task_id}] Updated metadata with cache types -> {meta_json}")
-        if failed_urls:
-            logger.warning(f"[{agent_name}/{task_id}] {len(failed_urls)} of {len(all_unique_urls)} URLs "
-                           f"could not be captured; see failures.json in {cache_task_dir}")
-    except Exception:
-        logger.error(f"[{agent_name}/{task_id}] Failed to update metadata with cache types", exc_info=True)
-
-    logger.info(f"[{agent_name}/{task_id}] Saved updated cache -> {cache_task_dir}")
+        return normalize_url_keep_case(url)
+    except ValueError:
+        return url
 
 
-# -------------------------------------------------------------------- #
-# Entry point
-# -------------------------------------------------------------------- #
+@dataclass
+class TaskCrawl:
+    """What a crawl did with one task: its URL count, how many URLs ended in each outcome, and what went wrong."""
 
-def _strip_suffixes(task_id: str) -> str:
-    """If CLI argument mistakenly includes .json/.pkl, strip it automatically."""
-    suffixes = (".json", ".pkl")
-    for s in suffixes:
-        if task_id.endswith(s):
-            return task_id[: -len(s)]
-    return task_id
+    task_id: str
+    urls: int = 0
+    outcomes: Counter = field(default_factory=Counter)
+    url_extraction_complete: bool = True  # false when a URL-extraction request failed, so URLs may be missing
+    #: Set when URL discovery raised, the task's cache could not be opened, or the
+    #: crawl results could not be written to the task's metadata file.
+    error: Optional[str] = None
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Batch crawl pages and cache results using CacheFileSys (v2)")
-    parser.add_argument("agent_name", help="Agent name (e.g., chatgpt_agent)")
-    parser.add_argument("task_id", help="Task ID")
-    parser.add_argument(
-        "--llm_provider",
-        choices=["openai", "azure_openai"],
-        default="openai",
-        help="LLM provider (openai or azure_openai, default: openai)"
-    )
-    parser.add_argument(
-        "--max_concurrent_pages",
-        type=int,
-        default=5,
-        help="Maximum number of concurrent pages to process (default: 5)"
-    )
-    parser.add_argument(
-        "--max_retries",
-        type=int,
-        default=1,
-        help="Attempts per page in the browser; exceptions and timeouts are retried (default: 1)"
-    )
-    parser.add_argument(
-        "--page_timeout",
-        type=float,
-        default=90.0,
-        help="Time limit in seconds for one attempt at capturing a page in the browser (default: 90)"
-    )
-    parser.add_argument(
-        "--retry_failed",
-        action="store_true",
-        help="Crawl URLs whose capture failed in an earlier run again, including URLs that evaluation "
-             "captured live (default: skip them)"
-    )
-    parser.add_argument(
-        "--headless",
-        action="store_true",
-        help="Run browser in headless mode (default: headful)"
-    )
+async def cache_answers(
+        agent: str,
+        task_ids: Sequence[str],
+        *,
+        answers_root: Path,
+        cache_root: Path,
+        browser: BatchBrowserManager,
+        extractor: Optional[LLMUrlExtractor],
+        logger: Logger,
+        retry_failed: bool = False,
+        refresh_urls: bool = False,
+        show_progress: bool = True,
+        max_concurrent_urls: int = 16,
+) -> List[TaskCrawl]:
+    """Discover and capture the URLs of ``task_ids`` for ``agent``, all through ``browser``.
 
-    args = parser.parse_args()
+    URLs of every task are queued together and processed ``max_concurrent_urls``
+    at a time, which bounds the PDF checks and downloads; the browser's page
+    limit bounds the captures among them, so ``max_concurrent_urls`` should
+    exceed it to keep the browser busy.  After the pass over all URLs, the URLs
+    that failed in this crawl for a reason other than a refusal are retried
+    once: such failures are often transient (a slow, overloaded, or
+    rate-limiting site), while a refusal needs a person with a browser.  Finally each task's metadata file
+    gains the content type of every cached URL and the reason of every failure.
 
-    task_id = _strip_suffixes(args.task_id)
-    asyncio.run(process_cache(
-        agent_name=args.agent_name,
-        task_id=task_id,
-        llm_provider=args.llm_provider,
-        max_concurrent_pages=args.max_concurrent_pages,
-        max_retries=args.max_retries,
-        page_timeout=args.page_timeout,
-        retry_failed=args.retry_failed,
-        headless=args.headless,
-    ))
+    With ``retry_failed``, the failure records of each task's cache whose URLs
+    are not in the task's URL list are crawled too: evaluation records them
+    for the URLs it captures live, and they would otherwise stay for good.
+
+    A task whose URL discovery raises, whose cache cannot be opened (an
+    unreadable ``index.json`` or ``failures.json``), or whose metadata file
+    cannot be updated after the crawl gets an ``error`` in its report; the
+    other tasks are crawled as usual.
+    """
+    reports = {task_id: TaskCrawl(task_id) for task_id in task_ids}
+    caches: Dict[str, CacheFileSys] = {}
+
+    async def discover(task_id: str) -> Tuple[str, Dict[str, List[str]]]:
+        report = reports[task_id]
+        try:
+            found = await discover_task_urls(agent, task_id, answers_root=answers_root, cache_root=cache_root,
+                                             extractor=extractor, logger=logger, refresh=refresh_urls)
+        except Exception as exc:
+            logger.error(f"[{agent}/{task_id}] URL discovery failed", exc_info=True)
+            report.error = f"URL discovery failed: {type(exc).__name__}: {exc}"
+            return task_id, {}
+        report.urls, report.url_extraction_complete = len(found.urls), found.complete
+        if found.urls:
+            try:
+                caches[task_id] = CacheFileSys(str(cache_root / agent / task_id))
+            except Exception as exc:  # CacheIndexError when index.json or failures.json cannot be read
+                logger.error(f"[{agent}/{task_id}] Cannot open the cache", exc_info=True)
+                report.error = f"Cannot open the cache: {exc}"
+                return task_id, {}
+        return task_id, found.urls
+
+    task_urls = dict(await asyncio.gather(*(discover(task_id) for task_id in task_ids)))
+    pdf_parser = PDFParser()
+    outcomes: Dict[Tuple[str, str], str] = {}
+    url_slots = asyncio.Semaphore(max_concurrent_urls)
+
+    async def crawl_all(jobs: List[Tuple[str, str]], retry: bool, desc: str) -> None:
+        with tqdm(total=len(jobs), desc=desc, unit="url", ncols=80, disable=not show_progress) as bar:
+            async def crawl(job: Tuple[str, str]) -> None:
+                task_id, url = job
+                async with url_slots:
+                    outcomes[job] = await crawl_one_page(url, caches[task_id], pdf_parser, browser, logger,
+                                                         retry_failed=retry,
+                                                         variants=task_urls[task_id].get(url, ()))
+                bar.update(1)
+
+            await asyncio.gather(*(crawl(job) for job in jobs))
+
+    jobs = [(t, url) for t, urls in task_urls.items() for url in urls]
+    if retry_failed:
+        for task_id, urls in task_urls.items():
+            if not urls:
+                continue
+            listed = {_page_form(url) for url in urls}
+            unlisted = [url for url in caches[task_id].failures() if _page_form(url) not in listed]
+            if unlisted:
+                logger.info(f"[{agent}/{task_id}] Also retrying {len(unlisted)} failed URLs "
+                            f"that are not in the task's URL list")
+                jobs += [(task_id, url) for url in unlisted]
+    await crawl_all(jobs, retry_failed, "Crawling")
+    transient = [job for job, outcome in outcomes.items() if outcome == "failed"]
+    if transient:
+        logger.info(f"Retrying {len(transient)} URLs whose capture failed in this crawl")
+        await crawl_all(transient, True, "Retrying")
+
+    for (task_id, _), outcome in outcomes.items():
+        reports[task_id].outcomes[outcome] += 1
+    for task_id, urls in task_urls.items():
+        if not urls:
+            continue
+        meta_path = cache_root / agent / f"{task_id}.json"
+        try:
+            _record_crawl_results(meta_path, caches[task_id], urls, logger)
+        except Exception as exc:
+            logger.error(f"[{agent}/{task_id}] Cannot record the crawl results in {meta_path}", exc_info=True)
+            reports[task_id].error = (f"Cannot record the crawl results in {meta_path.name}: "
+                                      f"{type(exc).__name__}: {exc}")
+    return [reports[task_id] for task_id in task_ids]
+
+
+def _record_crawl_results(meta_path: Path, cache: CacheFileSys, urls: Collection[str], logger: Logger) -> None:
+    """Add the content type of each cached URL and the reason of each failed one to the metadata file.
+
+    A URL counts as cached, or as failed, as in :func:`crawl_one_page`.
+    """
+    url_types: Dict[str, str] = {}
+    failed_urls: Dict[str, str] = {}
+    for url in urls:
+        stored = cache.lookup(url, ignore_case=False)
+        if stored is not None:
+            url_types[url] = cache.has(stored)
+        elif (failure := cache.failure(url, ignore_case=False)) is not None:
+            failed_urls[url] = failure["reason"]
+    meta = json.loads(meta_path.read_text("utf-8"))
+    meta.update({"url_types": url_types, "cached_url_count": len(url_types), "failed_urls": failed_urls})
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), "utf-8")
+    if failed_urls:
+        logger.warning(f"{len(failed_urls)} of {len(urls)} URLs in {meta_path.stem} could not be captured; "
+                       f"see failures.json in {cache.task_dir}")

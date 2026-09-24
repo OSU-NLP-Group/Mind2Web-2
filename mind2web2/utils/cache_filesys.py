@@ -256,7 +256,7 @@ class CacheFileSys:
 
     # ------------------------------------------------------------------ lookup
 
-    def lookup(self, url: str) -> Optional[str]:
+    def lookup(self, url: str, ignore_case: bool = True) -> Optional[str]:
         """The URL of the cached page that ``url`` refers to, or ``None`` if its page is not cached.
 
         Each page is stored under a key, the :func:`storage_key` of the URL it
@@ -278,7 +278,9 @@ class CacheFileSys:
         Rule 2 comes before rule 3 so that, when pages are stored for URLs
         that differ only in letter case, which a server may serve as different
         pages, a URL finds the page stored with its own letter case, and a
-        page stored with another letter case only when there is none.
+        page stored with another letter case only when there is none.  With
+        ``ignore_case=False``, rule 3 is skipped, so that ``url`` never finds
+        a page stored under a URL that differs from it in letter case.
 
         A key that :func:`storage_key` would change again (:func:`_is_raw`) is
         found only for a ``url`` whose storage key is that key, or is raw too
@@ -295,12 +297,12 @@ class CacheFileSys:
         rule 4 runs only when they miss.  Raises ``ValueError`` if ``url``
         cannot be parsed.
         """
-        key = self._find_key(url)
+        key = self._find_key(url, ignore_case)
         return _address(key) if key is not None else None
 
-    def _find_key(self, url: str) -> Optional[str]:
+    def _find_key(self, url: str, ignore_case: bool = True) -> Optional[str]:
         """The key of the page ``url`` refers to, by the rules of :meth:`lookup`."""
-        return self._pages.find(url)
+        return self._pages.find(url, ignore_case)
 
     def has(self, url: str) -> ContentType | None:
         """The content type cached for ``url`` ("web" or "pdf"), or ``None`` if it is not cached."""
@@ -324,10 +326,10 @@ class CacheFileSys:
 
     # ------------------------------------------------------------------ failures
 
-    def failure(self, url: str) -> Optional[Dict[str, Any]]:
+    def failure(self, url: str, ignore_case: bool = True) -> Optional[Dict[str, Any]]:
         """The failure recorded for ``url``, or ``None``.
 
-        Matched like pages (see :meth:`lookup`).  A record has ``reason`` (text), ``blocked`` (the site
+        Matched like pages (see :meth:`lookup`, also for ``ignore_case``).  A record has ``reason`` (text), ``blocked`` (the site
         refused an automated browser, so a person may still capture it),
         ``attempts``, and ``time`` (ISO 8601, UTC, of the latest attempt).  A
         record is ignored while a page is stored for its URL.  Storing a page
@@ -335,7 +337,7 @@ class CacheFileSys:
         seen a page another process stored records a failure for its URL.
         """
         failures = self._failures
-        key = failures.find(url)
+        key = failures.find(url, ignore_case)
         if key is None or self._is_stored(_address(key)):
             return None
         return dict(failures.records[key])

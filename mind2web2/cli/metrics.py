@@ -28,7 +28,8 @@ def register(subparsers) -> None:
     _common.add_agent(parser)
     _common.add_answers_dir(parser)
     _common.add_results_dir(parser)
-    _common.add_task_selection(parser)
+    _common.add_task_selection(parser, default="the task directories under <answers-dir>/<agent>/, or under "
+                                               "<results-dir>/<agent>/ when the agent has no answers directory")
     parser.add_argument("--json", action="store_true", help="Print the metrics as JSON instead of a report.")
     parser.add_argument("--no-save", action="store_true", help="Do not write metrics.json.")
     parser.set_defaults(run=run)

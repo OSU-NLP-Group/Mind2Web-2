@@ -29,7 +29,7 @@ task_dir/
 3. the same with the lowercased form `normalize_url_simple(url)`
 4. a surface variant of `url` is the key (scheme, `www.`, UTM suffixes, percent-encoding forms, trailing slash). Runs only when 1-3 miss; it finds keys whose normalized form changes under percent-decoding.
 
-Rule 2 comes first so that, among pages stored for URLs that differ only in letter case (which a server may serve as different pages), a URL finds the one with its own letter case, and another only when there is none. Pages and failure records are matched by one implementation, `_UrlIndex`.
+Rule 2 comes first so that, among pages stored for URLs that differ only in letter case (which a server may serve as different pages), a URL finds the one with its own letter case, and another only when there is none. `lookup(url, ignore_case=False)` and `failure(url, ignore_case=False)` skip rule 3, for callers such as the crawler that must not take a page of another letter case for this one; recording or clearing a failure always matches that way. Pages and failure records are matched by one implementation, `_UrlIndex`.
 
 ### page_info_retrieval.py — Browser Capture
 **`BatchBrowserManager`**: one shared Chromium browser (patchright) for concurrent captures.
@@ -37,12 +37,6 @@ Rule 2 comes first so that, among pages stored for URLs that differ only in lett
 - At most `max_concurrent_pages` captures run at once. Each attempt gets a fresh browser context and `page_timeout` seconds (default 90), counted from when it gets a slot. Exceptions and timeouts are retried up to `max_retries` attempts in total; a disconnected browser is restarted, and the first attempt of a capture during which the browser disconnected does not count (another page may have crashed it). The context is closed outside the page timeout, so a finished capture is never lost to a slow close.
 - Reported as failures without retrying: pages that did not load (DNS or connection errors, a download instead of a page, no response within `navigation_timeout`), refusals (`detect_block`), and HTTP 429 and 5xx error pages. Both apply only to pages with less than 3000 characters of text (`SHORT_PAGE_CHARS`): such a page is a refusal if its status is 401/403/407/999 or it reads like a bot check or access-denied notice, and an error page if its status is 429 or 5xx. A rate limit (429) is therefore an ordinary failure, which the crawler retries at the end of its run, not a refusal. A longer page is captured whatever its status, since some sites send real content with such statuses. A page still loading after `navigation_timeout` is captured as far as it loaded; pages with other statuses, such as 404, are captured as they render.
 - Waits up to 15 s for a JavaScript bot check ("Just a moment...") to pass by itself, scrolls to trigger lazy loading, and captures through CDP (a screenshot of the whole page, and `outerHTML`).
-
-### path_config.py — Centralized Path Management
-`PathConfig` dataclass holding all project-relative directories:
-- `project_root`, `answers_root`, `eval_scripts_root`, `eval_results_root`, `cache_root`
-- `default_script_for(task_id)` → `eval_scripts/<version>/<task_id>.py`
-- `apply_overrides()`: Override any path via CLI args
 
 ### logging_setup.py — Structured Logging
 `create_logger(name, log_folder)` creates loggers with multiple handlers:
@@ -57,8 +51,8 @@ Custom formatters:
 - `CompactJsonFormatter`: Compact JSONL for machine parsing
 
 ### url_tools.py — URL Normalization & Extraction
-- `normalize_url_keep_case(url)`: A normalized form that keeps letter case (UTM parameters and fragment removed, percent-decoded, trailing slash removed, `https`, no `www.`)
-- `normalize_url_simple(url)`: `normalize_url_keep_case(url)` lowercased; the form under which two URLs are the same page, for cache lookups and crawl deduplication
+- `normalize_url_keep_case(url)`: A normalized form that keeps letter case (UTM parameters and fragment removed, percent-decoded, trailing slash removed, `https`, no `www.`); the crawler merges the spellings of one page under it, since paths that differ in letter case can be different pages
+- `normalize_url_simple(url)`: `normalize_url_keep_case(url)` lowercased; the form under which cache lookups disregard letter case
 - `remove_utm_parameters(url)`: Strip all `utm_*` query params
 - `normalize_url_for_browser(url)`: Ensure URL has protocol for navigation
 - `regex_find_urls(text)`: `http(s)://` and `www.` URLs in Markdown or plain text, in order of appearance; keeps balanced parentheses and brackets (Wikipedia titles, `?filter[type]=x`) and `|`, removes Markdown escapes, emphasis delimiters, and trailing punctuation, stops at CJK punctuation
