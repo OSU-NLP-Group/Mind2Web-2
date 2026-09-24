@@ -562,6 +562,21 @@ class CacheFileSys:
         return previous
 
     @contextmanager
+    def exclusive(self) -> Iterator[None]:
+        """Hold the lock under which this class changes the task, for other files kept in the task directory.
+
+        It is the lock of :meth:`_index_lock`: a thread lock of this instance
+        and, on POSIX, an ``flock`` on the task directory, so a program that
+        reads, changes, and writes back a file of its own in the task
+        directory under it excludes every other process doing the same.  This
+        instance's methods that write take the same lock, which is not
+        reentrant, so they must not be called while it is held; methods that
+        only read may be.
+        """
+        with self._index_lock():
+            yield
+
+    @contextmanager
     def _index_lock(self) -> Iterator[None]:
         """Serialize changes to the task across threads and, on POSIX, across processes.
 

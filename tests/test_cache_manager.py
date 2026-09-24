@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+from concurrent.futures import ProcessPoolExecutor
 
 import pytest
 from fastapi.testclient import TestClient
@@ -15,7 +16,9 @@ from starlette.routing import Route
 from cache_manager_web import run as run_script
 from cache_manager_web.backend.api import routes
 from cache_manager_web.backend.app import LocalRequestGuard, _host_name, app
-from cache_manager_web.backend.models.cache_manager import CacheManager, ReviewStateError
+from cache_manager_web.backend.models.cache_manager import (
+    PENDING_FILE, CacheManager, ReviewStateError, _update_url_file,
+)
 from cache_manager_web.backend.models.keyword_detector import KeywordDetector
 from mind2web2.utils.cache_filesys import CacheFileSys, storage_key
 
@@ -520,3 +523,18 @@ def test_the_crawlers_refusal_wording_is_a_definite_issue(detector):
     result = detector.detect_issues("Please enable JavaScript and cookies to continue")
     assert result.severity == "definite"
     assert result.matched_patterns == ["bot check or access denied ('enable JavaScript and cookies to continue')"]
+
+
+def _add_pending_urls(task_dir: str, worker: int, count: int) -> None:
+    cache = CacheFileSys(task_dir)
+    for i in range(count):
+        _update_url_file(cache, PENDING_FILE, lambda urls: urls | {f"https://example.com/{worker}/{i}"})
+
+
+def test_review_state_changes_from_several_processes_are_all_kept(tmp_path):
+    """Review-state files are changed under the task's cache lock, which other processes respect too."""
+    task_dir = tmp_path / "agent" / "task"
+    CacheFileSys(str(task_dir))
+    with ProcessPoolExecutor(max_workers=4) as pool:
+        list(pool.map(_add_pending_urls, [str(task_dir)] * 4, range(4), [20] * 4))
+    assert len(json.loads((task_dir / PENDING_FILE).read_text())) == 80

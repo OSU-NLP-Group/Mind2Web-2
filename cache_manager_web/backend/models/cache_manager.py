@@ -25,10 +25,12 @@ change the stored pages.
 A manager reads ``pending.json`` and ``flags.json`` when it loads a task and
 answers lookups from that copy; ``reviewed.json`` is read on every lookup.
 Every change re-reads the file it changes, applies the change, and replaces
-the file atomically, under a lock that all managers of the process share, and
-the manager's copy becomes what the file then holds.  Two managers of one
-folder, such as the one serving requests and the one a reload is building,
-therefore keep each other's changes.  A review-state file that cannot be
+the file atomically, under a lock that all managers of the process share and
+the task's cache lock (:meth:`CacheFileSys.exclusive`, an ``flock`` on the
+task directory), and the manager's copy becomes what the file then holds.
+Managers of one folder, in one process, such as the one serving requests and
+the one a reload is building, or in several, therefore keep each other's
+changes.  A review-state file that cannot be
 read is never overwritten: a task with such a file is not loaded, and a
 change to such a file raises :class:`ReviewStateError`.
 """
@@ -181,7 +183,7 @@ class CacheManager:
         flags = _read_url_set(task_dir / FLAGS_FILE)
         _read_review_file(task_dir / REVIEWED_FILE, dict)
         if any(_stored_state(cache, url) is not None for url in pending):
-            pending = _update_url_file(task_dir / PENDING_FILE, lambda urls: _still_pending(cache, urls))[1]
+            pending = _update_url_file(cache, PENDING_FILE, lambda urls: _still_pending(cache, urls))[1]
         loaded = self._has_content(cache) or bool(pending)
         if loaded:
             self.task_caches[task_id] = cache
@@ -562,10 +564,10 @@ class CacheManager:
         if the task is not loaded.  Raises :class:`ReviewStateError` if the
         file cannot be read.
         """
-        path = self._task_file(task_id, name)
-        if path is None:
+        cache = self.task_caches.get(task_id)
+        if cache is None:
             return set(), set()
-        before, after = _update_url_file(path, update)
+        before, after = _update_url_file(cache, name, update)
         (self._pending if name == PENDING_FILE else self._flags)[task_id] = after
         if after != before:
             self._note_change(task_id)
@@ -575,14 +577,15 @@ class CacheManager:
         """Apply ``update`` to the review statuses in the task's ``reviewed.json``, as the file holds them when the change is made.
 
         The file is read, changed, and written back under the lock that all
-        managers of the process share, and written only if ``update`` changed
-        the statuses (atomically; deleted when none is left).  Raises
-        :class:`ReviewStateError` if the file cannot be read.
+        managers of the process share and the task's cache lock, and written
+        only if ``update`` changed the statuses (atomically; deleted when none
+        is left).  Raises :class:`ReviewStateError` if the file cannot be read.
         """
-        path = self._task_file(task_id, REVIEWED_FILE)
-        if path is None:
+        cache = self.task_caches.get(task_id)
+        if cache is None:
             return
-        with _review_state_lock:
+        path = Path(cache.task_dir) / REVIEWED_FILE
+        with _review_state_lock, cache.exclusive():
             reviewed = _read_review_file(path, dict)
             before = dict(reviewed)
             update(reviewed)
@@ -590,16 +593,20 @@ class CacheManager:
                 _write_review_file(path, reviewed)
 
 
-def _update_url_file(path: Path, update: Callable[[Set[str]], Set[str]]) -> Tuple[Set[str], Set[str]]:
-    """Replace the URLs listed in ``path`` with ``update(urls)``; returns the set before and after.
+def _update_url_file(cache: CacheFileSys, name: str,
+                     update: Callable[[Set[str]], Set[str]]) -> Tuple[Set[str], Set[str]]:
+    """Replace the URLs listed in the file ``name`` of ``cache``'s task with ``update(urls)``; returns the set before and after.
 
     The file is read, changed, and written back under the lock that all
-    managers of the process share, so ``urls`` includes every change made
-    before, and it is written only if the set changes (atomically, as a
-    sorted JSON list; deleted when the set is empty).  Raises
+    managers of the process share and the task's cache lock, so ``urls``
+    includes every change made before, by this process or another, and it is
+    written only if the set changes (atomically, as a sorted JSON list;
+    deleted when the set is empty).  ``update`` may read ``cache`` but must
+    not write to it (see :meth:`CacheFileSys.exclusive`).  Raises
     :class:`ReviewStateError` if the file cannot be read.
     """
-    with _review_state_lock:
+    path = Path(cache.task_dir) / name
+    with _review_state_lock, cache.exclusive():
         before = _read_url_set(path)
         after = update(set(before))
         if after != before:
