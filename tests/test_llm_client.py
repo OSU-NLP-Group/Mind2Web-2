@@ -246,3 +246,8 @@ def test_synchronous_client_behaves_like_the_async_one(monkeypatch):
 def test_unknown_provider_is_rejected():
     with pytest.raises(ValueError, match="not supported"):
         LLMClient("bedrock_anthropic")
+
+
+def test_a_base_url_with_azure_openai_is_refused_instead_of_ignored():
+    with pytest.raises(ValueError, match="only to the openai provider"):
+        LLMClient(provider="azure_openai", is_async=True, base_url="http://localhost:8000/v1")

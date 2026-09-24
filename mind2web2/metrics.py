@@ -25,7 +25,8 @@ not it has an evaluation result, and a missing answer file does not.
 
 The metrics record which tasks they cover (``task_selection``), and they
 include a ``leaderboard_entry`` only when they are computed over a task list
-with exactly 3 runs, the leaderboard's setting; otherwise it is ``None``.
+with exactly 3 runs, the leaderboard's setting, from results of one known judge
+model; otherwise it is ``None``.
 
 Scores are comparable only when one judge model produced them all, so the
 metrics count the results per configured judge model and per model that the
@@ -300,17 +301,29 @@ def _by_domain(tasks: list[TaskInfo], runs: range, score) -> dict | None:
     return out
 
 
+def no_leaderboard_entry_reason(metrics: dict) -> str | None:
+    """Why the metrics get no leaderboard entry, or ``None`` if they get one."""
+    if metrics["task_selection"]["source"] != "task_list" or metrics["num_runs"] != 3:
+        return "it needs --task-list (the split's task list) and 3 runs"
+    judges = metrics["judge_models"]
+    if len(judges) != 1 or "unknown" in judges:
+        return "the results must all come from one judge model that they record"
+    return None
+
+
 def leaderboard_entry(metrics: dict) -> dict | None:
     """The ``eval_set`` block of an entry in the leaderboard's ``leaderboard_data.json``.
 
-    Returns ``None`` unless the metrics cover a task list with exactly 3 runs,
-    so that metrics over the tasks an agent happened to answer, or over another
-    number of runs, cannot be mistaken for a leaderboard entry.  Whether the
-    task list is a whole split is not checked: pass the split's own list.  Values are strings as on the
-    leaderboard: two decimals, the answer length as an integer, and ``"-"``
-    when unavailable.
+    Returns ``None`` unless the metrics cover a task list with exactly 3 runs
+    and every result was scored by the same recorded judge model, so that
+    metrics over the tasks an agent happened to answer, over another number of
+    runs, or from mixed or unrecorded judges cannot be mistaken for a
+    leaderboard entry (:func:`no_leaderboard_entry_reason` says which).
+    Whether the task list is a whole split is not checked: pass the split's own
+    list.  Values are strings as on the leaderboard: two decimals, the answer
+    length as an integer, and ``"-"`` when unavailable.
     """
-    if metrics["task_selection"]["source"] != "task_list" or metrics["num_runs"] != 3:
+    if no_leaderboard_entry_reason(metrics) is not None:
         return None
     time = metrics["time_minutes"]
     length = metrics["answer_length_words"]
@@ -390,6 +403,6 @@ def format_report(metrics: dict, max_listed: int = 20) -> str:
             if len(items) > max_listed:
                 lines.append(f"    ... and {len(items) - max_listed} more")
     if metrics["leaderboard_entry"] is None:
-        lines.append("  No leaderboard entry: it needs --task-list (the split's task list) and 3 runs.")
+        lines.append(f"  No leaderboard entry: {no_leaderboard_entry_reason(metrics)}.")
     return "\n".join(lines)
 

@@ -52,10 +52,13 @@ class LLMClient:
     response without the requested structured output.
 
     The first attempt may take up to ``timeout`` seconds, and each retry's
-    timeout is cut to the time left in the budget, so a request takes at most
-    ``max(timeout, retry_seconds)`` in total: 15 minutes with the defaults.
-    Once one request has spent its whole budget unable to connect to the
-    server, later requests that cannot connect fail after their first attempt,
+    timeout is cut to the time left in the budget, so a request takes about
+    ``max(timeout, retry_seconds)`` in total at most: 15 minutes with the
+    defaults (the SDK applies the timeout to each phase of an attempt, such as
+    connecting and reading, so one attempt can run somewhat longer).  Once one
+    request has spent its whole budget unable to connect to the server (the
+    connection is refused or the host name does not resolve; a connection
+    attempt that times out counts as a timeout, not as unable to connect), later requests that cannot connect fail after their first attempt,
     until a request succeeds again, so that an unreachable endpoint does not
     hold every request for the full budget.
 
@@ -233,6 +236,9 @@ def _sdk_client(provider: str, is_async: bool, base_url: str | None, timeout: fl
     if provider == "openai":
         cls = openai.AsyncOpenAI if is_async else openai.OpenAI
         return cls(base_url=base_url, **common)
+    if base_url is not None:
+        raise ValueError("A base URL applies only to the openai provider; Azure OpenAI takes its endpoint from "
+                         "AZURE_OPENAI_ENDPOINT_URL")
     cls = openai.AsyncAzureOpenAI if is_async else openai.AzureOpenAI
     return cls(
         api_key=os.getenv("AZURE_OPENAI_API_KEY"),

@@ -48,7 +48,8 @@ def write_result(results_root: Path, task: str, run: int, score: float, timestam
     (result_dir / result_file_name(timestamp, f"answer_{run}.md")).write_text(json.dumps(result))
 
 
-def build_submission(root: Path) -> tuple[Path, Path]:
+def build_submission(root: Path, judge: str | None = None) -> tuple[Path, Path]:
+    """The fixture's answers and results; the results record ``judge`` as their judge model if given."""
     answers_root, results_root = root / "answers", root / "eval_results"
     for (task, run), (words, score, seconds) in SUBMISSION.items():
         task_dir = answers_root / AGENT / task
@@ -57,7 +58,7 @@ def build_submission(root: Path) -> tuple[Path, Path]:
         if seconds is not None:
             (task_dir / f"answer_{run}.meta.json").write_text(json.dumps({"time_seconds": seconds}))
         if score is not None:
-            write_result(results_root, task, run, score, "20260102_120000")
+            write_result(results_root, task, run, score, "20260102_120000", **({"judge": {"model": judge}} if judge else {}))
     write_result(results_root, "t1", 2, 0.1, "20260101_120000")  # older result, superseded
     return answers_root, results_root
 
@@ -68,7 +69,7 @@ def test_success_tolerates_float_rounding():
 
 
 def test_metrics_match_hand_computed_values(tmp_path):
-    answers_root, results_root = build_submission(tmp_path)
+    answers_root, results_root = build_submission(tmp_path, judge="gpt-6-luna")
     records, num_runs = collect_records(AGENT, [t.task_id for t in TASKS], answers_root, results_root)
     assert num_runs == 3
     metrics = compute_metrics(records, TASKS, num_runs, AGENT, task_list=Path("split.csv"))
@@ -127,8 +128,8 @@ def test_answer_copies_next_to_results_replace_a_missing_answers_dir(tmp_path):
     assert metrics() == expected
 
 
-def test_leaderboard_entry_needs_a_task_list_and_three_runs(tmp_path):
-    answers_root, results_root = build_submission(tmp_path)
+def test_leaderboard_entry_needs_a_task_list_three_runs_and_one_recorded_judge(tmp_path):
+    answers_root, results_root = build_submission(tmp_path, judge="gpt-6-luna")
     split = Path("split.csv")
 
     def metrics(task_ids: list[str], task_list: Path | None, num_runs: int | None = None) -> dict:
@@ -147,6 +148,13 @@ def test_leaderboard_entry_needs_a_task_list_and_three_runs(tmp_path):
 
     assert metrics(["t1", "t2", "t3"], split, num_runs=2)["leaderboard_entry"] is None
     assert metrics(["t2"], split)["leaderboard_entry"]["time"] == "-"  # no answer reports a time
+
+    # Results that do not record their judge model, or come from several, get no entry
+    unjudged_answers, unjudged_results = build_submission(tmp_path / "unjudged")
+    records, runs = collect_records(AGENT, ["t1", "t2", "t3"], unjudged_answers, unjudged_results)
+    unjudged = compute_metrics(records, [TaskInfo(t) for t in ("t1", "t2", "t3")], runs, AGENT, split)
+    assert unjudged["leaderboard_entry"] is None
+    assert "No leaderboard entry: the results must all come from one judge model" in format_report(unjudged)
 
 
 def test_tasks_are_discovered_only_where_there_are_answers(tmp_path):
@@ -183,7 +191,7 @@ def test_latest_result_is_chosen_by_timestamp(tmp_path):
 
 
 def test_metrics_command_prints_report_and_saves_json(tmp_path, capsys):
-    answers_root, results_root = build_submission(tmp_path)
+    answers_root, results_root = build_submission(tmp_path, judge="gpt-6-luna")
     task_list = tmp_path / "split.csv"
     task_list.write_text("task_id,task_description,domain,subdomain\n"
                          "t1,d,A,x\nt2,d,A,x\nt3,d,B,y\n")
