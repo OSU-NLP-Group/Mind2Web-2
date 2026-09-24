@@ -43,7 +43,7 @@ Two classes that do the actual LLM-based work:
 - `compute_score(mutate=True)`: Recursive score computation with write-back
 
 ### eval_runner.py — Async Execution Engine
-- `evaluate_task()`: Evaluates the `answer_<k>.md` files of one task (loads eval script, manages cache, runs answers concurrently) and keeps a copy of each answer and its `.meta.json` next to its results. It reuses an answer's latest result only when the result records the same answer (SHA-256 of the file), the same judge configuration, the same eval script (SHA-256), and the same default `EvaluatorConfig` settings; changes to cached pages are not detected; before evaluating an answer again it moves the earlier results to `results/superseded/`
+- `evaluate_task()`: Evaluates the `answer_<k>.md` files of one task (loads eval script, manages cache, runs answers concurrently) and keeps a copy of each answer and its `.meta.json` next to its results. It reuses an answer's latest result only when the result records the same answer (SHA-256 of the file), the same judge configuration, the same eval script (SHA-256), the same default `EvaluatorConfig` settings, and the same `results.SCORING_VERSION`; raise `SCORING_VERSION` in any framework change that can change scores without changing a script or an `EvaluatorConfig` default; changes to cached pages are not detected; before evaluating an answer again it moves the earlier results to `results/superseded/`
 - `_eval_one_answer()`: Evaluates a single answer file
 - `DualSemaphore`: Wrapper holding both webpage and LLM semaphores
 

@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from mind2web2 import EvaluatorConfig, eval_runner
+from mind2web2 import EvaluatorConfig, eval_runner, results
 from mind2web2.llm_client import JudgeConfig, JudgeError
 from mind2web2.metrics import collect_records, compute_metrics
 from mind2web2.submission import TaskInfo
@@ -185,6 +185,11 @@ def test_a_result_is_reused_only_for_the_same_answer_judge_and_script(tmp_path, 
     client = judged_by_other_judge()
     evaluate(tmp_path, monkeypatch, client, revised, answer="Source: https://b.example/2")
     assert client.calls > 0  # only the default evaluator settings changed
+
+    monkeypatch.setattr(results, "SCORING_VERSION", results.SCORING_VERSION + 1)
+    client = judged_by_other_judge()
+    evaluate(tmp_path, monkeypatch, client, revised, answer="Source: https://b.example/2")
+    assert client.calls > 0  # only the scoring version changed
 
     client = judged_by_other_judge()
     evaluate(tmp_path, monkeypatch, client, revised, answer="Source: https://b.example/2", overwrite=True)

@@ -26,6 +26,14 @@ from pathlib import Path
 _TIMESTAMP_RE = re.compile(r"(\d{8})_?(\d{6})")
 SUPERSEDED_DIR = "superseded"
 
+#: Version of the framework's scoring logic, recorded in every result as
+#: ``scoring_version``.  A result is reused only under the current version, so
+#: raise it in any change to the framework that can change scores without
+#: changing an eval script or an :class:`~mind2web2.evaluator.EvaluatorConfig`
+#: default: the prompts and page handling in ``eval_toolkit``, PDF rendering,
+#: what a failed capture means to the judge, or how rubric scores aggregate.
+SCORING_VERSION = 1
+
 
 def answer_base(answer_name: str) -> str:
     """Strip the extension from an answer file name: ``answer_3.md`` -> ``answer_3``."""

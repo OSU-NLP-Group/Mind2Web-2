@@ -60,9 +60,10 @@ async def _eval_one_answer(
 
     The result records the SHA-256 of the answer file (``answer_sha256``) and
     of the eval script (``eval_script_sha256``, given as ``script_sha256``),
-    and the framework's default :class:`EvaluatorConfig` settings
+    the framework's default :class:`EvaluatorConfig` settings
     (``evaluator_config``), such as the size limits of the screenshots sent to
-    the judge.
+    the judge, and :data:`mind2web2.results.SCORING_VERSION`
+    (``scoring_version``).
     """
 
     answer_name = answer_path.name
@@ -135,6 +136,7 @@ async def _eval_one_answer(
         result["answer_sha256"] = hashlib.sha256(answer_bytes).hexdigest()  # what the result scored
         result["eval_script_sha256"] = script_sha256  # the script that scored it
         result["evaluator_config"] = EvaluatorConfig().as_dict()  # the defaults the script ran with
+        result["scoring_version"] = results.SCORING_VERSION  # the framework logic that scored it
 
         logger.info(
             f"✅ Evaluation completed with score: {result.get('final_score', 'unknown')}",
@@ -184,8 +186,9 @@ def _reusable_result(result_file: Path, answer_path: Path, client,
     Otherwise return ``(None, reason)``.  The result must record the SHA-256 of
     the answer file as it is now, the same judge configuration as ``client``
     (``None`` for a client without one), ``script_sha256``, the SHA-256 of the
-    eval script, and the default :class:`EvaluatorConfig` settings as they are
-    now, as every result saved by :func:`_eval_one_answer` does.  Settings that
+    eval script, the default :class:`EvaluatorConfig` settings as they are
+    now, and the current :data:`mind2web2.results.SCORING_VERSION`, as every
+    result saved by :func:`_eval_one_answer` does.  Settings that
     an eval script passes itself are part of the script, so its SHA-256 covers
     them.  Changes to the task's cached pages are not detected.
     """
@@ -205,6 +208,8 @@ def _reusable_result(result_file: Path, answer_path: Path, client,
     if result.get("evaluator_config") != EvaluatorConfig().as_dict():
         return None, ("its latest result was produced with other evaluator settings, such as screenshot limits, "
                       "or does not record them")
+    if result.get("scoring_version") != results.SCORING_VERSION:
+        return None, "its latest result was produced by another version of the scoring logic, or does not record it"
     return result, ""
 
 
@@ -265,8 +270,9 @@ async def evaluate_task(
         Evaluate every answer again, even one whose latest result could be
         reused.  Without it, an answer's latest result is reused, with no judge
         request, when it records the SHA-256 of the current answer file, the
-        judge configuration of ``client``, the SHA-256 of the eval script, and
-        the current default :class:`EvaluatorConfig` settings.
+        judge configuration of ``client``, the SHA-256 of the eval script, the
+        current default :class:`EvaluatorConfig` settings, and the current
+        :data:`mind2web2.results.SCORING_VERSION`.
         Changes to the task's cached pages, such as pages recaptured in the
         Cache Manager, are not detected; evaluate with ``overwrite`` after
         changing them.  Before an answer is evaluated, its
