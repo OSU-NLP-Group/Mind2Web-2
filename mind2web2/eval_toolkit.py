@@ -162,13 +162,19 @@ class BaseEvaluator:
 
         A URL that serves a PDF is downloaded; any other URL, including a
         PDF-looking URL whose response is not a PDF, is loaded in the browser.
+        The PDF check and download run under the webpage semaphore, like
+        browser captures.
         """
-        if await is_pdf(url):
-            pdf_bytes = await self.pdf_parser.fetch(url)
-            if pdf_bytes is not None:
-                await asyncio.to_thread(self.cache.put_pdf, url, pdf_bytes)
-                return await self.pdf_parser.extract(pdf_bytes)
-            self.logger.info(f"{url} did not return a PDF; loading it in the browser")
+        webpage_semaphore = getattr(self.semaphore, 'webpage', self.semaphore)
+        pdf_bytes = None
+        async with webpage_semaphore:
+            if await is_pdf(url):
+                pdf_bytes = await self.pdf_parser.fetch(url)
+                if pdf_bytes is None:
+                    self.logger.info(f"{url} did not return a PDF; loading it in the browser")
+        if pdf_bytes is not None:
+            await asyncio.to_thread(self.cache.put_pdf, url, pdf_bytes)
+            return await self.pdf_parser.extract(pdf_bytes)
         return await self._capture_and_cache(url)
 
     async def get_page_info(self, url: str, cancellation_event: Optional[asyncio.Event] = None):

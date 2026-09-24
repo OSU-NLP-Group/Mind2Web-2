@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import random
 from collections import Counter
@@ -36,7 +37,9 @@ from mind2web2.utils.cache_filesys import CacheFileSys
 from mind2web2.utils.logging_setup import create_logger
 from mind2web2.utils.path_config import PathConfig
 from mind2web2.prompts.cache_prompts import llm_extraction_prompts
-from mind2web2.utils.url_tools import remove_utm_parameters, normalize_url_simple, regex_find_urls, URLs
+from mind2web2.utils.url_tools import (
+    remove_utm_parameters, normalize_url_keep_case, normalize_url_simple, regex_find_urls, URLs,
+)
 
 # -------------------------------------------------------------------- #
 # Constants
@@ -180,12 +183,16 @@ async def crawl_one_page(
     browser_manager: BatchBrowserManager,
     logger: Logger,
     retry_failed: bool = False,
+    pdf_semaphore: Optional[asyncio.Semaphore] = None,
 ) -> str:
     """Cache one page: download it if it is a PDF, otherwise capture it in the shared browser.
 
     URLs that are already cached are skipped, and so are URLs with a failure
     record unless ``retry_failed``.  A failed capture is recorded in the
     cache.  Every step has its own time limit, so no URL can stall the crawl.
+    The PDF check and download run under ``pdf_semaphore`` when one is given,
+    so that a task citing many documents on one site does not send all its
+    requests at once.
 
     Returns what happened: ``"cached"`` (already cached), ``"skipped"`` (a
     failure record, not retried), ``"stored"``, ``"failed"``, ``"blocked"``
@@ -199,13 +206,16 @@ async def crawl_one_page(
             return "skipped"
         url = remove_utm_parameters(url)
         logger.info(f"Crawling {url}")
-        if await is_pdf(url):
-            await asyncio.sleep(0.2 * random.random())
-            pdf_bytes = await pdf_parser.fetch(url)
-            if pdf_bytes is not None:
-                await asyncio.to_thread(cache.put_pdf, url, pdf_bytes)
-                return "stored"
-            logger.info(f"{url} did not return a PDF; loading it in the browser")
+        async with pdf_semaphore or contextlib.nullcontext():
+            pdf_bytes = None
+            if await is_pdf(url):
+                await asyncio.sleep(0.2 * random.random())
+                pdf_bytes = await pdf_parser.fetch(url)
+                if pdf_bytes is None:
+                    logger.info(f"{url} did not return a PDF; loading it in the browser")
+        if pdf_bytes is not None:
+            await asyncio.to_thread(cache.put_pdf, url, pdf_bytes)
+            return "stored"
 
         capture = await browser_manager.capture(url, logger)
         if capture.ok:
@@ -251,7 +261,9 @@ async def process_cache(
 
     Args:
         page_timeout: Time limit in seconds for one attempt at capturing a page in the browser.
-        retry_failed: Crawl URLs whose capture failed in an earlier run again.
+        retry_failed: Crawl URLs whose capture failed in an earlier run again, including
+            failure records for URLs that evaluation captured live and the answers'
+            URL list does not contain.
         answers_root: Base directory containing answers. If None, uses PathConfig defaults.
         cache_root: Base directory for cache storage. If None, uses PathConfig defaults.
         logger: Logger instance. If None, creates a default one.
@@ -335,7 +347,18 @@ async def process_cache(
     logger.info(f"[{agent_name}/{task_id}] Total unique URLs to crawl: {len(all_unique_urls)}")
 
     pdf_parser = PDFParser()
+    pdf_semaphore = asyncio.Semaphore(max_concurrent_pages)
     cache = CacheFileSys(str(cache_task_dir))
+    to_crawl = list(all_unique_urls)
+    if retry_failed:
+        # Evaluation records failures for the URLs it captures live, which are
+        # not in the URL list; retrying only the list would leave them for good.
+        listed = {normalize_url_keep_case(url) for url in all_unique_urls}
+        unlisted = [url for url in cache.failures() if normalize_url_keep_case(url) not in listed]
+        if unlisted:
+            logger.info(f"[{agent_name}/{task_id}] Also retrying {len(unlisted)} failed URLs "
+                        f"that are not in the answers' URL list")
+            to_crawl += unlisted
 
     # Use BatchBrowserManager to share browser instance; supports high concurrency
     logger.info(f"[{agent_name}/{task_id}] Headless mode: {headless}")
@@ -353,14 +376,14 @@ async def process_cache(
 
             async def crawl(url: str):
                 outcomes[url] = await crawl_one_page(url, cache, pdf_parser, browser_manager, logger,
-                                                     retry_failed=retry)
+                                                     retry_failed=retry, pdf_semaphore=pdf_semaphore)
                 bar.update(1)
 
             with tqdm(total=len(urls), desc=desc, unit="url", ncols=80) as bar:
                 await asyncio.gather(*(crawl(url) for url in urls))
             return outcomes
 
-        outcomes = await crawl_all(all_unique_urls, retry_failed, "Crawling")
+        outcomes = await crawl_all(to_crawl, retry_failed, "Crawling")
         # A failure that is not a refusal is often transient (a slow, overloaded,
         # or rate-limiting site): retry those from this run once, when nothing
         # else is queued.
@@ -448,7 +471,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--retry_failed",
         action="store_true",
-        help="Crawl URLs whose capture failed in an earlier run again (default: skip them)"
+        help="Crawl URLs whose capture failed in an earlier run again, including URLs that evaluation "
+             "captured live (default: skip them)"
     )
     parser.add_argument(
         "--headless",

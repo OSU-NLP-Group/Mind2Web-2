@@ -210,6 +210,70 @@ def test_crawler_retries_failures_of_the_run_once_but_not_refusals(tmp_path, mon
     assert meta["failed_urls"] == {urls[1]: "blocked: HTTP 403"}
 
 
+def test_crawler_checks_at_most_the_page_limit_of_urls_for_pdfs_at_once(tmp_path, monkeypatch):
+    running, peak = 0, 0
+
+    async def slow_is_pdf(url):
+        nonlocal running, peak
+        running += 1
+        peak = max(peak, running)
+        await asyncio.sleep(0.05)
+        running -= 1
+        return False
+
+    monkeypatch.setattr(crawler, "is_pdf", slow_is_pdf)
+    cache = CacheFileSys(str(tmp_path))
+    browser = StubBrowser(Capture(screenshot_b64=png_b64(), text="page"))
+
+    async def crawl_many():
+        semaphore = asyncio.Semaphore(3)
+        await asyncio.gather(*(crawler.crawl_one_page(f"https://example.com/{i}", cache, PDFParser(), browser,
+                                                      LOGGER, pdf_semaphore=semaphore) for i in range(10)))
+
+    asyncio.run(crawl_many())
+    assert peak == 3
+    assert len(cache.get_all_urls()) == 10
+
+
+def test_retry_failed_also_retries_failures_that_evaluation_recorded(tmp_path, monkeypatch):
+    """Evaluation records failures for URLs it captures live, which the answers' URL list does not contain."""
+    captured: list[str] = []
+
+    class CapturingBrowser:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            pass
+
+        async def capture(self, url, logger):
+            captured.append(url)
+            return Capture(screenshot_b64=png_b64(), text=f"Page at {url}")
+
+    monkeypatch.setattr(crawler, "BatchBrowserManager", CapturingBrowser)
+    listed, unlisted = "https://example.com/listed", "https://example.com/Seen-Only-In-Evaluation"
+    task_dir = tmp_path / "cache" / "agent" / "task"
+    cache = CacheFileSys(str(task_dir))
+    cache.record_failure(listed, "HTTP 503")
+    cache.record_failure(unlisted, "navigation failed: no response within 30s")
+    (tmp_path / "cache" / "agent" / "task.json").write_text(json.dumps(
+        {"all_unique_urls": [listed], "urls": {listed: ["answer_1.md"]}}))
+
+    def run(retry_failed: bool) -> None:
+        asyncio.run(crawler.process_cache("agent", "task", answers_root=tmp_path / "answers",
+                                          cache_root=tmp_path / "cache", logger=LOGGER,
+                                          retry_failed=retry_failed))
+
+    run(retry_failed=False)
+    assert captured == []
+    run(retry_failed=True)
+    assert sorted(captured) == sorted([listed, unlisted])
+    assert CacheFileSys(str(task_dir)).failures() == {}
+
+
 # ------------------------------------------------------------------ evaluation and crawler
 
 def test_cache_writes_run_outside_the_event_loop(tmp_path, monkeypatch):
