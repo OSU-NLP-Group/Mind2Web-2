@@ -207,6 +207,7 @@ def _matrix_html(entries: list[AnswerEntry], stale: set[tuple[str, int]]) -> str
             if entry is None:
                 tds.append('<td class="cell none">·</td>')
                 scores.append(0.0)
+                below = True
                 continue
             score = None if (task_id, r) in stale else _score(entry)
             scores.append(score or 0.0)

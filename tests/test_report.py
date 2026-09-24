@@ -193,6 +193,9 @@ def test_the_mean_of_a_task_counts_runs_without_a_result_as_0():
                          None, "a")
     unscored = AnswerEntry("t1", "answer_2.md", 2, None, None, "b")
     other_task = AnswerEntry("t2", "answer_1.md", 1, {"final_score": 0.5}, None, "c")
-    page = render_report("agent", [scored, unscored, other_task])
+    perfect_once = AnswerEntry("t3", "answer_1.md", 1, {"final_score": 1.0}, None, "d")
+    page = render_report("agent", [scored, unscored, other_task, perfect_once])
     means = re.findall(r"<td class=num>([0-9.]+)</td></tr>", page)
-    assert means == ["0.500", "0.250"]  # t2 has no answer in run 2
+    assert means == ["0.500", "0.250", "0.500"]  # t2 and t3 have no answer in run 2
+    # A run without an answer puts the task below 1.0 for the filter, as its mean says
+    assert '<tr data-task="t3" data-below="1">' in page
