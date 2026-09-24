@@ -16,10 +16,10 @@ export async function selectTask(taskId) {
     } catch (err) {
         console.error('Failed to load URLs:', err);
     }
-    // Load answers
+    // Load answers, unless another task was selected meanwhile
     try {
         const data = await api.getAnswers(taskId);
-        setState({ answers: data.files || [] });
+        if (getState().selectedTaskId === taskId) setState({ answers: data.files || [] });
     } catch {}
 }
 
