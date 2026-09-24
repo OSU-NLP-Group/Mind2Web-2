@@ -44,7 +44,7 @@ class AnswerMetadata(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     time_seconds: float | None = Field(
-        default=None, ge=0,
+        default=None, ge=0, allow_inf_nan=False,
         description="Wall-clock time the agent took to produce the answer, in seconds.",
     )
 
@@ -143,9 +143,11 @@ def load_task_list(source: Path) -> list[TaskInfo]:
     if source.is_dir():
         tasks = [TaskInfo(p.stem) for p in sorted(source.glob("*.py"))]
     elif source.suffix.lower() == ".csv":
-        with source.open(newline="", encoding="utf-8") as fp:
+        with source.open(newline="", encoding="utf-8-sig") as fp:  # utf-8-sig: spreadsheets write a BOM
             reader = csv.DictReader(fp)
             try:
+                if reader.fieldnames:
+                    reader.fieldnames = [name.strip() for name in reader.fieldnames]
                 if not reader.fieldnames or "task_id" not in reader.fieldnames:
                     raise ValueError(f"{source}: CSV task list needs a 'task_id' column")
                 rows = [(row["task_id"] or "", row.get("domain"), row.get("subdomain")) for row in reader]
@@ -154,8 +156,8 @@ def load_task_list(source: Path) -> list[TaskInfo]:
         tasks = [TaskInfo(task_id.strip(), domain or None, subdomain or None)
                  for task_id, domain, subdomain in rows if task_id.strip()]
     else:
-        lines = source.read_text(encoding="utf-8").splitlines()
-        tasks = [TaskInfo(line.strip()) for line in lines if line.strip() and not line.startswith("#")]
+        lines = [line.strip() for line in source.read_text(encoding="utf-8-sig").splitlines()]
+        tasks = [TaskInfo(line) for line in lines if line and not line.startswith("#")]
     seen: set[str] = set()
     unique = []
     for task in tasks:

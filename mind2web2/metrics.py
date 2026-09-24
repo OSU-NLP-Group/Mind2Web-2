@@ -263,8 +263,9 @@ def leaderboard_entry(metrics: dict) -> dict | None:
     """The ``eval_set`` block of an entry in the leaderboard's ``leaderboard_data.json``.
 
     Returns ``None`` unless the metrics cover a task list with exactly 3 runs,
-    so that metrics over a subset of a split, or over another number of runs,
-    cannot be mistaken for a leaderboard entry.  Values are strings as on the
+    so that metrics over the tasks an agent happened to answer, or over another
+    number of runs, cannot be mistaken for a leaderboard entry.  Whether the
+    task list is a whole split is not checked: pass the split's own list.  Values are strings as on the
     leaderboard: two decimals, the answer length as an integer, and ``"-"``
     when unavailable.
     """
@@ -335,6 +336,6 @@ def format_report(metrics: dict, max_listed: int = 20) -> str:
             if len(items) > max_listed:
                 lines.append(f"    ... and {len(items) - max_listed} more")
     if metrics["leaderboard_entry"] is None:
-        lines.append("  No leaderboard entry: it needs --task-list with the full split and 3 runs.")
+        lines.append("  No leaderboard entry: it needs --task-list (the split's task list) and 3 runs.")
     return "\n".join(lines)
 

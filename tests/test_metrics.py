@@ -228,3 +228,12 @@ def test_metrics_read_the_results_evaluate_task_writes(tmp_path, monkeypatch):
     assert metrics["per_task"]["yu_lineage"]["scores"] == [scores[f"answer_{k}.md"] for k in (1, 2, 3)]
     assert metrics["missing_results"] == []
     assert metrics["time_minutes"]["per_run"] == [1.5, None, None]
+
+    # A deleted metadata file does not live on in the copy next to the results
+    (answers_root / "example" / "yu_lineage" / "answer_1.meta.json").unlink()
+    asyncio.run(eval_runner.evaluate_task(
+        client=FakeLLMClient("hash"), task_id="yu_lineage", agent_name="example",
+        answer_dir=answers_root, cache_dir=tmp_path / "cache", output_dir=results_root,
+        script_path=REPO_ROOT / "eval_scripts" / "dev_set" / "yu_lineage.py",
+    ))
+    assert not (results_root / "example" / "yu_lineage" / "answer_1" / "answer_1.meta.json").exists()

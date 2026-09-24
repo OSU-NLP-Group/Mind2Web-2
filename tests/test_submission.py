@@ -38,6 +38,21 @@ def test_task_list_formats(tmp_path):
     assert [t.task_id for t in load_task_list(scripts)] == ["y", "z"]
 
 
+def test_task_lists_saved_with_a_byte_order_mark_or_indented_comments(tmp_path):
+    csv_file = tmp_path / "split.csv"  # as a spreadsheet saves "CSV UTF-8"
+    csv_file.write_bytes("\ufeff task_id ,domain\na,Shopping\n".encode("utf-8"))
+    assert load_task_list(csv_file) == [TaskInfo("a", "Shopping")]
+    txt_file = tmp_path / "tasks.txt"
+    txt_file.write_bytes("\ufeffa\n  # a note\nb\n".encode("utf-8"))
+    assert [t.task_id for t in load_task_list(txt_file)] == ["a", "b"]
+
+
+def test_metadata_time_must_be_finite(tmp_path):
+    make_task(tmp_path, "t", {"answer_1.md": CITED, "answer_1.meta.json": '{"time_seconds": Infinity}'})
+    with pytest.raises(MetadataError, match="time_seconds"):
+        load_metadata(list_answer_files(tmp_path / "t")[0])
+
+
 def test_csv_task_list_needs_task_id_column(tmp_path):
     csv_file = tmp_path / "split.csv"
     csv_file.write_text("id,description\na,x\n")

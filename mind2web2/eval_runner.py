@@ -329,6 +329,8 @@ async def evaluate_task(
                         dst = answer_folder / src.name
                         if src.exists() and (refresh or not dst.exists()):
                             shutil.copyfile(src, dst)
+                        elif not src.exists():
+                            dst.unlink(missing_ok=True)  # a deleted metadata file must not live on in its copy
 
                 # 5‑B. Result reuse check
                 result_dir = answer_folder / "results"
