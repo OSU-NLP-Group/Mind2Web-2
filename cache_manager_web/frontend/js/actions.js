@@ -10,13 +10,9 @@ import * as api from './api.js';
 
 export async function selectTask(taskId) {
     setState({ selectedTaskId: taskId, selectedUrl: null, urls: [], currentText: null, currentIssues: null, answers: [] });
+    const number = ++urlsRequested;
     try {
-        const data = await api.getUrls(taskId);
-        setState({
-            urls: data.urls || [],
-            urlTotal: data.total || 0,
-            urlReviewedCount: data.reviewed_count || 0,
-        });
+        showUrls(number, taskId, await api.getUrls(taskId));
     } catch (err) {
         console.error('Failed to load URLs:', err);
     }
@@ -113,25 +109,35 @@ function failureText(failure) {
 
 // ---- Reload current task ----
 
-// Captures can trigger reloads faster than they complete; only the latest one's answer is shown.
-let reloadGeneration = 0;
+// Captures can trigger reloads faster than they complete, and another task can be
+// selected while one is under way.  Each request for a task's URL list is numbered,
+// and its answer is shown only if no answer to a later request has been shown and
+// its task is still selected; so an earlier answer never replaces a later one, and
+// when the latest request fails, the latest answer received stays.
+let urlsRequested = 0;
+let urlsShown = 0;
+
+function showUrls(number, taskId, data) {
+    if (number < urlsShown || getState().selectedTaskId !== taskId) return false;
+    urlsShown = number;
+    setState({
+        urls: data.urls || [],
+        urlTotal: data.total || 0,
+        urlReviewedCount: data.reviewed_count || 0,
+    });
+    return true;
+}
 
 export async function reloadCurrentTask() {
-    const generation = ++reloadGeneration;
+    const number = ++urlsRequested;
     const s = getState();
     refreshIssues();
     if (!s.selectedTaskId) return;
     try {
         const data = await api.getUrls(s.selectedTaskId);
-        // A later reload, or selecting another task, makes this answer stale
-        if (generation !== reloadGeneration || getState().selectedTaskId !== s.selectedTaskId) return;
-        setState({
-            urls: data.urls || [],
-            urlTotal: data.total || 0,
-            urlReviewedCount: data.reviewed_count || 0,
-        });
+        if (!showUrls(number, s.selectedTaskId, data)) return;
         // Re-select current URL if still exists
-        if (s.selectedUrl && data.urls?.some(u => u.url === s.selectedUrl)) {
+        if (s.selectedUrl && getState().selectedUrl === s.selectedUrl && data.urls?.some(u => u.url === s.selectedUrl)) {
             selectUrl(s.selectedTaskId, s.selectedUrl);
         }
     } catch {}
@@ -139,13 +145,16 @@ export async function reloadCurrentTask() {
 
 // ---- Issue index and task list, after an edit or capture changed them ----
 
-let issuesGeneration = 0;
+// Numbered like the requests for a task's URL list: an earlier answer never replaces a later one.
+let issuesRequested = 0;
+let issuesShown = 0;
 
 export async function refreshIssues() {
-    const generation = ++issuesGeneration;
+    const number = ++issuesRequested;
     try {
         const [issues, taskData] = await Promise.all([api.getIssues(), api.getTasks()]);
-        if (generation !== issuesGeneration) return;  // a later refresh is under way
+        if (number < issuesShown) return;
+        issuesShown = number;
         const issueIndex = issues.issue_index || [];
         setState({
             issueIndex,
