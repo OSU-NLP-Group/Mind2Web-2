@@ -57,4 +57,4 @@ exclude = ["code_gen*", "InfoVisualizer*", "dataset*", "eval_scripts*", "scripts
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["tests"]
+pythonpath = [".", "tests"]
