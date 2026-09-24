@@ -935,7 +935,8 @@ def _redirect_url(actual_url: Optional[str], request: Request) -> Optional[str]:
     store (see :func:`_valid_url`) and its host is neither the ``Host`` of
     ``request`` nor an address of this machine (:func:`_names_this_machine`),
     whichever address the reviewer reached the server at, so a capture never
-    adds the Cache Manager's own address to a task.
+    adds the Cache Manager's own address to a task.  A host name with a
+    trailing dot (``localhost.``) names the same host as without it.
     """
     if not actual_url:
         return None
@@ -943,8 +944,8 @@ def _redirect_url(actual_url: Optional[str], request: Request) -> Optional[str]:
         url = _valid_url(actual_url)
     except HTTPException:
         return None
-    host = urlparse(url).hostname or ""
-    if _names_this_machine(host) or host == (request.url.hostname or "").strip("[]").lower():
+    host = (urlparse(url).hostname or "").rstrip(".")
+    if _names_this_machine(host) or host == (request.url.hostname or "").strip("[]").lower().rstrip("."):
         return None
     return url
 

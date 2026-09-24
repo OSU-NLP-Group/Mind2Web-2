@@ -649,7 +649,8 @@ def test_captures_and_uploads_need_an_http_url_and_never_store_the_servers_own_a
 
 
 @pytest.mark.parametrize("target", ["http://localhost:8000/", "http://127.0.0.2/", "http://[::1]:8000/",
-                                    "http://0.0.0.0:8000/", "http://review.localhost/", "http://192.168.1.20:8000/"])
+                                    "http://0.0.0.0:8000/", "http://review.localhost/", "http://192.168.1.20:8000/",
+                                    "http://localhost.:8000/", "http://127.0.0.1./"])
 def test_a_redirect_to_this_machine_is_ignored_whatever_address_the_server_was_reached_at(target):
     """A server bound to 0.0.0.0 and reached at its LAN address still answers at its loopback addresses."""
     from starlette.requests import Request
