@@ -10,9 +10,10 @@ captures of a run share one browser with at most ``--max-pages`` pages open.
 
 An answer is not evaluated again when its latest result scored the same
 answer file with the same judge configuration, the same eval script, the
-same evaluator settings, and the same scoring version
-(:data:`mind2web2.results.SCORING_VERSION`), unless ``--overwrite``; changes
-to the cached pages are not detected.  Before an answer is evaluated again, its earlier results
+same evaluator settings, the same scoring version
+(:data:`mind2web2.results.SCORING_VERSION`), and the same
+``MIND2WEB2_EVAL_DATE`` (:data:`mind2web2.results.EVAL_DATE_VARIABLE`), unless
+``--overwrite``; changes to the cached pages are not detected.  Before an answer is evaluated again, its earlier results
 move to ``results/superseded/``.  Selected tasks without answers are skipped.
 
 Without ``--task-list`` or ``--task``, the tasks are those the agent has
@@ -105,8 +106,8 @@ def register(subparsers) -> None:
                          help="Capture live pages in a browser without a window.")
     runtime.add_argument("--overwrite", action="store_true",
                          help="Evaluate answers again even if their latest result scored the same answer "
-                              "file with the same judge, eval script, evaluator settings, and scoring "
-                              "version (earlier results move to results/superseded/).")
+                              "file with the same judge, eval script, evaluator settings, scoring version, "
+                              "and MIND2WEB2_EVAL_DATE (earlier results move to results/superseded/).")
     parser.set_defaults(run=run)
 
 
