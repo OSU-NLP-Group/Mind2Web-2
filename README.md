@@ -190,7 +190,7 @@ Each task's eval script scores every `answer_<k>.md` of the task, and each resul
 The main options; run `uv run mind2web2 evaluate --help` for all options and their defaults:
 
 - `--judge-model`: Judge model; every judge request uses it, whatever model an eval script names (default: `gpt-6-luna`). The paper's results were judged by `o4-mini`; scores from different judges are not directly comparable.
-- `--judge-reasoning-effort`: `reasoning_effort` for reasoning-model judges (default: the model's own default)
+- `--judge-reasoning-effort`: `reasoning_effort` for reasoning-model judges (default: `max` for `gpt-6-luna`, the model's own default for any other model)
 - `--judge-temperature`: `temperature` for non-reasoning judges such as `gpt-4.1` (default: not sent)
 - `--llm-provider`: `openai` or `azure_openai`; `--judge-base-url` sends the `openai` provider's requests to an OpenAI-compatible endpoint (default: `$OPENAI_BASE_URL`, else the OpenAI API)
 - `--num-runs`: runs per task in the metrics printed at the end (default: the highest run index found; the leaderboard uses 3). Every answer is evaluated regardless.

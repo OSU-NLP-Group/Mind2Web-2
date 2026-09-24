@@ -81,10 +81,17 @@ MESSAGES = [{"role": "user", "content": "Is the claim supported?"}]
 
 
 def test_judge_config_sends_only_the_parameters_that_are_set():
-    assert JudgeConfig().request_params() == {"model": DEFAULT_JUDGE_MODEL}
+    assert JudgeConfig(model="o4-mini").request_params() == {"model": "o4-mini"}
     config = JudgeConfig(model="gpt-4.1", temperature=0.0)
     assert config.request_params() == {"model": "gpt-4.1", "temperature": 0.0}
     assert config.describe() == {"model": "gpt-4.1", "reasoning_effort": None, "temperature": 0.0}
+
+
+def test_the_default_judge_reasons_at_max_unless_told_otherwise():
+    assert JudgeConfig().request_params() == {"model": DEFAULT_JUDGE_MODEL, "reasoning_effort": "max"}
+    assert JudgeConfig(model=DEFAULT_JUDGE_MODEL).describe()["reasoning_effort"] == "max"
+    assert JudgeConfig(reasoning_effort="high").request_params()["reasoning_effort"] == "high"
+    assert "reasoning_effort" not in JudgeConfig(model="gpt-4.1").request_params()
 
 
 def test_every_request_goes_to_the_judge_model_with_the_judge_parameters(monkeypatch):

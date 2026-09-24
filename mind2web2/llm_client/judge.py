@@ -14,6 +14,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 DEFAULT_JUDGE_MODEL = "gpt-6-luna"
+DEFAULT_JUDGE_REASONING_EFFORT = "max"
 
 
 @dataclass(frozen=True)
@@ -24,11 +25,21 @@ class JudgeConfig:
     keeps the model's default.  Reasoning models such as ``gpt-6-luna`` and
     ``o4-mini`` accept ``reasoning_effort`` and reject ``temperature``;
     non-reasoning models such as ``gpt-4.1`` are the other way around.
+
+    The default judge, :data:`DEFAULT_JUDGE_MODEL`, always reasons at
+    :data:`DEFAULT_JUDGE_REASONING_EFFORT`: a ``None`` ``reasoning_effort``
+    with that model becomes ``"max"``, so it is never called at its own,
+    lower default.  Any other model gets no ``reasoning_effort`` unless one
+    is given.
     """
 
     model: str = DEFAULT_JUDGE_MODEL
     reasoning_effort: str | None = None
     temperature: float | None = None
+
+    def __post_init__(self):
+        if self.reasoning_effort is None and self.model == DEFAULT_JUDGE_MODEL:
+            object.__setattr__(self, "reasoning_effort", DEFAULT_JUDGE_REASONING_EFFORT)
 
     def request_params(self) -> dict[str, Any]:
         """The Chat Completions parameters that select and configure the judge."""
@@ -94,7 +105,7 @@ class JudgeUsage:
     server reported in its responses.  It can differ from the configured
     model: an alias such as ``gpt-6-luna`` names a dated snapshot, an Azure
     deployment name can point at any model, and a server behind
-    ``--judge_base_url`` may map names.  Servers that report no model are not
+    ``--judge-base-url`` may map names.  Servers that report no model are not
     counted.
 
     ``rejections`` lists the requests the judge rejected because of their
