@@ -52,9 +52,10 @@ class LLMClient:
     code ``insufficient_quota``) is not retried.  A failure that is not retried,
     or that outlasts the retry budget, raises :class:`JudgeError`.  A rejection
     of the request's content raises its subclass :class:`JudgeContentError`: a
-    refusal, a response without the requested structured output, an output cut
-    off at the token limit, a response stopped by the content filter, and HTTP
-    400 with one of :data:`CONTENT_REJECTION_CODES`.  HTTP 400 with code
+    response without the requested structured output (the error names the
+    judge's refusal, if it gave one), an output cut off at the token limit, a
+    response stopped by the content filter, and HTTP 400 with one of
+    :data:`CONTENT_REJECTION_CODES`.  HTTP 400 with code
     ``context_length_exceeded`` raises :class:`ContextLengthError`.
 
     The first attempt may take up to ``timeout`` seconds, and each retry's

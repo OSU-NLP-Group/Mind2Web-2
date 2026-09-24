@@ -76,12 +76,13 @@ class JudgeError(RuntimeError):
 class JudgeContentError(JudgeError):
     """The judge rejected one request because of its content, so resending it would fail again.
 
-    Raised for a refusal, a content-filter or usage-policy rejection (HTTP 400
-    with code ``content_filter``, ``content_policy_violation``, or
-    ``invalid_prompt``, or a response that stopped at the content filter), and
-    an output cut off at the token limit.  Evaluation scores the check that
-    made the request as failed (a failed vote under majority voting, empty
-    values for an extraction), records the rejection in the answer's
+    Raised for a content-filter or usage-policy rejection (HTTP 400 with code
+    ``content_filter``, ``content_policy_violation``, or ``invalid_prompt``, or
+    a response that stopped at the content filter), an output cut off at the
+    token limit, and a response without the requested structured output, which
+    includes a refusal to answer a structured request.  Evaluation scores the
+    check that made the request as failed (a failed vote under majority voting,
+    empty values for an extraction), records the rejection in the answer's
     :class:`JudgeUsage`, and scores the answer as usual; the metrics list the
     answers with rejected requests.  It does not count as a failed request, so
     the answer's later requests are still sent.
