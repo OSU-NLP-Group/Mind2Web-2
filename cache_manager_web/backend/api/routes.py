@@ -155,7 +155,11 @@ async def load_cache(req: LoadRequest):
     The folder is read and scanned in a worker thread into a new
     ``CacheManager``, which replaces the current one only when complete, so
     the server keeps answering (the extension polls it) and a failed load
-    leaves the loaded cache in place.  Loads run one at a time.
+    leaves the loaded cache in place.  Loads run one at a time.  The one
+    wait is for review-state files: a route that changes one (a flag, a
+    review status) waits, on the event loop, while the load writes one
+    such file, which it does when it drops pending URLs whose page another
+    process stored.
 
     The UI loads the loaded folder again whenever it is opened and on
     Refresh.  Such a reload keeps a running batch capture and the capture
@@ -687,8 +691,8 @@ async def rename_url(task_id: str, req: RenameUrlRequest):
             raise HTTPException(500, "Failed to store the page under the new URL")
         _cm.move_review_state(task_id, old_url, listed)
     else:
-        if not _cm.add_pending_url(task_id, new_url):
-            raise HTTPException(500, "Failed to create new URL")
+        if not _cm.add_pending_url(task_id, new_url):  # another manager of the folder listed it meanwhile
+            raise HTTPException(409, f"New URL already exists: {new_url}")
         listed = _cm.canonical_url(task_id, new_url)
 
     _cm.mark_url_reviewed(task_id, old_url, "")

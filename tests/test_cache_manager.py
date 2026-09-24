@@ -336,6 +336,18 @@ def test_pending_urls_whose_page_another_process_stored_are_dropped_on_load(tmp_
         assert pending(tmp_path) == [] and c.get("/api/issues").json()["issue_index"] == []
 
 
+def test_two_managers_add_one_pending_entry_for_two_spellings_of_a_page(tmp_path):
+    CacheFileSys(str(tmp_path / "agent" / "task")).put_web(A, "page a", png_bytes())
+    first, second = CacheManager(), CacheManager()
+    first.load_agent_cache(tmp_path / "agent")
+    second.load_agent_cache(tmp_path / "agent")
+
+    assert first.add_pending_url("task", "http://www.example.com/new/")
+    assert not second.add_pending_url("task", "https://example.com/new")  # has not read first's entry yet
+    assert pending(tmp_path) == ["http://www.example.com/new/"]
+    assert second.url_state("task", "https://example.com/new") == "pending"
+
+
 def test_deleting_a_pending_url_deletes_its_other_spellings(tmp_path):
     task_dir = tmp_path / "agent" / "task"
     CacheFileSys(str(task_dir)).put_web(A, "page a", png_bytes())

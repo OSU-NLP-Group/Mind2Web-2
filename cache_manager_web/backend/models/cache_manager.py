@@ -392,12 +392,25 @@ class CacheManager:
         return stored is not None
 
     def add_pending_url(self, task_id: str, url: str) -> bool:
-        """Add ``url`` to a task as pending, with nothing stored; ``False`` if the task already has its page."""
-        if self.get_task_cache(task_id) is None or self.url_state(task_id, url) is not None:
+        """Add ``url`` to a task as pending, with nothing stored; ``False`` if the task already has its page.
+
+        Whether ``pending.json`` lists another spelling of the page (the same
+        :func:`_page_form`) is decided from the file as it is when the URL is
+        added, so a spelling that another manager of the folder added and
+        this one has not read yet is found too.
+        """
+        cache = self.get_task_cache(task_id)
+        if cache is None or self.url_state(task_id, url) is not None:
             return False
-        self._update_url_set(task_id, PENDING_FILE, lambda urls: urls | {url})
+        form = _page_form(url)
+
+        def add(urls: Set[str]) -> Set[str]:
+            listed = any(_page_form(pending) == form and _stored_state(cache, pending) is None for pending in urls)
+            return urls if listed else urls | {url}
+
+        before, after = self._update_url_set(task_id, PENDING_FILE, add)
         self._task_changed(task_id)
-        return True
+        return after != before
 
     def delete_url(self, task_id: str, url: str) -> bool:
         """Delete a URL from a task: its stored page, its failure record, its pending entries, and its flag.

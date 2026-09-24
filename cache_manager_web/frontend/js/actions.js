@@ -113,12 +113,18 @@ function failureText(failure) {
 
 // ---- Reload current task ----
 
+// Captures can trigger reloads faster than they complete; only the latest one's answer is shown.
+let reloadGeneration = 0;
+
 export async function reloadCurrentTask() {
+    const generation = ++reloadGeneration;
     const s = getState();
     refreshIssues();
     if (!s.selectedTaskId) return;
     try {
         const data = await api.getUrls(s.selectedTaskId);
+        // A later reload, or selecting another task, makes this answer stale
+        if (generation !== reloadGeneration || getState().selectedTaskId !== s.selectedTaskId) return;
         setState({
             urls: data.urls || [],
             urlTotal: data.total || 0,
@@ -133,9 +139,13 @@ export async function reloadCurrentTask() {
 
 // ---- Issue index and task list, after an edit or capture changed them ----
 
+let issuesGeneration = 0;
+
 export async function refreshIssues() {
+    const generation = ++issuesGeneration;
     try {
         const [issues, taskData] = await Promise.all([api.getIssues(), api.getTasks()]);
+        if (generation !== issuesGeneration) return;  // a later refresh is under way
         const issueIndex = issues.issue_index || [];
         setState({
             issueIndex,
