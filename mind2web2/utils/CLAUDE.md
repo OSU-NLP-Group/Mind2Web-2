@@ -51,7 +51,7 @@ Custom formatters:
 - `CompactJsonFormatter`: Compact JSONL for machine parsing
 
 ### url_tools.py — URL Normalization & Extraction
-- `normalize_url_keep_case(url)`: A normalized form that keeps letter case (UTM parameters and fragment removed, percent-decoded, trailing slash removed, `https`, no `www.`); the crawler merges the spellings of one page under it, since paths that differ in letter case can be different pages
+- `normalize_url_keep_case(url)`: A normalized form that keeps letter case (UTM parameters and fragment removed, percent-decoded, trailing slash removed, `https`, no `www.`); the crawler merges the spellings of one page under it, since paths that differ in letter case can be different pages (except a spelling whose storage key would change again, such as `?q=C%23`, which it merges by the cache's raw-key form)
 - `normalize_url_simple(url)`: `normalize_url_keep_case(url)` lowercased; the form under which cache lookups disregard letter case
 - `remove_utm_parameters(url)`: Strip all `utm_*` query params
 - `normalize_url_for_browser(url)`: Ensure URL has protocol for navigation
