@@ -19,7 +19,7 @@ from .llm_client.base_client import LLMClient
 from .llm_client.judge import (
     DEFAULT_JUDGE_MODEL, ContextLengthError, JudgeContentError, JudgeError, JudgeUsage,
 )
-from .utils.cache_filesys import CacheFileSys
+from .utils.cache_filesys import CacheFileSys, CacheIndexError
 from .utils.misc import (
     text_dedent, normalize_url_markdown
 )
@@ -63,10 +63,13 @@ class HarnessError(JudgeError):
     """The evaluation environment failed while loading a page, so the answer cannot be scored now.
 
     Raised when the tokenizer that page text is counted in cannot be loaded
-    (``tiktoken`` downloads it on first use) or the browser fails outside a
-    page load, for example because it cannot be launched.  Such a failure
-    says nothing about the answer, so it must not fail the check that loaded
-    the page.  It subclasses :class:`JudgeError` so that every handler that
+    (``tiktoken`` downloads it on first use), when the browser fails outside a
+    page load, for example because it cannot be launched, or when the task's
+    page cache cannot be read or written (a disk error, an index file that
+    cannot be parsed, or a page file that the index lists but that is
+    missing, as when another process changes the cache during the run).
+    Such a failure says nothing about the answer, so it must not fail the
+    check that loaded the page.  It subclasses :class:`JudgeError` so that every handler that
     lets a judge failure propagate does the same for it: the answer is
     reported as not scored and evaluated again on the next run.
     """
@@ -307,10 +310,14 @@ class BaseEvaluator:
             except ContextLengthError:
                 if shrink == self.config.max_text_shrinks:
                     raise
-                budget = min(budget, await asyncio.to_thread(count_tokens, web_text)) // 2
-                self.logger.warning(f"[{op_id}] The request is too long for the judge; "
-                                    f"sending it again with the page text cut to {budget} tokens")
-                web_text = await asyncio.to_thread(truncate_to_tokens, web_text, budget)
+                try:
+                    budget = min(budget, await asyncio.to_thread(count_tokens, web_text)) // 2
+                    self.logger.warning(f"[{op_id}] The request is too long for the judge; "
+                                        f"sending it again with the page text cut to {budget} tokens")
+                    web_text = await asyncio.to_thread(truncate_to_tokens, web_text, budget)
+                except HarnessError as exc:
+                    self._count_harness_failure("Shortening a page text", exc)
+                    raise
 
     def _build_message_content(self, prompt: str, screenshot_b64: List[str], use_screenshot: bool = True):
         """Build message content"""
@@ -350,9 +357,9 @@ class BaseEvaluator:
                 raise HarnessError(f"The browser failed while capturing {url}: {exc}") from exc
         if not capture.ok:
             self.logger.warning(f"Could not capture {url}: {capture.error}")
-            await asyncio.to_thread(self.cache.record_failure, url, capture.error, blocked=capture.blocked)
+            await self._cache(self.cache.record_failure, url, capture.error, blocked=capture.blocked)
             return None, None
-        await asyncio.to_thread(self.cache.put_web, url, capture.text, capture.screenshot_b64)
+        await self._cache(self.cache.put_web, url, capture.text, capture.screenshot_b64)
         return capture.screenshot_b64, capture.text
 
     async def _fetch_live(self, url: str) -> Tuple[Optional[Union[str, List[str]]], Optional[str]]:
@@ -371,7 +378,7 @@ class BaseEvaluator:
                 if pdf_bytes is None:
                     self.logger.info(f"{url} did not return a PDF; loading it in the browser")
         if pdf_bytes is not None:
-            await asyncio.to_thread(self.cache.put_pdf, url, pdf_bytes)
+            await self._cache(self.cache.put_pdf, url, pdf_bytes)
             return await self.pdf_parser.extract(pdf_bytes)
         return await self._capture_and_cache(url)
 
@@ -395,9 +402,10 @@ class BaseEvaluator:
         ``config.max_text_tokens`` tokens is cut off (:func:`truncate_to_tokens`).
         A URL that cannot be parsed is unavailable.
 
-        Raises :class:`HarnessError` when the tokenizer or the browser fails,
-        logs it and counts it in ``usage.harness_failures``; once one page load of the
-        answer has failed this way, later ones raise it at once.
+        Raises :class:`HarnessError` when the tokenizer, the browser, or the
+        page cache fails, logs it and counts it in ``usage.harness_failures``;
+        once one page load of the answer has failed this way, later ones raise
+        it at once.
         """
         if self.usage.harness_failures:
             raise HarnessError("An earlier page load for this answer failed because of the evaluation "
@@ -405,10 +413,32 @@ class BaseEvaluator:
         try:
             return await self._load_page(url, cancellation_event)
         except HarnessError as exc:
-            self.usage.harness_failures += 1
-            self.logger.error(f"Loading {url} failed because of the evaluation environment; "
-                              f"the answer will not be scored: {exc}")
+            self._count_harness_failure(f"Loading {url}", exc)
             raise
+
+    def _count_harness_failure(self, action: str, exc: HarnessError) -> None:
+        """Count ``exc`` in ``usage.harness_failures`` and log that ``action`` failed because of the environment."""
+        self.usage.harness_failures += 1
+        self.logger.error(f"{action} failed because of the evaluation environment; "
+                          f"the answer will not be scored: {exc}")
+
+    async def _cache(self, method: Callable, *args, in_thread: bool = True, **kwargs):
+        """Call a method of the task's page cache, in a worker thread unless ``in_thread`` is false.
+
+        A disk error, an index file that cannot be parsed, or a page file that
+        the index lists but that is missing (``OSError``, including
+        ``FileNotFoundError``, and :class:`CacheIndexError`) is raised as
+        :class:`HarnessError`: it says nothing about the page, so it must not
+        fail a check, and evaluating again after the cache is repaired scores
+        the answer.  Other errors,
+        such as ``KeyError`` or ``ValueError``, propagate unchanged.
+        """
+        try:
+            if in_thread:
+                return await asyncio.to_thread(method, *args, **kwargs)
+            return method(*args, **kwargs)
+        except (OSError, CacheIndexError) as exc:
+            raise HarnessError(f"The page cache failed in {method.__name__}: {exc}") from exc
 
     async def _load_page(self, url: str, cancellation_event: Optional[asyncio.Event]):
         """The body of :meth:`get_page_info`, without the accounting of :class:`HarnessError`."""
@@ -419,17 +449,17 @@ class BaseEvaluator:
             return None, None
 
         try:
-            content_type = self.cache.has(url)
+            content_type = await self._cache(self.cache.has, url, in_thread=False)
         except ValueError as exc:
             self.logger.warning(f"{url} is unavailable: it cannot be parsed ({exc})")
             return None, None
         if content_type == "pdf":
-            pdf_bytes = await asyncio.to_thread(self.cache.get_pdf, url)
+            pdf_bytes = await self._cache(self.cache.get_pdf, url)
             screenshot_b64, page_text = await self.pdf_parser.extract(pdf_bytes)
         elif content_type == "web":
-            page_text, screenshot_bytes = await asyncio.to_thread(self.cache.get_web, url)
+            page_text, screenshot_bytes = await self._cache(self.cache.get_web, url)
             screenshot_b64 = base64.b64encode(screenshot_bytes).decode()
-        elif (failure := self.cache.failure(url)) is not None:
+        elif (failure := await self._cache(self.cache.failure, url, in_thread=False)) is not None:
             self.logger.warning(f"{url} is unavailable: its capture failed ({failure['reason']})")
             return None, None
         else:

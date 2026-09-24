@@ -1,8 +1,8 @@
 """Failures of the evaluation environment, and settings outside the eval script, never change a saved score.
 
-A tokenizer that cannot be loaded or a browser that cannot be launched says
-nothing about the answer, so the answer is left unscored instead of failing a
-check.  The pinned evaluation date is part of what a saved result was scored
+A tokenizer that cannot be loaded, a browser that cannot be launched, or a
+page cache that cannot be read or written says nothing about the answer, so
+the answer is left unscored instead of failing a check.  The pinned evaluation date is part of what a saved result was scored
 under.
 """
 from __future__ import annotations
@@ -15,11 +15,12 @@ import tiktoken
 
 from mind2web2 import eval_toolkit, results
 from mind2web2.eval_toolkit import HarnessError, Verifier, browser_for_run, shared_browser
-from mind2web2.llm_client import JudgeUsage
+from mind2web2.llm_client import ContextLengthError, JudgeUsage
+from mind2web2.utils.cache_filesys import CacheIndexError
 
 from offline_eval import SyntheticCache
 from test_judge_failures import TWO_SOURCES, JudgedClient, answer_log, evaluate, saved_results, toy_script
-from test_judge_input_limits import ScriptedJudge, evaluator, page_cache
+from test_judge_input_limits import URL, ScriptedJudge, evaluator, page_cache
 
 LONG_TEXT = "word " * 30_000  # 150,000 bytes: longer than the budget in bytes, so it is tokenized
 
@@ -46,6 +47,42 @@ def test_a_tokenizer_that_cannot_be_loaded_leaves_the_answer_unscored(tmp_path, 
     assert "The o200k_base tokenizer cannot be loaded" in log
     if swallow_errors:  # the script carried on, so eval_runner's check of the result caught it
         assert "page load(s) failed because of the evaluation environment" in log
+
+
+def _unreadable_page(self, url, get_screenshot=True):
+    raise OSError(28, "No space left on device")
+
+
+def _unreadable_failures(self, url):
+    raise CacheIndexError("failures.json", "not a JSON object")
+
+
+@pytest.mark.parametrize("swallow_errors", [False, True], ids=["propagated", "caught_by_the_script"])
+@pytest.mark.parametrize("broken", ["page_read", "failure_index"])
+def test_a_page_cache_that_cannot_be_read_leaves_the_answer_unscored(tmp_path, monkeypatch, broken, swallow_errors):
+    if broken == "page_read":
+        monkeypatch.setattr(SyntheticCache, "get_web", _unreadable_page)
+    else:
+        monkeypatch.setattr(SyntheticCache, "has", lambda self, url: None)
+        monkeypatch.setattr(SyntheticCache, "failure", _unreadable_failures, raising=False)
+    evaluated, results_root = evaluate(tmp_path, monkeypatch, JudgedClient(), toy_script(TWO_SOURCES, swallow_errors))
+    assert evaluated == []
+    assert saved_results(results_root) == []
+    assert "The page cache failed in" in answer_log(results_root)
+
+
+def test_a_tokenizer_failure_while_shortening_a_page_text_counts_as_a_harness_failure(tmp_path, monkeypatch):
+    def fail(name):
+        raise OSError("the encoding could not be downloaded")
+    eval_toolkit._text_encoding.cache_clear()
+    monkeypatch.setattr(tiktoken, "get_encoding", fail)
+    try:
+        verifier = evaluator(Verifier, page_cache(tmp_path), ScriptedJudge(ContextLengthError("too long")))
+        with pytest.raises(HarnessError):  # the page text is short, so only the shortening tokenizes it
+            asyncio.run(verifier.verify_by_url("The page names X.", URL))
+        assert verifier.usage.harness_failures == 1
+    finally:
+        eval_toolkit._text_encoding.cache_clear()
 
 
 class UnlaunchableBrowser:

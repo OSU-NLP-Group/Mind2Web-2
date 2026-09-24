@@ -31,7 +31,8 @@ SUPERSEDED_DIR = "superseded"
 #: Environment variable that pins the date that date-dependent eval scripts
 #: take as today (``YYYY-MM-DD``).  Its value is recorded in every result as
 #: ``eval_date`` (``None`` when unset), and a result is reused only under the
-#: same value.
+#: same value.  Unset, such scripts use the current date, so a result made
+#: without it on an earlier day is still reused.
 EVAL_DATE_VARIABLE = "MIND2WEB2_EVAL_DATE"
 
 #: Version of the framework's scoring logic, recorded in every result as
