@@ -15,7 +15,7 @@ import pymupdf
 from PIL import Image
 from pydantic import BaseModel
 
-import batch_answer_cache as crawler
+from mind2web2 import crawl as crawler
 from local_site import LocalSite, Route
 from mind2web2.api_tools.tool_pdf import PDFParser
 from mind2web2.eval_toolkit import Extractor, Verifier, empty_extraction

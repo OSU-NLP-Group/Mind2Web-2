@@ -3,7 +3,7 @@
 ## Modules
 
 ### cache_prompts.py
-Contains `llm_extraction_prompts`: A system prompt used in `batch_answer_cache.py` to extract URLs from answer text via LLM. The LLM is instructed to find all unique website URLs in the text, including hard-to-find URLs like bare domains, URLs in quotes, and URLs split across lines.
+Contains `llm_extraction_prompts`: A system prompt used in `mind2web2/crawl.py` to extract URLs from answer text via LLM. The LLM is instructed to find all unique website URLs in the text, including hard-to-find URLs like bare domains, URLs in quotes, and URLs split across lines.
 
 Used with the `URLs` Pydantic model from `utils/url_tools.py` for structured output.
 

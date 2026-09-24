@@ -32,5 +32,5 @@ All network calls are asynchronous (`httpx`), bounded in time, and never block t
 ## Usage Context
 These tools are primarily used in:
 - `eval_toolkit.py`'s `BaseEvaluator.get_page_info()` for PDF detection + parsing
-- `batch_answer_cache.py` for pre-caching PDF content
+- `mind2web2/crawl.py` for pre-caching PDF content
 - Individual eval scripts that need Google Maps or arXiv data

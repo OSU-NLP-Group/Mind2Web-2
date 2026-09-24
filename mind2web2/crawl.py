@@ -270,7 +270,7 @@ async def process_cache(
     """
     # Resolve defaults lazily
     if answers_root is None or cache_root is None:
-        paths = PathConfig(Path(__file__).resolve().parent)
+        paths = PathConfig(Path(__file__).resolve().parents[1])
         if answers_root is None:
             answers_root = paths.answers_root
         if cache_root is None:
