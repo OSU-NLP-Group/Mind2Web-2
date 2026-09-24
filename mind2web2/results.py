@@ -1,0 +1,62 @@
+"""On-disk layout of evaluation results.
+
+For every evaluated answer, ``run_eval.py`` writes::
+
+    <results_root>/<agent_name>/<task_id>/<answer_base>/
+    ├── <answer_name>                               # copy of the evaluated answer
+    ├── logs/
+    └── results/<timestamp>_<answer_name>.json      # output of Evaluator.get_summary()
+
+``<answer_base>`` is the answer file name without its extension (``answer_1``
+for ``answer_1.md``) and ``<timestamp>`` is ``YYYYMMDD_HHMMSS``.  Re-evaluating an
+answer adds another timestamped file; the newest one is the answer's result.
+"""
+from __future__ import annotations
+
+import json
+import re
+from datetime import datetime
+from pathlib import Path
+
+_TIMESTAMP_RE = re.compile(r"(\d{8})_?(\d{6})")
+
+
+def answer_base(answer_name: str) -> str:
+    """Strip the extension from an answer file name: ``answer_3.md`` -> ``answer_3``."""
+    return answer_name.rsplit(".", 1)[0]
+
+
+def answer_output_dir(results_root: Path, agent_name: str, task_id: str, answer_name: str) -> Path:
+    """Directory holding the copied answer, logs, and results of one answer."""
+    return Path(results_root) / agent_name / task_id / answer_base(answer_name)
+
+
+def result_file_name(timestamp: str, answer_name: str, *, debug: bool = False) -> str:
+    return f"{timestamp}_{answer_name}{'_debug' if debug else ''}.json"
+
+
+def _timestamp_of(path: Path) -> datetime:
+    match = _TIMESTAMP_RE.search(path.name)
+    if not match:
+        return datetime.min
+    return datetime.strptime("".join(match.groups()), "%Y%m%d%H%M%S")
+
+
+def latest_result_file(result_dir: Path) -> Path | None:
+    """Return the ``*.json`` file in ``result_dir`` with the newest timestamp in its name."""
+    if not result_dir.is_dir():
+        return None
+    candidates = [p for p in result_dir.iterdir() if p.suffix == ".json"]
+    return max(candidates, key=_timestamp_of) if candidates else None
+
+
+def load_latest_result(results_root: Path, agent_name: str, task_id: str, answer_name: str) -> dict | None:
+    """Return the newest result of an answer, or ``None`` if it has none (or it is unreadable)."""
+    result_dir = answer_output_dir(results_root, agent_name, task_id, answer_name) / "results"
+    latest = latest_result_file(result_dir)
+    if latest is None:
+        return None
+    try:
+        return json.loads(latest.read_text(encoding="utf-8"))
+    except (OSError, ValueError):  # ValueError: not UTF-8, or not JSON
+        return None

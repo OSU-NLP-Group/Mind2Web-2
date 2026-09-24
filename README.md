@@ -31,7 +31,7 @@ To evaluate answers from an agent system, there are mainly four steps involved:
 1. Collecting answers from your agent on our [test set](https://huggingface.co/datasets/osunlp/Mind2Web-2/viewer/default/private_test_set)
 2. Cache the webpages mentioned in the answers (to ensure consistency and reproducibility), where we provide the script in [Precache Webpage](#3-precache-webpages-optional-but-recommended)
 3. Run the evaluation.
-4. (Optional) Submit the avg. time and answers to better understand how the agent works.
+4. (Optional) Record how long each run took in `answer_<k>.meta.json` (see below), so that the leaderboard can report the agent's time.
 
 For the submission, you can either:
 - **(Recommended)** Submit your agent's answers along with the webpage cache to us. This ensures the best consistency between inference and evaluation. We will handle the evaluation cost for you.
@@ -44,10 +44,19 @@ If you choose to submit your agent's answer, please arrange your agent's respons
    <agent_name>
    ├── <task_id>
    │   ├── answer_1.md
+   │   ├── answer_1.meta.json   # optional: {"time_seconds": 512.3}
    │   ├── answer_2.md
    │   └── ...
    └── ...
    ```
+
+Each `answer_<k>.md` is one independent run of your agent on the task; the leaderboard uses three runs, `answer_1.md` to `answer_3.md`. The optional `answer_<k>.meta.json` records the wall-clock time the run took, in seconds. Check the layout before submitting (the task lists `dev_set.csv` and `test_set.csv` come with the [dataset](https://huggingface.co/datasets/osunlp/Mind2Web-2)):
+
+   ```bash
+   uv run mind2web2 validate <agent_name> --task-list test_set.csv --num-runs 3
+   ```
+
+It reports tasks or runs without an answer, empty answers, answers that cite no URL, files that evaluation would ignore, and invalid metadata. It looks for `<agent_name>` under `answers/`; pass `--answers-dir <dir>` if the directory is elsewhere.
 
 Similarly, the corresponding cache structure should be `cache/<agent_name>/` (generated automatically by the precaching script).
 
@@ -100,11 +109,12 @@ answers/
 └── <your_agent_name>/
     └── <task_id>/
         ├── answer_1.md
+        ├── answer_1.meta.json   # optional: {"time_seconds": 512.3}
         ├── answer_2.md
         └── ...
 ```
 
-Each answer file should contain your agent's response in markdown format.
+Each `answer_<k>.md` file contains your agent's response for run `k` (1, 2, 3, ..., without leading zeros) in markdown format; evaluation ignores files with other names. To check the layout, run `uv run mind2web2 validate <your_agent_name>`.
 
 ### 2. Set up API Keys
 
@@ -184,6 +194,30 @@ python run_eval.py --agent_name example --task_id yu_lineage
 - `--max_llm_requests`: Maximum concurrent LLM API requests (default: 30)
 - `--dump_cache`: Persist cache to disk (default: True)
 - `--overwrite`: Overwrite existing results
+
+### 5. Compute Metrics
+
+When `run_eval.py` evaluates all tasks, it ends by printing the agent's metrics over the tasks it evaluated. To compute the metrics from saved results at any time, run:
+
+```bash
+# Over the tasks your agent has answers for
+uv run mind2web2 metrics <your_agent_name>
+
+# Over a full split with the leaderboard's three runs: missing answers and results count as 0
+uv run mind2web2 metrics <your_agent_name> --task-list test_set.csv --num-runs 3
+```
+
+The command reports the metrics of the paper and the leaderboard. Run `k` consists of the `answer_<k>.md` files, and a task's score is the root score of its rubric tree, between 0 and 1.
+
+| Metric | Definition |
+| --- | --- |
+| Partial Completion | Mean task score over the tasks of a run |
+| Success Rate | Fraction of the tasks of a run with score 1 |
+| Pass@k | Fraction of tasks for which at least one of the k runs has score 1 (Pass@3 on the leaderboard) |
+| Time (min) | Mean inference time in minutes, from `time_seconds` in `answer_<k>.meta.json`, over the answers of a run that report it |
+| Answer Length | Mean number of words (whitespace-separated tokens) in the answers of a run |
+
+Every metric except Pass@k is computed per run and reported as the mean ± population standard deviation over runs. The number of runs k is the highest run index among the answers unless `--num-runs` is given. An answer that is missing, or that has no evaluation result (for example because its evaluation failed), counts as a score of 0 in Partial Completion, Success Rate, and Pass@k, and the report lists each one so that it can be fixed and re-evaluated; Time and Answer Length are averaged over the answers that exist. The metrics are also saved to `eval_results/<agent_name>/metrics.json`, together with the tasks they cover, per-run, per-task, and per-domain breakdowns (domains come from the CSV task list), and a `leaderboard_entry` block in the leaderboard's format. The leaderboard entry is written only for metrics over a task list with 3 runs; without `--task-list` the metrics cover the tasks the agent has answers for, and the entry is `null`.
 
 ## 🧪 Development
 

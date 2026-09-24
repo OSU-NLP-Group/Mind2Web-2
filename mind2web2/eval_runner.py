@@ -3,15 +3,15 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
-import statistics
-from collections import defaultdict
-from datetime import datetime
+import shutil
 from pathlib import Path
 from typing import Dict, List, Union, Optional
 
 from tqdm import tqdm
 
+from . import results
+from .metrics import is_success
+from .submission import answer_run, list_answer_files, metadata_path
 from .utils.cache_filesys import CacheFileSys
 from .utils.load_eval_script import load_eval_script
 from .utils.logging_setup import create_logger, cleanup_logger
@@ -35,36 +35,6 @@ class DualSemaphore:
         return await self._default.__aexit__(exc_type, exc_val, exc_tb)
 
 
-def _answer_base(answer_name: str) -> str:
-    """Strip the trailing extension, e.g. 'answer_3.md' → 'answer_3'."""
-    return answer_name.rsplit(".", 1)[0]
-
-
-def _extract_ts_from_name(fname: str) -> str | None:
-    """
-    Extract a 14-digit timestamp (YYYYMMDDHHMMSS) from the filename, or return None if not found.
-    """
-    m = re.search(r"(\d{8})[_]?(\d{6})", fname)
-    if not m:
-        return None
-    return "".join(m.groups())
-
-
-def _latest_json(result_dir: Path) -> Path | None:
-    """Return newest *.json file in <result_dir> (by timestamp in filename)."""
-    if not result_dir.exists():
-        return None
-    json_files = [p for p in result_dir.iterdir() if p.suffix == ".json"]
-    if not json_files:
-        return None
-
-    def _ts_key(fp: Path):
-        ts_str = _extract_ts_from_name(fp.name)
-        return datetime.strptime(ts_str, "%Y%m%d%H%M%S") if ts_str else datetime.min
-
-    return max(json_files, key=_ts_key)
-
-
 # --------------------------------------------------------------------------- #
 # Single‑answer evaluation                                                    #
 # --------------------------------------------------------------------------- #
@@ -85,7 +55,7 @@ async def _eval_one_answer(
     """Evaluate a single answer file and write its result JSON / logs."""
 
     answer_name = answer_path.name
-    answer_base = _answer_base(answer_name)
+    answer_base = results.answer_base(answer_name)
 
     # ---------- Create isolated logging ----------
     log_dir = output_dir / agent_name / task_id / answer_base / "logs"
@@ -184,13 +154,10 @@ def _save_result_json(result: Dict, agent_task_out_dir: Path, ts: str, is_debug:
     """Write per‑answer result JSON to disk."""
 
     answer = result["answer_name"]
-    answer_base = _answer_base(answer)
-
-    save_dir = agent_task_out_dir / answer_base / "results"
+    save_dir = agent_task_out_dir / results.answer_base(answer) / "results"
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    fname = f"{ts}_{answer}{'_debug' if is_debug else ''}.json"
-    with (save_dir / fname).open("w", encoding="utf-8") as fp:
+    with (save_dir / results.result_file_name(ts, answer, debug=is_debug)).open("w", encoding="utf-8") as fp:
         json.dump(result, fp, ensure_ascii=False, indent=4)
 
 
@@ -301,7 +268,11 @@ async def evaluate_task(
         # ------------------------------------------------------------------
         # 3. Collect answer files
         # ------------------------------------------------------------------
-        answer_paths = sorted([p for p in answer_root.iterdir() if p.is_file() and p.suffix == ".md"])
+        answer_paths = [a.path for a in list_answer_files(answer_root)]
+        ignored = sorted(p.name for p in answer_root.iterdir()
+                         if p.is_file() and p.suffix == ".md" and answer_run(p.name) is None)
+        if ignored:
+            main_logger.warning(f"Ignoring files not named answer_<k>.md: {ignored}")
         main_logger.info(
             f"📁 Found {len(answer_paths)} answer files to evaluate",
             extra={
@@ -336,7 +307,7 @@ async def evaluate_task(
         async def _process_answer(ans_path: Path):
             async with outer_semaphore:  # Control concurrent answer evaluations
                 answer_name = ans_path.name
-                answer_base = _answer_base(answer_name)
+                answer_base = results.answer_base(answer_name)
 
                 main_logger.info(
                     f"👉 Processing {agent_name}/{answer_name}",
@@ -348,18 +319,24 @@ async def evaluate_task(
                 )
                 main_logger.info(f"👉 Starting {agent_name} {answer_name}")
 
-                # 5‑A. Copy original md to answer folder (if not copied yet)
+                # 5‑A. The answer folder keeps a copy of the answer (and its metadata) next to
+                # its results, so that metrics can be computed from the results folder alone.
                 answer_folder = output_root / agent_name / task_id / answer_base
-                dst_md = answer_folder / answer_name
-                if not dst_md.exists():
-                    answer_folder.mkdir(parents=True, exist_ok=True)
-                    dst_md.write_bytes(ans_path.read_bytes())
-                    main_logger.debug(f"📋 Copied answer file to {dst_md}")
+                answer_folder.mkdir(parents=True, exist_ok=True)
+
+                def copy_answer(refresh: bool) -> None:
+                    for src in (ans_path, metadata_path(ans_path)):
+                        dst = answer_folder / src.name
+                        if src.exists() and (refresh or not dst.exists()):
+                            shutil.copyfile(src, dst)
+                        elif not src.exists():
+                            dst.unlink(missing_ok=True)  # a deleted metadata file must not live on in its copy
 
                 # 5‑B. Result reuse check
                 result_dir = answer_folder / "results"
-                latest = _latest_json(result_dir)
+                latest = results.latest_result_file(result_dir)
                 if latest and not overwrite:
+                    copy_answer(refresh=False)
                     main_logger.info(
                         f"⚠️ Using existing result for {agent_name}/{answer_name}",
                         extra={
@@ -394,6 +371,7 @@ async def evaluate_task(
                         )
 
                 # 5‑C. Real evaluation
+                copy_answer(refresh=True)
                 try:
                     res = await _eval_one_answer(
                         eval_fn,
@@ -524,235 +502,20 @@ async def evaluate_task(
 # --------------------------------------------------------------------------- #
 
 
-def _save_agent_task_summary(agent_task_dir: Path, results: List[Dict]):
+def _save_agent_task_summary(agent_task_dir: Path, task_results: List[Dict]):
     """Save summary for a specific agent/task combination."""
-    if not results:
+    if not task_results:
         return
 
     summary = []
-    for res in sorted(results, key=lambda x: x.get("answer_name", "")):
+    for res in sorted(task_results, key=lambda x: x.get("answer_name", "")):
         summary.append({
             "answer_name": res["answer_name"],
             "score": float(res["final_score"]),
             "status": "success" if res["final_score"] > 0 else "failed",
-            "success": res["final_score"] == 1,
+            "success": is_success(float(res["final_score"])),
         })
 
     with (agent_task_dir / "summary.json").open("w", encoding="utf-8") as fp:
         json.dump(summary, fp, ensure_ascii=False, indent=4)
 
-
-def generate_result_summary(output_dir: Union[str, Path], agent_name: str) -> Optional[Dict]:
-    """Generate an agent-level summary from per-task evaluation results.
-
-    Metrics computed:
-    - partial_completion: avg score per run → avg across runs (with std)
-    - success_rate: avg binary success per run → avg across runs (with std)
-    - pass_at_k: task passes if ANY run succeeded
-    - word_count: avg word count per run → avg across runs (with std)
-
-    Parameters
-    ----------
-    output_dir : Union[str, Path]
-        Base eval results directory (e.g. ``eval_results/``)
-    agent_name : str
-        Agent folder name
-
-    Returns
-    -------
-    dict or None
-        Summary dict (also saved to ``<output_dir>/<agent_name>/summary.json``)
-    """
-    agent_dir = Path(output_dir) / agent_name
-    if not agent_dir.is_dir():
-        logging.getLogger(__name__).error(f"Agent directory not found: {agent_dir}")
-        return None
-
-    # ------------------------------------------------------------------ #
-    # 1. Collect per-task, per-answer data
-    # ------------------------------------------------------------------ #
-    # tasks_data[task_id] = [{"answer_name", "score", "success", "word_count"}, ...]
-    tasks_data: Dict[str, List[Dict]] = {}
-
-    for task_dir in sorted(agent_dir.iterdir()):
-        if not task_dir.is_dir():
-            continue
-        task_id = task_dir.name
-
-        # Skip non-task directories (e.g. main_logs)
-        summary_file = task_dir / "summary.json"
-        if not summary_file.exists():
-            continue
-
-        try:
-            with summary_file.open("r", encoding="utf-8") as fp:
-                task_summary = json.load(fp)
-        except Exception as e:
-            logging.getLogger(__name__).warning(f"Failed to load {summary_file}: {e}")
-            continue
-
-        answers = []
-        for entry in task_summary:
-            answer_name = entry["answer_name"]
-            answer_base = answer_name.rsplit(".", 1)[0]  # answer_1.md → answer_1
-
-            # Word count from the copied .md file
-            md_path = task_dir / answer_base / answer_name
-            word_count = 0
-            if md_path.exists():
-                try:
-                    word_count = len(md_path.read_text(encoding="utf-8").split())
-                except Exception:
-                    pass
-
-            answers.append({
-                "answer_name": answer_name,
-                "score": float(entry.get("score", 0)),
-                "success": bool(entry.get("success", False)),
-                "word_count": word_count,
-            })
-
-        if answers:
-            tasks_data[task_id] = answers
-
-    if not tasks_data:
-        logging.getLogger(__name__).warning(f"No task results found for {agent_name}")
-        return None
-
-    # ------------------------------------------------------------------ #
-    # 2. Group by run (answer_k.md)
-    # ------------------------------------------------------------------ #
-    # run_metrics[answer_name] = {"scores": [...], "successes": [...], "word_counts": [...]}
-    run_metrics: Dict[str, Dict[str, list]] = defaultdict(lambda: {"scores": [], "successes": [], "word_counts": []})
-
-    for task_id, answers in tasks_data.items():
-        for ans in answers:
-            name = ans["answer_name"]
-            run_metrics[name]["scores"].append(ans["score"])
-            run_metrics[name]["successes"].append(float(ans["success"]))
-            run_metrics[name]["word_counts"].append(ans["word_count"])
-
-    # ------------------------------------------------------------------ #
-    # 3. Per-run aggregates (avg across tasks within each run)
-    # ------------------------------------------------------------------ #
-    per_run = {}
-    run_avg_scores = []
-    run_avg_successes = []
-    run_avg_word_counts = []
-
-    for run_name in sorted(run_metrics.keys()):
-        m = run_metrics[run_name]
-        avg_score = float(statistics.fmean(m["scores"]))
-        avg_success = float(statistics.fmean(m["successes"]))
-        avg_wc = float(statistics.fmean(m["word_counts"]))
-
-        per_run[run_name] = {
-            "num_tasks": len(m["scores"]),
-            "avg_score": round(avg_score, 4),
-            "success_rate": round(avg_success, 4),
-            "avg_word_count": round(avg_wc, 1),
-        }
-
-        run_avg_scores.append(avg_score)
-        run_avg_successes.append(avg_success)
-        run_avg_word_counts.append(avg_wc)
-
-    num_runs = len(per_run)
-
-    # ------------------------------------------------------------------ #
-    # 4. Across-run aggregates (avg & std of per-run values)
-    # ------------------------------------------------------------------ #
-    avg_score = float(statistics.fmean(run_avg_scores))
-    avg_success = float(statistics.fmean(run_avg_successes))
-    avg_word_count = float(statistics.fmean(run_avg_word_counts))
-
-    std_score = float(statistics.pstdev(run_avg_scores)) if num_runs > 1 else 0.0
-    std_success = float(statistics.pstdev(run_avg_successes)) if num_runs > 1 else 0.0
-    std_word_count = float(statistics.pstdev(run_avg_word_counts)) if num_runs > 1 else 0.0
-
-    # ------------------------------------------------------------------ #
-    # 5. Pass@k — task passes if any run succeeded
-    # ------------------------------------------------------------------ #
-    num_pass = sum(
-        1 for answers in tasks_data.values()
-        if any(a["success"] for a in answers)
-    )
-    pass_at_k = num_pass / len(tasks_data) if tasks_data else 0.0
-
-    # ------------------------------------------------------------------ #
-    # 6. Per-task detail
-    # ------------------------------------------------------------------ #
-    tasks_detail: Dict[str, Dict] = {}
-    for task_id in sorted(tasks_data.keys()):
-        answers = tasks_data[task_id]
-        scores = [a["score"] for a in answers]
-        tasks_detail[task_id] = {
-            "answers": answers,
-            "best_score": max(scores),
-            "avg_score": round(float(statistics.fmean(scores)), 6),
-            "pass": any(a["success"] for a in answers),
-        }
-
-    # ------------------------------------------------------------------ #
-    # 7. Build & save summary
-    # ------------------------------------------------------------------ #
-    summary = {
-        "agent_name": agent_name,
-        "num_tasks": len(tasks_data),
-        "num_runs": num_runs,
-        "avg_score": round(avg_score, 4),
-        "avg_score_std": round(std_score, 4),
-        "success_rate": round(avg_success, 4),
-        "success_rate_std": round(std_success, 4),
-        f"pass_at_{num_runs}": round(pass_at_k, 4),
-        "avg_answer_word_count": round(avg_word_count, 1),
-        "avg_answer_word_count_std": round(std_word_count, 1),
-        "per_run": per_run,
-        "tasks": tasks_detail,
-    }
-
-    summary_path = agent_dir / "summary.json"
-    with summary_path.open("w", encoding="utf-8") as fp:
-        json.dump(summary, fp, ensure_ascii=False, indent=4)
-
-    logging.getLogger(__name__).info(f"Agent summary saved to {summary_path}")
-    return summary
-
-
-def merge_all_results(output_dir: Union[str, Path]) -> Dict[str, Dict[str, List[Dict]]]:
-    """Merge all evaluation results across tasks and agents.
-    
-    Returns a nested dictionary: {task_id: {agent_name: [results]}}
-    """
-    output_root = Path(output_dir)
-    merged_results = defaultdict(lambda: defaultdict(list))
-
-    # Iterate through all agent directories
-    for agent_dir in output_root.iterdir():
-        if not agent_dir.is_dir():
-            continue
-        agent_name = agent_dir.name
-
-        # Iterate through all task directories within each agent
-        for task_dir in agent_dir.iterdir():
-            if not task_dir.is_dir():
-                continue
-            task_id = task_dir.name
-
-            # Look for summary.json
-            summary_file = task_dir / "summary.json"
-            if summary_file.exists():
-                try:
-                    with summary_file.open("r", encoding="utf-8") as fp:
-                        results = json.load(fp)
-                        merged_results[task_id][agent_name] = results
-                except Exception as e:
-                    logging.getLogger(__name__).error(f"Failed to load summary from {summary_file}: {e}")
-
-    # Save merged results
-    merged_file = output_root / "all_results.json"
-    with merged_file.open("w", encoding="utf-8") as fp:
-        json.dump(dict(merged_results), fp, ensure_ascii=False, indent=4)
-
-    logging.getLogger(__name__).info(f"Merged results saved to {merged_file}")
-    return dict(merged_results)

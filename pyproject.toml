@@ -38,6 +38,9 @@ dependencies = [
     "python-multipart>=0.0.22",
 ]
 
+[project.scripts]
+mind2web2 = "mind2web2.cli:main"
+
 # ── Optional: Code generation dependencies ─────────────────────────────
 [project.optional-dependencies]
 code-gen = [

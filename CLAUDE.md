@@ -20,6 +20,10 @@ mind2web2/                   # Core Python package
 ├── eval_toolkit.py          # Extractor & Verifier classes (LLM-powered extraction/verification)
 ├── verification_tree.py     # VerificationNode tree with aggregation strategies
 ├── eval_runner.py           # Async task/answer evaluation orchestrator
+├── submission.py            # Answers layout, answer metadata, task lists, submission validation
+├── results.py               # Results layout and latest-result lookup
+├── metrics.py               # Leaderboard metrics (Partial Completion, Success Rate, Pass@k, Time, Answer Length)
+├── cli/                     # The `mind2web2` command (validate, metrics)
 ├── api_tools/               # External API integrations (arXiv, Google Maps, PDF)
 ├── llm_client/              # LLM provider abstraction (OpenAI, Azure, Bedrock)
 ├── utils/                   # Shared utilities (caching, logging, browser, paths)
@@ -39,6 +43,7 @@ cache_manager/               # [DEPRECATED] PySide6 GUI for managing webpage cac
 2. **Webpages are cached** (text + screenshots) via `batch_answer_cache.py` to ensure reproducibility
 3. **Evaluation scripts** (one per task) define `async def evaluate_answer(...)` that builds a verification tree
 4. **The judge agent** extracts claims from answers, then verifies each claim against source URLs using LLM calls
+5. **Metrics** (`mind2web2 metrics`) aggregate the per-answer scores into the leaderboard metrics
 
 ### Verification Tree
 - Tree-structured rubric where each node is a `VerificationNode`
@@ -82,6 +87,10 @@ uv run run_eval.py --agent_name example
 
 # Evaluate a specific task
 uv run run_eval.py --agent_name example --task_id yu_lineage
+
+# Check an agent's answers, and compute its leaderboard metrics from saved results
+uv run mind2web2 validate example
+uv run mind2web2 metrics example --task-list <split.csv> --num-runs 3
 ```
 
 ## Key Dependencies

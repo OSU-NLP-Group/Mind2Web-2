@@ -8,7 +8,9 @@ from typing import List, Dict, Any
 
 from tqdm import tqdm
 
-from mind2web2.eval_runner import evaluate_task, merge_all_results, generate_result_summary
+from mind2web2.eval_runner import evaluate_task
+from mind2web2.metrics import collect_records, compute_metrics, format_report, save_metrics
+from mind2web2.submission import TaskInfo
 from mind2web2.llm_client.base_client import LLMClient
 from mind2web2.utils.path_config import PathConfig
 
@@ -302,18 +304,22 @@ def main() -> None:
             else:
                 logging.info(f"  - {task_id}: No results")
 
-    # Generate agent-level summary
-    if results:
+    # Agent-level metrics over the tasks evaluated in this run
+    if results and not args.task_id:
         logging.info("=" * 60)
-        logging.info("Generating agent summary...")
-        summary = generate_result_summary(paths.eval_results_root, args.agent_name)
-        if summary:
-            num_runs = summary["num_runs"]
-            pass_key = f"pass_at_{num_runs}"
-            logging.info(f"  Partial Completion: {summary['avg_score']:.4f} ± {summary['avg_score_std']:.4f}")
-            logging.info(f"  Success Rate:       {summary['success_rate']:.4f} ± {summary['success_rate_std']:.4f}")
-            logging.info(f"  Pass@{num_runs}:             {summary[pass_key]:.4f}")
-            logging.info(f"  Avg Word Count:     {summary['avg_answer_word_count']:.1f} ± {summary['avg_answer_word_count_std']:.1f}")
+        tasks = [TaskInfo(task_id) for task_id in sorted(results)]
+        try:
+            records, num_runs = collect_records(
+                args.agent_name, [t.task_id for t in tasks], paths.answers_root, paths.eval_results_root)
+        except (OSError, ValueError) as exc:  # includes MetadataError and answers that are not UTF-8
+            logging.error(f"Metrics not computed: {exc}")
+        else:
+            metrics = compute_metrics(records, tasks, num_runs, args.agent_name)
+            logging.info("Metrics over the evaluated tasks:\n" + format_report(metrics))
+            path = save_metrics(metrics, paths.eval_results_root, args.agent_name)
+            logging.info(f"Metrics saved to {path}. To score a full split, where tasks without "
+                         f"answers count as 0, run: mind2web2 metrics {args.agent_name} "
+                         f"--task-list <split.csv> --num-runs 3")
 
     logging.info("=" * 60)
     logging.info("🎉 Evaluation completed!")
