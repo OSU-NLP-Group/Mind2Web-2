@@ -5,8 +5,11 @@
 external resources, that shows:
 
 - the metrics saved by ``mind2web2 metrics`` or ``mind2web2 evaluate``, if any;
-- a table of every task's score in every run, each cell linking to its answer;
-- for each answer, its latest result: the judge, the rubric tree with each
+- a table of every task's score in every run, each cell linking to its
+  answer, and each task's mean, which counts a run without a result as 0, as
+  the metrics do;
+- for each answer, its latest result (badged "changed" when the metrics
+  found that the answer changed after it): the judge, the rubric tree with each
   node's status and score, and for each leaf that the eval script verified,
   the claim, the pages it was checked against, the judge's votes, and its
   reasoning (``VerificationNode.evidence``); then the rejected judge requests,
@@ -179,9 +182,16 @@ def _metrics_html(metrics: Optional[dict]) -> str:
     )
 
 
+_MEAN_NOTE = "Changed answers, answers without a result, and runs without an answer count as 0, as in the metrics"
+
+
 def _matrix_html(entries: list[AnswerEntry], stale: set[tuple[str, int]]) -> str:
-    """The table of every task's score in every run; a pair in ``stale`` (the metrics' ``stale_results``) shows
-    "changed" instead of its score, since the metrics count it as 0."""
+    """The table of every task's score in every run, and the task's mean over the runs.
+
+    A pair in ``stale`` (the metrics' ``stale_results``) shows "changed"
+    instead of its score.  As in the metrics, a changed answer, an answer
+    without a result, and a run without an answer count as 0 in the mean.
+    """
     runs = sorted({e.run for e in entries})
     by_task: dict[str, dict[int, AnswerEntry]] = {}
     for entry in entries:
@@ -196,18 +206,18 @@ def _matrix_html(entries: list[AnswerEntry], stale: set[tuple[str, int]]) -> str
             entry = cells.get(r)
             if entry is None:
                 tds.append('<td class="cell none">·</td>')
+                scores.append(0.0)
                 continue
             score = None if (task_id, r) in stale else _score(entry)
-            if score is not None:
-                scores.append(score)
+            scores.append(score or 0.0)
             below = below or score is None or score < 1 - 1e-6
             label = f"{score:.2f}" if score is not None else "changed" if (task_id, r) in stale else "no result"
             tds.append(f'<td class="cell {_score_class(score)}"><a href="#{_anchor(entry)}">{label}</a></td>')
-        mean = f"{sum(scores) / len(scores):.3f}" if scores else "–"
+        mean = f"{sum(scores) / len(scores):.3f}"
         rows.append(f'<tr data-task="{_e(task_id)}" data-below="{int(below)}">'
                     f'<td><code>{_e(task_id)}</code></td>{"".join(tds)}<td class=num>{mean}</td></tr>')
     return ('<section class="card"><h2>Scores</h2><div class="scroll"><table class="matrix">'
-            f'<thead><tr><th>task</th>{head}<th class=num>mean</th></tr></thead>'
+            f'<thead><tr><th>task</th>{head}<th class=num title="{_MEAN_NOTE}">mean</th></tr></thead>'
             f'<tbody>{"".join(rows)}</tbody></table></div></section>')
 
 
@@ -260,11 +270,18 @@ def _node_html(node: dict) -> str:
     return f'<li class="node s-{_e(status)}">{head}{evidence}{kids}</li>'
 
 
-def _answer_html(entry: AnswerEntry) -> str:
-    score = _score(entry)
+def _answer_html(entry: AnswerEntry, stale: set[tuple[str, int]]) -> str:
+    """One answer's collapsed section; an answer in ``stale`` is badged "changed" and counts as below 1.0."""
+    changed = (entry.task_id, entry.run) in stale
+    score = None if changed else _score(entry)
     title = f"{entry.task_id} / {entry.answer_name}"
-    badge = f'<span class="badge {_score_class(score)}">{f"{score:.3f}" if score is not None else "no result"}</span>'
+    label = f"{score:.3f}" if score is not None else "changed" if changed else "no result"
+    badge = f'<span class="badge {_score_class(score)}">{label}</span>'
     body = []
+    if changed:
+        body.append('<p class="note">The answer file changed after this result was saved, so the metrics count '
+                    "it as 0; evaluate the answer again to score its current text. The result below is the old "
+                    "one.</p>")
     result = entry.result
     if result is None:
         problem = entry.problem or ("This answer has no result: its evaluation failed or has not run. "
@@ -397,6 +414,7 @@ def render_report(agent: str, entries: list[AnswerEntry], metrics: Optional[dict
                   generated: Optional[datetime] = None) -> str:
     """The report page for ``entries`` (see the module docstring)."""
     generated = generated or datetime.now().astimezone()
+    stale = {(s.get("task_id"), s.get("run")) for s in (metrics or {}).get("stale_results") or []}
     nonce = secrets.token_urlsafe(16)
     scored = sum(_score(e) is not None for e in entries)
     csp = (f"default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-{nonce}'; img-src data:; "
@@ -415,7 +433,7 @@ def render_report(agent: str, entries: list[AnswerEntry], metrics: Optional[dict
         '<label><input id="below" type="checkbox"> only answers below 1.0</label>'
         '<button id="expand" type="button">Open all</button><button id="collapse" type="button">Close all</button>'
         '<span class="muted small">Failed and skipped checks show their evidence open.</span></div>'
-        + _matrix_html(entries, {(s.get("task_id"), s.get("run")) for s in (metrics or {}).get("stale_results") or []})
-        + "".join(_answer_html(e) for e in entries)
+        + _matrix_html(entries, stale)
+        + "".join(_answer_html(e, stale) for e in entries)
         + f'</main><script nonce="{nonce}">{_JS}</script></body></html>'
     )

@@ -72,6 +72,25 @@ def test_a_multi_url_check_records_every_source_checked_and_a_skipped_check_its_
                               "skipped_because": "sources"}
 
 
+def test_a_check_that_fails_with_an_error_records_its_sources_and_no_earlier_evidence():
+    async def calls(ev, root):
+        leaf = ev.add_leaf(id="cited", desc="The source supports it.", parent=root)
+        await ev.verify(claim="X is Y.", node=leaf, sources="https://s.example/1")
+
+        async def broken(**kwargs):
+            raise RuntimeError("the page parser crashed")
+        ev.verifier.verify_by_url = broken
+        await ev.verify(claim="X is Z.", node=leaf, sources="https://s.example/2")  # the same node again
+        other = ev.add_leaf(id="other", desc="Unreadable sources.", parent=root)
+        await ev.verify(claim="W.", node=other, sources=42)
+
+    root = verify_all(FakeLLMClient("all_true"), calls)
+    cited, other = root.children
+    assert cited.evidence == {"claim": "X is Z.", "sources": ["https://s.example/2"], "checks": [],
+                              "error": "RuntimeError: the page parser crashed"}
+    assert (other.evidence["sources"], other.evidence["error"].split(":")[0]) == ([], "TypeError")
+
+
 class FailsTheFirstStep(FakeLLMClient):
     def _verdict(self, text: str) -> bool:
         return "The first step holds." not in text
@@ -109,6 +128,17 @@ def test_evaluate_writes_the_report_with_scores_and_evidence_and_no_summary_json
     assert cli.main(["report", "agent", "--results-dir", str(tmp_path / "results"), "--task", "t1",
                      "--output", str(out)]) == 0
     assert out.read_text().count('class="answer-card card"') == 2
+
+
+def test_a_report_that_fails_to_render_does_not_stop_evaluate(tmp_path, monkeypatch, capsys):
+    import argparse
+    from mind2web2.cli import evaluate as evaluate_command
+
+    def broken(results_root, agent):
+        raise KeyError("final_score")
+    monkeypatch.setattr(evaluate_command, "write_report", broken)
+    evaluate_command._write_report(argparse.Namespace(results_dir=tmp_path, agent="agent"))
+    assert "Report not written: KeyError: 'final_score'" in capsys.readouterr().err
 
 
 def test_report_without_evaluated_answers_exits_with_1(tmp_path, capsys):
@@ -152,3 +182,17 @@ def test_the_report_shows_what_the_metrics_flag_changed_answers_and_mixed_judges
     assert "Results come from different judge models (judge-a: 1, judge-b: 1)" in page
     assert '>changed</a>' in page and ">1.00</a>" not in page
     assert "with <code>--overwrite</code> to record it" in page
+    assert '<span class="badge none">changed</span>' in page and "The answer file changed" in page
+    assert 'data-below="0"' not in page  # the changed answer counts as below 1.0 in the filter
+
+
+def test_the_mean_of_a_task_counts_runs_without_a_result_as_0():
+    tree = {"id": "root", "desc": "d", "status": "passed", "score": 1.0, "strategy": "parallel",
+            "critical": False, "children": []}
+    scored = AnswerEntry("t1", "answer_1.md", 1, {"final_score": 1.0, "eval_breakdown": [{"verification_tree": tree}]},
+                         None, "a")
+    unscored = AnswerEntry("t1", "answer_2.md", 2, None, None, "b")
+    other_task = AnswerEntry("t2", "answer_1.md", 1, {"final_score": 0.5}, None, "c")
+    page = render_report("agent", [scored, unscored, other_task])
+    means = re.findall(r"<td class=num>([0-9.]+)</td></tr>", page)
+    assert means == ["0.500", "0.250"]  # t2 has no answer in run 2

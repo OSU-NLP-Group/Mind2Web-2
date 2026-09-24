@@ -500,6 +500,7 @@ class Evaluator:
         try:
 
             if node:
+                node.evidence = None  # the evidence of an earlier verification of the node does not carry over
                 # Get all preceding leaf nodes
                 prerequisite_leaves = self._get_auto_preconditions(node, extra_prerequisites=extra_prerequisites)
 
@@ -556,7 +557,12 @@ class Evaluator:
             if node:
                 node.score = 0.0
                 node.status = "failed"
-                node.evidence = {**(node.evidence or {"claim": claim, "sources": [], "checks": []}),
+                try:
+                    urls = _normalize_sources(sources).urls
+                except TypeError:  # the sources themselves are what failed
+                    urls = []
+                # Keeps the checks this call recorded before the error
+                node.evidence = {**(node.evidence or {"claim": claim, "sources": urls, "checks": []}),
                                  "error": f"{type(e).__name__}: {e}"}
             self.verifier.logger.error(f"{name} failed with an error, so it counts as failed: {e}",
                                        extra={**verify_context, "status": "error"}, exc_info=True)

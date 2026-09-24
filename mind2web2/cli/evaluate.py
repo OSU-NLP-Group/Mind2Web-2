@@ -214,8 +214,12 @@ def _write_report(args: argparse.Namespace) -> None:
     """Write the HTML page of the agent's results (``mind2web2 report``), over every task with results."""
     try:
         path = write_report(args.results_dir, args.agent)
-    except (OSError, ValueError) as exc:  # FileNotFoundError: no answer has been evaluated
+    except FileNotFoundError as exc:  # no answer has been evaluated
         print(f"Report not written: {exc}", file=sys.stderr)
+        return
+    except Exception as exc:  # the report is an extra; the evaluation and its metrics stand without it
+        log.error("The report could not be written", exc_info=True, extra={"console": False})
+        print(f"Report not written: {type(exc).__name__}: {exc}", file=sys.stderr)
         return
     print(f"Browse the results and the evidence of each check: {path}")
 
