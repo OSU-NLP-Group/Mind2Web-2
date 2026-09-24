@@ -72,6 +72,7 @@ class JudgeUsage:
 
     requests: int = 0
     failed_requests: int = 0
+    first_failure: str | None = None  # "<error type>: <message>" of the first failed request; not in as_dict()
     input_tokens: int = 0
     cached_input_tokens: int = 0
     output_tokens: int = 0
@@ -90,4 +91,7 @@ class JudgeUsage:
             self.served_models[served_model] = self.served_models.get(served_model, 0) + 1
 
     def as_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        """The usage as saved in a result, without ``first_failure``: a result is saved only when no request failed."""
+        data = asdict(self)
+        del data["first_failure"]
+        return data

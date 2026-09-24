@@ -213,7 +213,7 @@ def test_after_a_failed_judge_request_no_further_requests_are_sent_for_the_answe
         "        try:",
         "            await evaluator.verify(claim=claim, node=leaf, sources=None)",
         "        except Exception as exc:",
-        "            logger.warning(f'The script caught {type(exc).__name__}')",
+        "            logger.warning(f'The script caught {type(exc).__name__}: {exc}')",
         "    return evaluator.get_summary()",
         "",
     ])
@@ -221,6 +221,9 @@ def test_after_a_failed_judge_request_no_further_requests_are_sent_for_the_answe
     evaluated, results_root = evaluate(tmp_path, monkeypatch, client, script)
     assert evaluated == [] and saved_results(results_root) == []
     assert client.calls == 1  # the second verification sent no request
+    # Its error names the first failure, in case it is the one that reaches the log
+    assert ("An earlier judge request for this answer failed for good (JudgeError: judge unavailable)"
+            in answer_log(results_root))
 
 
 def test_a_failed_evaluation_does_not_leave_an_earlier_result_in_place(tmp_path, monkeypatch):

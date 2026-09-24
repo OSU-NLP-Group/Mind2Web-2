@@ -84,18 +84,23 @@ class BaseEvaluator:
         Raises :class:`JudgeError` when the request fails for good; callers let it
         propagate so that the answer is reported as not scored.  Once a request
         for the answer has failed for good, the answer cannot be scored, so
-        later requests raise :class:`JudgeError` at once without being sent.
+        later requests raise :class:`JudgeError` at once without being sent;
+        its message names the first failure, so that whichever of the errors
+        reaches the log (concurrent checks can finish in any order) names the
+        cause.
         """
         # Use LLM semaphore if available, fallback to default semaphore
         semaphore_to_use = getattr(self.semaphore, 'llm', self.semaphore)
         async with semaphore_to_use:
             if self.usage.failed_requests:
-                raise JudgeError("An earlier judge request for this answer failed for good; "
-                                 "no further requests are sent for it")
+                raise JudgeError(f"An earlier judge request for this answer failed for good "
+                                 f"({self.usage.first_failure}); no further requests are sent for it")
             try:
                 result, tokens = await self.client.async_response(count_token=True, **kwargs)
-            except JudgeError:
+            except JudgeError as exc:
                 self.usage.failed_requests += 1
+                if self.usage.first_failure is None:
+                    self.usage.first_failure = f"{type(exc).__name__}: {exc}"
                 raise
         self.usage.record(tokens)
         return result
