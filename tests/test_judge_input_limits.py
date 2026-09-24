@@ -43,6 +43,13 @@ class CharEncoding:
         return "".join(tokens)
 
 
+class FourCharEncoding(CharEncoding):
+    """Stands in for the tokenizer: one token per four characters, so a text has fewer tokens than bytes."""
+
+    def encode(self, text, disallowed_special=()):
+        return [text[i:i + 4] for i in range(0, len(text), 4)]
+
+
 class ScriptedJudge:
     """Answers with the given outcomes in order, repeating the last one, and records every request's messages.
 
@@ -220,6 +227,17 @@ def test_a_request_too_long_for_the_judge_is_sent_again_with_half_the_page_text(
     assert "y" * 4_000 in first
     assert "y" * 2_000 + json.dumps(TRUNCATION_MARKER)[1:-1] in second and "y" * 2_001 not in second
     assert v.usage.rejections == []
+
+
+def test_each_shorter_attempt_halves_the_tokens_of_the_page_text(tmp_path, monkeypatch):
+    monkeypatch.setattr(eval_toolkit, "_text_encoding", FourCharEncoding)
+    judge = ScriptedJudge(ContextLengthError("too long"), True)
+    v = evaluator(Verifier, page_cache(tmp_path, text="y" * 4_000), judge)  # 1,000 tokens
+
+    assert asyncio.run(v.verify_by_url("claim", URL, None, majority_vote=False)) is True
+    first, second = judge.page_texts()
+    assert "y" * 4_000 in first
+    assert "y" * 2_000 + json.dumps(TRUNCATION_MARKER)[1:-1] in second and "y" * 2_001 not in second  # 500 tokens
 
 
 def test_a_request_still_too_long_after_two_shorter_attempts_fails_its_check(tmp_path, monkeypatch):

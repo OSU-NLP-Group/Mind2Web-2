@@ -83,6 +83,11 @@ def truncate_to_tokens(text: str, max_tokens: int) -> str:
     return encoding.decode(tokens[:max_tokens]).rstrip("\ufffd") + TRUNCATION_MARKER
 
 
+def count_tokens(text: str) -> int:
+    """The number of tokens in ``text``, counted in :data:`TEXT_ENCODING`."""
+    return len(_text_encoding().encode(text, disallowed_special=()))
+
+
 def split_screenshot(image: Image.Image, part_height: int, overlap: int, max_parts: int) -> List[Image.Image]:
     """``image`` as parts of at most ``part_height`` pixels, top to bottom, each overlapping the previous one by ``overlap`` pixels.
 
@@ -253,8 +258,9 @@ class BaseEvaluator:
         """``await attempt(web_text)``, cutting the page text in half and trying again while the request is too long.
 
         When the judge answers :class:`ContextLengthError`, the page text is cut
-        to half the smaller of its size in bytes and its token budget, up to
-        ``config.max_text_shrinks`` times; the last :class:`ContextLengthError`
+        to half the smaller of its token count and its token budget, up to
+        ``config.max_text_shrinks`` times, so each attempt sends at most half
+        the page text of the one before; the last :class:`ContextLengthError`
         propagates.
         """
         budget = self.config.max_text_tokens
@@ -264,7 +270,7 @@ class BaseEvaluator:
             except ContextLengthError:
                 if shrink == self.config.max_text_shrinks:
                     raise
-                budget = min(budget, len(web_text.encode("utf-8"))) // 2
+                budget = min(budget, await asyncio.to_thread(count_tokens, web_text)) // 2
                 self.logger.warning(f"[{op_id}] The request is too long for the judge; "
                                     f"sending it again with the page text cut to {budget} tokens")
                 web_text = await asyncio.to_thread(truncate_to_tokens, web_text, budget)

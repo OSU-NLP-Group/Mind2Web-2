@@ -35,8 +35,9 @@ has more than one entry.
 
 A judge request that the judge rejected because of its content (a refusal, a
 content filter, an output cut off at the token limit, or a request too long
-even with the page text shortened) counts as a failed check, and the answer is
-scored as usual.  The report lists the answers with such requests
+even with the page text shortened) counts as a failed vote of the check it
+belongs to (the check fails unless majority voting has other votes), or, for
+an extraction, gives empty values, and the answer is scored as usual.  The report lists the answers with such requests
 (``rejected_requests``), since their scores depend on the judge's content
 policy as well as on the answer.
 """
@@ -78,7 +79,7 @@ class AnswerRecord:
     serving the answer's judge requests; it is empty without a score or when
     the result does not record them.  ``rejected_requests`` counts the judge
     requests of a scored answer that the judge rejected because of their
-    content (``judge_usage.rejections``); each counted as a failed check.
+    content (``judge_usage.rejections``); each counted as a failed vote, or an empty extraction.
     """
 
     task_id: str
@@ -425,7 +426,7 @@ def format_report(metrics: dict, max_listed: int = 20) -> str:
     rejected = metrics["rejected_requests"]
     if rejected:
         lines.append(f"  Answers with judge requests rejected for their content "
-                     f"(each counted as a failed check): {len(rejected)}")
+                     f"(each counted as a failed vote or an empty extraction): {len(rejected)}")
         for item in rejected[:max_listed]:
             lines.append(f"    {item['task_id']} run {item['run']}: {item['requests']} requests")
         if len(rejected) > max_listed:
