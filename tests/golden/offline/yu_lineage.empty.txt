@@ -1,0 +1,22 @@
+final_score 0
+root [sequential] 0 failed
+  generation_1 [parallel] 0 failed
+    generation_1_exists [parallel, critical] 0 failed
+    generation_1_match [parallel, critical] 0 skipped
+    generation_1_source [parallel, critical] 0 skipped
+  generation_2 [parallel] 0 skipped
+    generation_2_exists [parallel, critical] 0 failed
+    generation_2_match [parallel, critical] 0 skipped
+    generation_2_source [parallel, critical] 0 skipped
+  generation_3 [parallel] 0 skipped
+    generation_3_exists [parallel, critical] 0 failed
+    generation_3_match [parallel, critical] 0 skipped
+    generation_3_source [parallel, critical] 0 skipped
+  generation_4 [parallel] 0 skipped
+    generation_4_exists [parallel, critical] 0 failed
+    generation_4_match [parallel, critical] 0 skipped
+    generation_4_source [parallel, critical] 0 skipped
+  generation_5 [parallel] 0 skipped
+    generation_5_exists [parallel, critical] 0 failed
+    generation_5_match [parallel, critical] 0 skipped
+    generation_5_source [parallel, critical] 0 skipped

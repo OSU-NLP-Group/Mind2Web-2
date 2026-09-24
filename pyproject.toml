@@ -18,26 +18,20 @@ authors = [
 dependencies = [
     "openai",
     "backoff",
-    "pydantic>=1.10", # If already migrated to v2, change to pydantic>=2
+    "pydantic>=2",
     "tqdm",
-    "pandas>=1.4",
     "patchright>=1.58.0",
     "arxiv",
     "googlemaps",
     "aiohttp",
     "httpx",
-    "dill",
+    "requests",
+    "certifi",
     "python-json-logger",
-    "beautifulsoup4",
-    "PyMuPDF",
-    "google-auth",
-    "google-api-python-client",
-    "gspread",
+    "python-dateutil",  # imported by several eval scripts
+    "PyMuPDF>=1.24.3",
     "fastapi",
-    "jinja2",
-    "markdown",
     "uvicorn[standard]",
-    "markdownify",
     "html2text>=2025.4.15",
     "pillow>=11.3.0",
     "validators>=0.35.0",
@@ -50,6 +44,12 @@ code-gen = [
     "anthropic[bedrock]" # Only required for code generation users
 ]
 
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "time-machine>=3.5.1",
+]
+
 # ── setuptools settings ────────────────────────────────────────────────
 [tool.setuptools]
 include-package-data = true          # Include non-.py files in the package
@@ -58,3 +58,7 @@ include-package-data = true          # Include non-.py files in the package
 where = ["."]
 include = ["mind2web2*"]
 exclude = ["code_gen*", "InfoVisualizer*", "dataset*", "eval_scripts*", "scripts*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]

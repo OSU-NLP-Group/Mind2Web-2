@@ -1,0 +1,77 @@
+final_score 0.833333
+root [parallel] 0.833333 partial
+  movie_1 [sequential] 0.833333 partial
+    movie_1_essential_ratings_exist [parallel, critical] 1 passed
+    movie_1_constraint_check [parallel] 1 passed
+      movie_1_is_animation [parallel, critical] 1 passed
+      movie_1_rating_threshold_valid [parallel, critical] 1 passed
+    movie_1_additional_info [parallel] 0.666667 partial
+      movie_1_ratings_section [parallel] 1 passed
+        movie_1_ratings_provided [parallel, critical] 1 passed
+        movie_1_imdb_rating_accuracy [parallel, critical] 1 passed
+        movie_1_rt_rating_accuracy [parallel, critical] 1 passed
+      movie_1_director_section [parallel] 1 passed
+        movie_1_director_provided [parallel, critical] 1 passed
+        movie_1_director_accuracy [parallel, critical] 1 passed
+      movie_1_release_section [parallel] 1 passed
+        movie_1_release_provided [parallel, critical] 1 passed
+        movie_1_release_accuracy [parallel, critical] 1 passed
+      movie_1_plot_section [parallel] 1 passed
+        movie_1_plot_provided [parallel, critical] 1 passed
+        movie_1_plot_accuracy [parallel, critical] 1 passed
+      movie_1_pos_review_section [parallel] 0 failed
+        movie_1_pos_review_provided [parallel, critical] 0 failed
+        movie_1_pos_review_valid [parallel, critical] 0 skipped
+      movie_1_neg_review_section [parallel] 0 failed
+        movie_1_neg_review_provided [parallel, critical] 0 failed
+        movie_1_neg_review_valid [parallel, critical] 0 skipped
+  movie_2 [sequential] 0.833333 partial
+    movie_2_essential_ratings_exist [parallel, critical] 1 passed
+    movie_2_constraint_check [parallel] 1 passed
+      movie_2_is_animation [parallel, critical] 1 passed
+      movie_2_rating_threshold_valid [parallel, critical] 1 passed
+    movie_2_additional_info [parallel] 0.666667 partial
+      movie_2_ratings_section [parallel] 1 passed
+        movie_2_ratings_provided [parallel, critical] 1 passed
+        movie_2_imdb_rating_accuracy [parallel, critical] 1 passed
+        movie_2_rt_rating_accuracy [parallel, critical] 1 passed
+      movie_2_director_section [parallel] 1 passed
+        movie_2_director_provided [parallel, critical] 1 passed
+        movie_2_director_accuracy [parallel, critical] 1 passed
+      movie_2_release_section [parallel] 1 passed
+        movie_2_release_provided [parallel, critical] 1 passed
+        movie_2_release_accuracy [parallel, critical] 1 passed
+      movie_2_plot_section [parallel] 1 passed
+        movie_2_plot_provided [parallel, critical] 1 passed
+        movie_2_plot_accuracy [parallel, critical] 1 passed
+      movie_2_pos_review_section [parallel] 0 failed
+        movie_2_pos_review_provided [parallel, critical] 0 failed
+        movie_2_pos_review_valid [parallel, critical] 0 skipped
+      movie_2_neg_review_section [parallel] 0 failed
+        movie_2_neg_review_provided [parallel, critical] 0 failed
+        movie_2_neg_review_valid [parallel, critical] 0 skipped
+  movie_3 [sequential] 0.833333 partial
+    movie_3_essential_ratings_exist [parallel, critical] 1 passed
+    movie_3_constraint_check [parallel] 1 passed
+      movie_3_is_animation [parallel, critical] 1 passed
+      movie_3_rating_threshold_valid [parallel, critical] 1 passed
+    movie_3_additional_info [parallel] 0.666667 partial
+      movie_3_ratings_section [parallel] 1 passed
+        movie_3_ratings_provided [parallel, critical] 1 passed
+        movie_3_imdb_rating_accuracy [parallel, critical] 1 passed
+        movie_3_rt_rating_accuracy [parallel, critical] 1 passed
+      movie_3_director_section [parallel] 1 passed
+        movie_3_director_provided [parallel, critical] 1 passed
+        movie_3_director_accuracy [parallel, critical] 1 passed
+      movie_3_release_section [parallel] 1 passed
+        movie_3_release_provided [parallel, critical] 1 passed
+        movie_3_release_accuracy [parallel, critical] 1 passed
+      movie_3_plot_section [parallel] 1 passed
+        movie_3_plot_provided [parallel, critical] 1 passed
+        movie_3_plot_accuracy [parallel, critical] 1 passed
+      movie_3_pos_review_section [parallel] 0 failed
+        movie_3_pos_review_provided [parallel, critical] 0 failed
+        movie_3_pos_review_valid [parallel, critical] 0 skipped
+      movie_3_neg_review_section [parallel] 0 failed
+        movie_3_neg_review_provided [parallel, critical] 0 failed
+        movie_3_neg_review_valid [parallel, critical] 0 skipped

@@ -1,0 +1,40 @@
+final_score 0.375
+root [parallel] 0.375 partial
+  event_0 [sequential] 0.75 partial
+    event_0_essential [parallel] 1 passed
+      event_0_has_info [parallel, critical] 1 passed
+      event_0_is_sports_music [parallel, critical] 1 passed
+      event_0_within_two_months [parallel, critical] 1 passed
+      event_0_in_nyc [parallel, critical] 1 passed
+    event_0_additional [parallel] 0.5 partial
+      event_0_location [parallel] 1 passed
+        event_0_location_exists [parallel, critical] 1 passed
+        event_0_location_accurate [parallel, critical] 1 passed
+      event_0_time [parallel] 1 passed
+        event_0_time_exists [parallel, critical] 1 passed
+        event_0_time_accurate [parallel, critical] 1 passed
+      event_0_ticket [parallel] 0 failed
+        event_0_ticket_exists [parallel, critical] 1 passed
+        event_0_ticket_valid [parallel, critical] 0 failed
+      event_0_travel [parallel] 0 failed
+        event_0_travel_exists [parallel, critical] 1 passed
+        event_0_travel_accurate [parallel, critical] 0 failed
+  event_1 [sequential] 0 failed
+    event_1_essential [parallel] 0 failed
+      event_1_has_info [parallel, critical] 1 passed
+      event_1_is_sports_music [parallel, critical] 1 passed
+      event_1_within_two_months [parallel, critical] 1 passed
+      event_1_in_nyc [parallel, critical] 0 failed
+    event_1_additional [parallel] 0 skipped
+      event_1_location [parallel] 0 skipped
+        event_1_location_exists [parallel, critical] 1 passed
+        event_1_location_accurate [parallel, critical] 0 skipped
+      event_1_time [parallel] 0 skipped
+        event_1_time_exists [parallel, critical] 1 passed
+        event_1_time_accurate [parallel, critical] 0 skipped
+      event_1_ticket [parallel] 0 skipped
+        event_1_ticket_exists [parallel, critical] 1 passed
+        event_1_ticket_valid [parallel, critical] 0 skipped
+      event_1_travel [parallel] 0 skipped
+        event_1_travel_exists [parallel, critical] 1 passed
+        event_1_travel_accurate [parallel, critical] 0 skipped

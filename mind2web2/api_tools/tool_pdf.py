@@ -21,7 +21,7 @@ import certifi
 
 import aiohttp
 import certifi
-import fitz  # PyMuPDF
+import pymupdf
 import httpx
 import requests
 from PIL import Image
@@ -323,8 +323,8 @@ class PDFParser:
             return [make_blank_png_b64()], "PDF extraction failed: Invalid PDF format"
 
         try:
-            doc = fitz.open(stream=data, filetype="pdf")
-        except (fitz.FileDataError, RuntimeError):
+            doc = pymupdf.open(stream=data, filetype="pdf")
+        except (pymupdf.FileDataError, RuntimeError):
             return [make_blank_png_b64()], "PDF extraction failed: Unable to parse PDF file"
 
         imgs: List[str] = []
@@ -339,7 +339,7 @@ class PDFParser:
             texts.append(page.get_text("text"))
 
             if i < max_img_pages:
-                pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
+                pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=False)
                 img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
 
                 buf = BytesIO()

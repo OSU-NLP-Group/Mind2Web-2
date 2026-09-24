@@ -100,16 +100,17 @@ class VerificationNode(BaseModel):
             # -------- 2. Recursively compute each child (mutate is passed recursively) ----------
             child_scores = [c.compute_score(mutate=mutate) for c in self.children]
 
-            # -------- 3. Sequential short-circuit (no longer directly modifies child) ----------
+            # -------- 3. Sequential short-circuit: children after the first imperfect one count as 0 ----------
             if self.strategy is AggregationStrategy.SEQUENTIAL:
                 valid_until = next(
                     (idx for idx, s in enumerate(child_scores) if s < 1.0),
                     len(child_scores)
                 )
-                if mutate and valid_until < len(child_scores):
-                    for c in self.children[valid_until + 1:]:
-                        c.score, c.status = 0.0, "skipped"
-                        c._cached_score = 0.0
+                if valid_until < len(child_scores):
+                    if mutate:
+                        for c in self.children[valid_until + 1:]:
+                            c.score, c.status = 0.0, "skipped"
+                            c._cached_score = 0.0
                     child_scores = child_scores[:valid_until + 1] + [0] * (len(child_scores) - valid_until - 1)
 
             # -------- 4. Gate-then-Average ----------

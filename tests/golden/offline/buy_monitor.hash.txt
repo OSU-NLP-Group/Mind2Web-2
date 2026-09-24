@@ -1,0 +1,87 @@
+final_score 0
+root [parallel] 0 failed
+  model_0 [sequential] 0 failed
+    model_0_34inch_verification [parallel, critical] 1 passed
+      model_0_name_exists [parallel, critical] 1 passed
+      model_0_is_34inch_curved [parallel, critical] 1 passed
+    model_0_websites [parallel, critical] 0 failed
+      model_0_website_0 [parallel, critical] 1 passed
+        model_0_website_0_data_exists [parallel, critical] 1 passed
+        model_0_website_0_sells_monitor [parallel, critical] 1 passed
+        model_0_website_0_price_matches [parallel, critical] 1 passed
+      model_0_website_1 [parallel, critical] 1 passed
+        model_0_website_1_data_exists [parallel, critical] 1 passed
+        model_0_website_1_sells_monitor [parallel, critical] 1 passed
+        model_0_website_1_price_matches [parallel, critical] 1 passed
+      model_0_website_2 [parallel, critical] 0 failed
+        model_0_website_2_data_exists [parallel, critical] 0 failed
+        model_0_website_2_sells_monitor [parallel, critical] 0 skipped
+        model_0_website_2_price_matches [parallel, critical] 0 skipped
+  model_1 [sequential] 0 failed
+    model_1_34inch_verification [parallel, critical] 1 passed
+      model_1_name_exists [parallel, critical] 1 passed
+      model_1_is_34inch_curved [parallel, critical] 1 passed
+    model_1_websites [parallel, critical] 0 failed
+      model_1_website_0 [parallel, critical] 1 passed
+        model_1_website_0_data_exists [parallel, critical] 1 passed
+        model_1_website_0_sells_monitor [parallel, critical] 1 passed
+        model_1_website_0_price_matches [parallel, critical] 1 passed
+      model_1_website_1 [parallel, critical] 0 failed
+        model_1_website_1_data_exists [parallel, critical] 1 passed
+        model_1_website_1_sells_monitor [parallel, critical] 0 failed
+        model_1_website_1_price_matches [parallel, critical] 0 skipped
+      model_1_website_2 [parallel, critical] 0 failed
+        model_1_website_2_data_exists [parallel, critical] 0 failed
+        model_1_website_2_sells_monitor [parallel, critical] 0 skipped
+        model_1_website_2_price_matches [parallel, critical] 0 skipped
+  model_2 [sequential] 0 failed
+    model_2_34inch_verification [parallel, critical] 0 failed
+      model_2_name_exists [parallel, critical] 0 failed
+      model_2_is_34inch_curved [parallel, critical] 0 skipped
+    model_2_websites [parallel, critical] 0 skipped
+      model_2_website_0 [parallel, critical] 0 failed
+        model_2_website_0_data_exists [parallel, critical] 0 failed
+        model_2_website_0_sells_monitor [parallel, critical] 0 skipped
+        model_2_website_0_price_matches [parallel, critical] 0 skipped
+      model_2_website_1 [parallel, critical] 0 failed
+        model_2_website_1_data_exists [parallel, critical] 0 failed
+        model_2_website_1_sells_monitor [parallel, critical] 0 skipped
+        model_2_website_1_price_matches [parallel, critical] 0 skipped
+      model_2_website_2 [parallel, critical] 0 failed
+        model_2_website_2_data_exists [parallel, critical] 0 failed
+        model_2_website_2_sells_monitor [parallel, critical] 0 skipped
+        model_2_website_2_price_matches [parallel, critical] 0 skipped
+  model_3 [sequential] 0 failed
+    model_3_34inch_verification [parallel, critical] 0 failed
+      model_3_name_exists [parallel, critical] 0 failed
+      model_3_is_34inch_curved [parallel, critical] 0 skipped
+    model_3_websites [parallel, critical] 0 skipped
+      model_3_website_0 [parallel, critical] 0 failed
+        model_3_website_0_data_exists [parallel, critical] 0 failed
+        model_3_website_0_sells_monitor [parallel, critical] 0 skipped
+        model_3_website_0_price_matches [parallel, critical] 0 skipped
+      model_3_website_1 [parallel, critical] 0 failed
+        model_3_website_1_data_exists [parallel, critical] 0 failed
+        model_3_website_1_sells_monitor [parallel, critical] 0 skipped
+        model_3_website_1_price_matches [parallel, critical] 0 skipped
+      model_3_website_2 [parallel, critical] 0 failed
+        model_3_website_2_data_exists [parallel, critical] 0 failed
+        model_3_website_2_sells_monitor [parallel, critical] 0 skipped
+        model_3_website_2_price_matches [parallel, critical] 0 skipped
+  model_4 [sequential] 0 failed
+    model_4_34inch_verification [parallel, critical] 0 failed
+      model_4_name_exists [parallel, critical] 0 failed
+      model_4_is_34inch_curved [parallel, critical] 0 skipped
+    model_4_websites [parallel, critical] 0 skipped
+      model_4_website_0 [parallel, critical] 0 failed
+        model_4_website_0_data_exists [parallel, critical] 0 failed
+        model_4_website_0_sells_monitor [parallel, critical] 0 skipped
+        model_4_website_0_price_matches [parallel, critical] 0 skipped
+      model_4_website_1 [parallel, critical] 0 failed
+        model_4_website_1_data_exists [parallel, critical] 0 failed
+        model_4_website_1_sells_monitor [parallel, critical] 0 skipped
+        model_4_website_1_price_matches [parallel, critical] 0 skipped
+      model_4_website_2 [parallel, critical] 0 failed
+        model_4_website_2_data_exists [parallel, critical] 0 failed
+        model_4_website_2_sells_monitor [parallel, critical] 0 skipped
+        model_4_website_2_price_matches [parallel, critical] 0 skipped
