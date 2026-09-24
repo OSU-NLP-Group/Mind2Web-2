@@ -79,7 +79,6 @@ class TaskSummary:
     total_urls: int  # stored pages, failed URLs, and pending URLs
     web_urls: int
     pdf_urls: int
-    issue_urls: int
     cache_path: str
     failed_urls: int = 0
     pending_urls: int = 0
@@ -87,17 +86,11 @@ class TaskSummary:
 
 @dataclass
 class URLInfo:
-    """URL information with metadata."""
+    """A URL of a task and what the task holds for it."""
     url: str
     task_id: str
     content_type: str  # "web", "pdf", "failed" (the capture failed; nothing stored), or "pending" (not captured yet)
-    has_issues: bool = False
-    issues: List[str] = None
     failure: Optional[Dict[str, Any]] = None  # the failure record, for "failed" URLs
-
-    def __post_init__(self):
-        if self.issues is None:
-            self.issues = []
 
 
 class CacheManager:
@@ -220,7 +213,6 @@ class CacheManager:
             total_urls=counts["total_urls"] + counts["failed_urls"] + pending,
             web_urls=counts["web_pages"],
             pdf_urls=counts["pdf_pages"],
-            issue_urls=0,  # Will be calculated by keyword detector
             cache_path=str(cache.task_dir),
             failed_urls=counts["failed_urls"],
             pending_urls=pending,
@@ -277,12 +269,9 @@ class CacheManager:
             return []
         url_infos = [URLInfo(url=url, task_id=task_id, content_type=cache.has(url))
                      for url in cache.get_all_urls()]
-        url_infos += [URLInfo(url=url, task_id=task_id, content_type="failed", has_issues=True,
-                              issues=[f"capture failed: {record.get('reason', 'unknown reason')}"],
-                              failure=record)
+        url_infos += [URLInfo(url=url, task_id=task_id, content_type="failed", failure=record)
                       for url, record in cache.failures().items()]
-        url_infos += [URLInfo(url=url, task_id=task_id, content_type="pending", has_issues=True,
-                              issues=["not captured yet"])
+        url_infos += [URLInfo(url=url, task_id=task_id, content_type="pending")
                       for url in self._pending_urls(task_id, cache)]
         return url_infos
 
@@ -316,10 +305,6 @@ class CacheManager:
         if state := _stored_state(cache, url):
             return state
         return "pending" if self.canonical_url(task_id, url) in self._pending.get(task_id, ()) else None
-
-    def find_url_across_tasks(self, url: str) -> List[URLInfo]:
-        """Find URL across all tasks."""
-        return self._url_index.get(url, [])
 
     def get_url_content(self, task_id: str, url: str, get_screenshot=True) -> Tuple[Optional[str], Optional[bytes]]:
         """Get content for URL (text, screenshot/pdf)."""
@@ -379,17 +364,6 @@ class CacheManager:
         self._task_changed(task_id)
         logger.info(f"Stored a {'PDF' if pdf_bytes else 'web page'} for {stored} in task {task_id}")
         return stored
-
-    def update_url_content(self, task_id: str, url: str, text: str, screenshot: bytes) -> bool:
-        """Store a web page for ``url`` with :meth:`store_page`; returns whether it was stored."""
-        return self.store_page(task_id, url, text=text, screenshot=screenshot) is not None
-
-    def replace_with_pdf(self, task_id: str, url: str, pdf_bytes: bytes) -> bool:
-        """Store a PDF for ``url`` with :meth:`store_page` and clear its flag; returns whether it was stored."""
-        stored = self.store_page(task_id, url, pdf_bytes=pdf_bytes)
-        if stored is not None:
-            self.unflag_url(task_id, stored)
-        return stored is not None
 
     def add_pending_url(self, task_id: str, url: str) -> bool:
         """Add ``url`` to a task as pending, with nothing stored; ``False`` if the task already has its page.
@@ -475,10 +449,6 @@ class CacheManager:
         except Exception as e:
             logger.error(f"Failed to reset URL {url}: {e}")
             return None
-
-    def get_all_urls(self) -> List[str]:
-        """Get all unique URLs across all tasks."""
-        return list(self._url_index.keys())
 
     # --- Reviewed status persistence ---
 

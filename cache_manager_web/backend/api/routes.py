@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Query
+from fastapi import APIRouter, HTTPException, UploadFile, File, Query, Request
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
@@ -19,6 +19,8 @@ from mind2web2.utils.cache_filesys import storage_key
 from mind2web2.utils.page_info_retrieval import html_to_markdown
 from mind2web2.utils.url_tools import normalize_url_simple
 
+from .. import config
+from ..config import LOOPBACK_HOSTS
 from ..models import CacheManager, KeywordDetector
 
 logger = logging.getLogger(__name__)
@@ -90,9 +92,12 @@ class CaptureRequest(BaseModel):
     visible_part_only: bool = False  # the full-page screenshot failed; this one shows the visible part of the tab
     batch: bool = False  # sent by a batch capture, which is stored only while the batch waits for url
 
+REVIEW_STATUSES = ("ok", "")
+"""The statuses a reviewer sets: "ok", or "" to clear the status; captures set "fixed" and "recaptured" themselves."""
+
 class ReviewRequest(BaseModel):
     url: str
-    status: str  # "ok", "fixed", "skip", ""
+    status: str  # one of REVIEW_STATUSES
 
 class CaptureTargetRequest(BaseModel):
     task_id: str
@@ -249,7 +254,6 @@ async def list_tasks():
                 "pdf_urls": summary.pdf_urls,
                 "failed_urls": summary.failed_urls,
                 "pending_urls": summary.pending_urls,
-                "issue_urls": summary.issue_urls,
                 "reviewed_count": len(reviewed),
                 "issue_count": len(task_issue_cache),
                 "issue_reviewed_count": issue_reviewed,
@@ -382,8 +386,15 @@ async def get_capture_target():
 
 
 @router.post("/capture")
-async def receive_capture(req: CaptureRequest):
+async def receive_capture(req: CaptureRequest, request: Request):
     """Store a page captured by the Chrome extension, for ``url`` and, after a redirect, for ``actual_url`` too.
+
+    ``url`` must be an http(s) URL (status 400 otherwise).  ``actual_url``
+    is ignored unless it is an http(s) URL on another host than this
+    server's, so a capture of the Cache Manager's own page is never stored
+    under the Cache Manager's address.  The decoded screenshot may have at
+    most ``MAX_SCREENSHOT_SIZE`` bytes and the HTML (or the text) at most
+    ``MAX_TEXT_SIZE`` bytes (status 413 otherwise).
 
     With ``html``, the stored text is ``html_to_markdown(html)``, the text the
     crawler stores for the pages it captures, so a page's text has the same
@@ -400,67 +411,97 @@ async def receive_capture(req: CaptureRequest):
     uploaded that URL by hand while the batch's tab loaded it, the capture
     is refused with status 409 and nothing is stored.
 
-    With ``visible_part_only``, the full-page screenshot failed: each stored
-    page is flagged instead, and its review status cleared, so that it
-    stays a definite issue until a full-page capture, and the
-    capture_complete event carries a warning.  Returns the URL the task
-    lists the page under.
+    Two captures are stored without being marked done, and the response and
+    the capture_complete event carry a ``warning`` that says why:
+
+    - With ``visible_part_only``, the full-page screenshot failed: each
+      stored page is flagged, and its review status cleared, so that it
+      stays a definite issue until a full-page capture.
+    - A capture by hand whose stored text is empty (or only whitespace)
+      keeps its flag and gets no review status: empty text is a definite
+      issue, so the URL stays red, and a batch still queues it.  A batch
+      capture of such a page is marked "recaptured" as usual, for a person
+      to look at.
+
+    Returns the URL the task lists the page under.
     """
     _require_loaded()
     cache = _cm.get_task_cache(req.task_id)
     if not cache:
         raise HTTPException(404, f"Task not found: {req.task_id}")
+    url = _valid_url(req.url)
+    actual_url = _redirect_url(req.actual_url, request)
 
     try:
         screenshot_bytes = base64.b64decode(req.screenshot_base64)
     except Exception:
         raise HTTPException(400, "Invalid base64 screenshot data")
+    if len(screenshot_bytes) > config.MAX_SCREENSHOT_SIZE:
+        raise HTTPException(413, f"The screenshot ({len(screenshot_bytes):,} bytes) exceeds the limit of "
+                                 f"{config.MAX_SCREENSHOT_SIZE:,} bytes")
+    page = req.html if req.html else (req.text or "")
+    if len(page) > config.MAX_TEXT_SIZE or len(page.encode("utf-8")) > config.MAX_TEXT_SIZE:
+        raise HTTPException(413, f"The page's {'HTML' if req.html else 'text'} exceeds the limit of "
+                                 f"{config.MAX_TEXT_SIZE:,} bytes")
 
     text = await asyncio.to_thread(html_to_markdown, req.html) if req.html else (req.text or "")
     if req.batch:
-        _refuse_a_stale_batch_capture(req.task_id, req.url)
-    stored = _cm.store_page(req.task_id, req.url, text=text, screenshot=screenshot_bytes)
+        _refuse_a_stale_batch_capture(req.task_id, url)
+    stored = _cm.store_page(req.task_id, url, text=text, screenshot=screenshot_bytes)
     if stored is None:
         raise HTTPException(500, "Failed to save capture")
     stored_urls = [stored]
-    if req.actual_url and req.actual_url != req.url:
-        redirected = _cm.store_page(req.task_id, req.actual_url, text=text, screenshot=screenshot_bytes)
+    if actual_url and actual_url != url:
+        redirected = _cm.store_page(req.task_id, actual_url, text=text, screenshot=screenshot_bytes)
         if redirected is not None and redirected != stored:
             stored_urls.append(redirected)
 
-    for url in stored_urls:
+    empty_by_hand = not req.batch and not text.strip()
+    for listed in stored_urls:
         if req.visible_part_only:
-            _cm.flag_url(req.task_id, url)
-            _cm.mark_url_reviewed(req.task_id, url, "")
+            _cm.flag_url(req.task_id, listed)
+            _cm.mark_url_reviewed(req.task_id, listed, "")
+        elif empty_by_hand:
+            _cm.mark_url_reviewed(req.task_id, listed, "")
         else:
-            _cm.unflag_url(req.task_id, url)
-            _cm.mark_url_reviewed(req.task_id, url, "recaptured" if req.batch else "fixed")
+            _cm.unflag_url(req.task_id, listed)
+            _cm.mark_url_reviewed(req.task_id, listed, "recaptured" if req.batch else "fixed")
     _refresh_issues(req.task_id, *stored_urls)
 
-    event = {"task_id": req.task_id, "url": stored}
+    warnings = []
     if req.visible_part_only:
-        event["warning"] = "the full-page screenshot failed, so the screenshot shows only the visible part of the page"
+        warnings.append("the full-page screenshot failed, so the screenshot shows only the visible part of the page; "
+                        "capture it again for a full-page screenshot")
+    if empty_by_hand:
+        warnings.append("the captured page has no text, so the URL is not marked fixed; "
+                        "capture it again once the page shows its content")
+    response = {"ok": True, "task_id": req.task_id, "url": stored}
+    event = {"task_id": req.task_id, "url": stored}
+    if warnings:
+        response["warning"] = event["warning"] = "; and ".join(warnings)
     await _push_event("capture_complete", event)
     await _advance_batch(done_head=req.batch)
 
-    return {"ok": True, "task_id": req.task_id, "url": stored}
+    return response
 
 
 # ---------------------------------------------------------------------------
 # Review
 # ---------------------------------------------------------------------------
 
-@router.get("/review/{task_id}")
-async def get_review(task_id: str):
-    _require_loaded()
-    reviewed = _cm.load_reviewed(task_id)
-    return {"task_id": task_id, "reviewed": reviewed}
-
-
 @router.post("/review/{task_id}")
 async def set_review(task_id: str, req: ReviewRequest):
+    """Set a URL's review status to "ok", or clear it with "".
+
+    Any other status is refused with status 400 ("fixed" and "recaptured"
+    are set by captures and uploads), and a task or URL the task does not
+    list with status 404.  A reviewed URL no longer qualifies for a batch.
+    """
     _require_loaded()
-    _cm.mark_url_reviewed(task_id, req.url, req.status)
+    if req.status not in REVIEW_STATUSES:
+        raise HTTPException(400, f"Unknown review status {req.status!r}; use one of {list(REVIEW_STATUSES)}")
+    url = _listed_url(task_id, req.url)
+    _cm.mark_url_reviewed(task_id, url, req.status)
     await _advance_batch()
     return {"ok": True}
 
@@ -782,13 +823,15 @@ async def upload_mhtml(task_id: str, url: str = Query(...), file: UploadFile = F
     of the MIME archive.  A file with no text is refused with status 422, so
     that nothing is stored that was not captured.  The URL's flag is cleared
     and its review status set to "fixed", so a queued URL leaves a running
-    batch capture.
+    batch capture.  ``url`` must be an http(s) URL (status 400 otherwise),
+    and the file may have at most ``MAX_UPLOAD_SIZE`` bytes (status 413).
     """
     _require_loaded()
     if not _cm.get_task_cache(task_id):
         raise HTTPException(404, f"Task not found: {task_id}")
+    url = _valid_url(url)
 
-    text = _extract_text_from_mhtml(await file.read())
+    text = _extract_text_from_mhtml(await _read_upload(file))
     if not text:
         raise HTTPException(422, "The MHTML file has no text to store; capture the page with the extension "
                                  "or upload it as a PDF")
@@ -822,13 +865,16 @@ async def upload_pdf(task_id: str, url: str = Query(...), file: UploadFile = Fil
     otherwise.  The extension uploads the PDFs its batch finds with
     ``batch``; such an upload is stored only while ``url`` is the URL the
     batch waits for, and then advances the batch, and is otherwise refused
-    with status 409, with nothing stored.
+    with status 409, with nothing stored.  ``url`` must be an http(s) URL
+    (status 400 otherwise), and the file may have at most
+    ``MAX_UPLOAD_SIZE`` bytes (status 413).
     """
     _require_loaded()
     if not _cm.get_task_cache(task_id):
         raise HTTPException(404, f"Task not found: {task_id}")
+    url = _valid_url(url)
 
-    pdf_bytes = await file.read()
+    pdf_bytes = await _read_upload(file)
     if b"%PDF-" not in pdf_bytes[:1024]:
         raise HTTPException(422, "Not a PDF file: it does not start with the PDF signature %PDF-")
     if batch:
@@ -872,6 +918,34 @@ def _valid_url(url: str) -> str:
     except ValueError:
         raise HTTPException(400, f"Not an http(s) URL: {url!r}")
     return url
+
+
+def _redirect_url(actual_url: Optional[str], request: Request) -> Optional[str]:
+    """The URL a capture was redirected to, if the page is to be stored under it too; else ``None``.
+
+    ``actual_url`` counts only when it is an http(s) URL that the cache can
+    store (see :func:`_valid_url`) and its host is not this server's own
+    (the ``Host`` of ``request``; the loopback names count as one host), so
+    a capture never adds the Cache Manager's own address to a task.
+    """
+    if not actual_url:
+        return None
+    try:
+        url = _valid_url(actual_url)
+    except HTTPException:
+        return None
+    host = lambda name: "loopback" if name in LOOPBACK_HOSTS else name
+    if host(urlparse(url).hostname) == host((request.url.hostname or "").strip("[]").lower()):
+        return None
+    return url
+
+
+async def _read_upload(file: UploadFile) -> bytes:
+    """The content of an uploaded file; status 413 if it has more than ``MAX_UPLOAD_SIZE`` bytes."""
+    data = await file.read(config.MAX_UPLOAD_SIZE + 1)
+    if len(data) > config.MAX_UPLOAD_SIZE:
+        raise HTTPException(413, f"The file exceeds the limit of {config.MAX_UPLOAD_SIZE:,} bytes")
+    return data
 
 
 def _issue_entry(cm: CacheManager, task_id: str, url: str, state: Optional[str]) -> Optional[dict]:

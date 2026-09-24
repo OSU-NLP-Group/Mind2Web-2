@@ -32,6 +32,7 @@ async function api(path, options) {
 let batchMode = false;
 let batchTabId = null;
 let captchaCheckTimer = null;
+let captchaPollRun = 0;       // advanced by stopCaptchaPolling, so that a poll in progress then does nothing
 let batchProcessing = false;  // guard against re-entrant onUpdated calls
 let pageTimeoutTimer = null;  // 15s page load timeout
 let currentRetryCount = 0;    // retry count for current batch URL
@@ -139,7 +140,17 @@ chrome.commands.onCommand.addListener(async (command) => {
 /**
  * Capture the current page and send to backend.
  *
- * Returns {success: true} when the page was stored; otherwise {success: false,
+ * Without opts.skipTargetFetch, this is a capture by hand (the shortcut or
+ * the popup), stored for the capture target, the URL selected in the Cache
+ * Manager.  Such a capture is refused, with nothing stored, when the tab is
+ * the Cache Manager's own page, and when the tab shows another site than the
+ * target (see sameSite) unless opts.allowOtherSite is set; the result then has
+ * otherSite: true.  On the batch tab during a batch, a capture by hand is the
+ * batch's capture of the URL it waits for (see captureBatchTabByHand) and
+ * never uses the capture target.
+ *
+ * Returns {success: true} when the page was stored, with a warning when the
+ * backend stored it without marking it done; otherwise {success: false,
  * error}, with moved: true when the backend refused a batch capture because
  * the batch no longer waits for opts.url (nothing was stored).
  * @param {chrome.tabs.Tab} tab
@@ -148,6 +159,7 @@ chrome.commands.onCommand.addListener(async (command) => {
  * @param {string} [opts.task_id]
  * @param {string} [opts.url]
  * @param {boolean} [opts.batch] - a batch capture of opts.url, which the backend stores only while the batch waits for opts.url
+ * @param {boolean} [opts.allowOtherSite] - capture by hand even though the tab shows another site than the target
  */
 async function capturePage(tab, opts = {}) {
     try {
@@ -157,6 +169,12 @@ async function capturePage(tab, opts = {}) {
             task_id = opts.task_id;
             url = opts.url;
         } else {
+            if (isCacheManagerUrl(tab.url, await getBackend())) {
+                setBadge('!', '#dc2626', 3000);
+                return { success: false, error: 'This is the Cache Manager itself. Switch to the tab of the page to capture.' };
+            }
+            if (batchMode && tab.id === batchTabId) return await captureBatchTabByHand(tab);
+
             // Fetch capture target from backend
             const targetRes = await api('/api/capture/target');
             const target = await targetRes.json();
@@ -167,6 +185,15 @@ async function capturePage(tab, opts = {}) {
             }
             task_id = target.task_id;
             url = target.url;
+            if (!opts.allowOtherSite && !sameSite(tab.url, url)) {
+                setBadge('!', '#dc2626', 3000);
+                return {
+                    success: false, otherSite: true,
+                    error: `This tab shows ${siteOf(tab.url) || tab.url}, but the URL selected in the Cache Manager is `
+                           + `on ${siteOf(url) || url}. Select this page's URL in the Cache Manager, or capture anyway `
+                           + 'from the extension popup if the site redirected there.',
+                };
+            }
         }
 
         // Check if page is a PDF — handle differently
@@ -233,6 +260,13 @@ async function capturePage(tab, opts = {}) {
             return { success: true, batch: true };
         }
 
+        // Stored but not marked done (no text, or the visible part only): keep the tab to capture it again
+        const { warning } = await captureRes.json().catch(() => ({}));
+        if (warning) {
+            setBadge('!', '#f59e0b', 5000);
+            return { success: true, warning };
+        }
+
         // Normal mode — close tab and switch back
         setBadge('✓', '#22c55e', 2000);
         await switchToCacheManager(tab.id);
@@ -242,6 +276,54 @@ async function capturePage(tab, opts = {}) {
         setBadge('✗', '#dc2626', 3000);
         return { success: false, error: err.message };
     }
+}
+
+/**
+ * A capture by hand on the batch tab during a batch: the batch's capture of the URL it waits for.
+ *
+ * While the batch waits for the reviewer to solve a CAPTCHA (pause mode), the
+ * capture is what the batch does once the CAPTCHA is gone: CAPTCHA polling
+ * stops, and the page is captured as a batch capture and the batch moves on,
+ * as in autoCaptureAndAdvance, without retrying a short page.  In any other
+ * state the batch captures the tab itself, so the capture is refused and
+ * nothing is stored.
+ */
+async function captureBatchTabByHand(tab) {
+    if (batchState.status !== 'captcha') {
+        setBadge('!', '#dc2626', 3000);
+        return { success: false, error: 'The batch captures this tab itself. Wait for it, or stop the batch in the popup.' };
+    }
+    stopCaptchaPolling();
+    setBatchStatus('capturing');
+    batchLog('Capturing by hand (shortcut)', 'info');
+    const before = batchState.completed;
+    await autoCaptureAndAdvance(tab.id, MAX_RETRIES);
+    return batchState.completed > before
+        ? { success: true, batch: true }
+        : { success: false, error: 'The batch did not store this page; see the log in the popup.' };
+}
+
+/** The host name of an http(s) URL, lowercased and without a leading "www.", or '' for any other URL. */
+function siteOf(url) {
+    try {
+        const u = new URL(url);
+        return ['http:', 'https:'].includes(u.protocol) ? u.hostname.toLowerCase().replace(/^www\./, '') : '';
+    } catch {
+        return '';
+    }
+}
+
+/**
+ * Whether a tab at tabUrl shows the site of the capture target targetUrl.
+ *
+ * The hosts must be equal, ignoring a leading "www.", or one must be a
+ * subdomain of the other (example.com and m.example.com), so a redirect
+ * within a site passes and a tab of an unrelated site, or a tab that is not
+ * an http(s) page, does not.
+ */
+function sameSite(tabUrl, targetUrl) {
+    const tab = siteOf(tabUrl), target = siteOf(targetUrl);
+    return !!tab && !!target && (tab === target || tab.endsWith('.' + target) || target.endsWith('.' + tab));
 }
 
 /**
@@ -522,12 +604,14 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 function startCaptchaPolling(tabId) {
     stopCaptchaPolling();
+    const run = captchaPollRun;
 
     const poll = async () => {
-        if (!batchMode || tabId !== batchTabId) return;
+        if (!batchMode || tabId !== batchTabId || run !== captchaPollRun) return;
 
         try {
             const result = await detectCaptchaInTab(tabId);
+            if (run !== captchaPollRun) return;  // stopped during the check, e.g. by a capture by hand
             if (!result) {
                 // CAPTCHA resolved!
                 stopCaptchaPolling();
@@ -551,6 +635,7 @@ function startCaptchaPolling(tabId) {
 }
 
 function stopCaptchaPolling() {
+    captchaPollRun++;
     if (captchaCheckTimer) {
         clearTimeout(captchaCheckTimer);
         captchaCheckTimer = null;
@@ -848,7 +933,7 @@ function truncUrl(url, maxLen = 60) {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.action === 'capture') {
         chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
-            if (tab) capturePage(tab).then(sendResponse);
+            if (tab) capturePage(tab, { allowOtherSite: !!msg.allowOtherSite }).then(sendResponse);
         });
         return true;
     }

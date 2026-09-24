@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.datastructures import Headers
 
+from . import config
 from .models import CacheManager, KeywordDetector, ReviewStateError
 from .config import FRONTEND_DIR, LOOPBACK_HOSTS
 from .api.routes import router, set_app_state
@@ -108,6 +109,35 @@ class FrameGuard:
         await self.app(scope, receive, send_with_headers)
 
 
+class BodySizeGuard:
+    """ASGI middleware that refuses capture and upload requests whose body is too large, before reading it.
+
+    For the paths that ``config.max_request_size`` limits, a request must
+    declare its body size in ``Content-Length`` (status 411 otherwise;
+    browsers send it for every body the Cache Manager page and the extension
+    send), and a declared size over the limit is refused with status 413.
+    The routes also check each field against its own limit
+    (``MAX_SCREENSHOT_SIZE``, ``MAX_TEXT_SIZE``, ``MAX_UPLOAD_SIZE``).
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        limit = config.max_request_size(scope["path"]) if scope["type"] == "http" else None
+        if limit is not None and scope["method"] == "POST":
+            length = Headers(scope=scope).get("content-length")
+            if length is None or not length.isdigit():
+                await JSONResponse({"detail": "The request must declare its size in Content-Length"},
+                                   status_code=411)(scope, receive, send)
+                return
+            if int(length) > limit:
+                await JSONResponse({"detail": f"The request body ({int(length):,} bytes) exceeds the limit of "
+                                              f"{limit:,} bytes"}, status_code=413)(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
 def _host_name(host: str) -> str:
     """The host name of a ``Host`` header value, without its port and the brackets of an IPv6 address."""
     if host.startswith("["):
@@ -142,6 +172,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Cache Manager", lifespan=lifespan)
 
+app.add_middleware(BodySizeGuard)
 app.add_middleware(LocalRequestGuard, allowed_hosts=allowed_hosts_from_env())
 app.add_middleware(FrameGuard)  # added last, so it runs first and marks refusals too
 

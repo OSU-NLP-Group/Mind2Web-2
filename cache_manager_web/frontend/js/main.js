@@ -50,6 +50,7 @@ function initToolbar() {
     $('#btn-upload-mhtml').addEventListener('click', onUploadMhtml);
     $('#btn-recapture').addEventListener('click', onRecapture);
     $('#btn-batch').addEventListener('click', onBatchRecapture);
+    $('#btn-batch-stop').addEventListener('click', onStopBatch);
 
     // MHTML file picker callback
     $('#mhtml-picker').addEventListener('change', async (e) => {
@@ -115,6 +116,7 @@ function initToolbar() {
         // Batch button: enabled when there are definite-severity issues
         const hasDefiniteIssues = s.issueIndex.some(i => i.severity === 'definite');
         $('#btn-batch').disabled = !hasDefiniteIssues || s.batchActive;
+        $('#btn-batch-stop').style.display = s.batchActive ? '' : 'none';
         // Batch status display
         const batchEl = $('#batch-status');
         if (s.batchActive) {
@@ -357,6 +359,23 @@ async function onBatchRecapture() {
     }
 }
 
+/**
+ * Stop the queued batch, which the extension may be running or may never run; its URLs not yet captured stay red.
+ *
+ * The extension's own run ends when it next asks for the batch's status,
+ * and a capture it sends for the stopped batch is refused, with nothing
+ * stored.  The batch_stopped event updates every open Cache Manager page.
+ */
+async function onStopBatch() {
+    if (!confirm('Stop the batch? URLs it has not captured yet stay red.')) return;
+    try {
+        await api.stopBatch();
+        setState({ batchActive: false, batchCompleted: 0, batchTotal: 0 });
+    } catch (err) {
+        toast('Stopping the batch failed: ' + err.message, 'error');
+    }
+}
+
 // ============================================================
 // Issue Navigation
 // ============================================================
@@ -500,7 +519,7 @@ function initSSE() {
         if (data.type === 'capture_complete') {
             const s = getState();
             if (data.warning) {
-                toast(`Captured ${data.url?.substring(0, 60)}, but ${data.warning}. Capture it again for a full-page screenshot.`, 'warning');
+                toast(`Captured ${data.url?.substring(0, 60)}, but ${data.warning}.`, 'warning');
             } else if (!s.batchActive) {
                 toast(`Captured: ${data.url?.substring(0, 60)}...`, 'success');
             }

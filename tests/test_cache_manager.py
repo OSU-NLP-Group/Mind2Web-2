@@ -85,8 +85,10 @@ def test_edits_switch_content_types_reset_and_delete_pages(tmp_path):
     manager = CacheManager()
     assert manager.load_agent_cache(tmp_path / "agent") == (1, 1)
 
-    assert manager.update_url_content("task", "http://www.example.com/b.pdf", "now a web page", png_bytes())
-    assert manager.replace_with_pdf("task", "https://example.com/a/", b"%PDF-1.4 new")
+    stored = manager.store_page("task", "http://www.example.com/b.pdf", text="now a web page", screenshot=png_bytes())
+    assert stored == "https://example.com/b.pdf"  # under the URL the task lists
+    assert manager.store_page("task", "https://example.com/a/", pdf_bytes=b"%PDF-1.4 new") == A
+    assert manager.store_page("task", B) is None  # no content given
     assert manager.get_url_content("task", "https://example.com/b.pdf", get_screenshot=False) == ("now a web page", None)
     assert manager.reset_url("task", A) == "pdf"
     assert manager.reset_url("task", A) is None  # nothing is left to delete
@@ -118,7 +120,7 @@ def test_failed_urls_are_listed_until_captured_or_deleted(tmp_path):
         A: "web", "https://example.com/blocked": "failed", "https://example.com/dead": "failed"}
     assert summary_counts(manager, "task") == (3, 1, 0, 2)
 
-    assert manager.update_url_content("task", "https://example.com/blocked", "captured by hand", png_bytes())
+    assert manager.store_page("task", "https://example.com/blocked", text="captured by hand", screenshot=png_bytes())
     assert manager.delete_url("task", "https://example.com/dead")
     assert {info.url: info.content_type for info in manager.get_task_urls("task")} == {
         A: "web", "https://example.com/blocked": "web"}
@@ -315,12 +317,12 @@ def test_added_urls_are_pending_and_can_be_renamed_or_deleted(tmp_path):
 
         # A stored page moves with its flag and review status
         c.post("/api/flag/task", json={"url": A})
-        c.post("/api/review/task", json={"url": A, "status": "skip"})
+        c.post("/api/review/task", json={"url": A, "status": "ok"})
         rename = {"old_url": A, "new_url": A + "/moved"}
         assert c.post("/api/urls/task/rename", json=rename).json() == {"ok": True, "url": A + "/moved",
                                                                        "content_type": "web"}
         assert CacheFileSys(str(task_dir)).get_web(A + "/moved", get_screenshot=False)[0] == "page a"
-        assert c.get("/api/review/task").json()["reviewed"] == {A + "/moved": "skip"}
+        assert {u["url"]: u["reviewed"] for u in c.get("/api/tasks/task/urls").json()["urls"]}[A + "/moved"] == "ok"
         assert A + "/moved" in flags(tmp_path)
 
         assert c.delete("/api/urls/task", params={"url": new + "2"}).json() == {"ok": True}
@@ -337,11 +339,11 @@ def test_edits_name_a_page_by_any_of_its_spellings(tmp_path):
         c.post("/api/load", json={"path": str(tmp_path / "agent")})
         # A renamed page is listed under its stored URL, and its flag and review status follow it there
         c.post("/api/flag/task", json={"url": "http://www.example.com/a/"})
-        c.post("/api/review/task", json={"url": A + "/", "status": "skip"})
+        c.post("/api/review/task", json={"url": A + "/", "status": "ok"})
         rename = {"old_url": A + "#top", "new_url": "https://example.com/moved/"}
         assert c.post("/api/urls/task/rename", json=rename).json()["url"] == "https://example.com/moved"
         assert (flags(tmp_path), url_file(tmp_path, "reviewed.json")) == (
-            ["https://example.com/moved"], {"https://example.com/moved": "skip"})
+            ["https://example.com/moved"], {"https://example.com/moved": "ok"})
         assert url_states(c) == {"https://example.com/moved": ("web", ["flagged"], "definite")}
 
         # One page is pending once, whatever the spelling, until a capture of any spelling stores it
@@ -593,7 +595,103 @@ def test_a_screenshot_of_the_visible_part_only_is_flagged_and_reported_to_the_ui
         assert c.post("/api/capture", json=capture(B)).json()["ok"]  # a full-page capture clears the flag
         assert (flags(tmp_path), url_states(c)[B]) == ([], ("web", [], ""))
     assert [data.get("warning") for event_type, data in events if event_type == "capture_complete"] == [
-        None, "the full-page screenshot failed, so the screenshot shows only the visible part of the page", None]
+        None, "the full-page screenshot failed, so the screenshot shows only the visible part of the page; "
+              "capture it again for a full-page screenshot", None]
+
+
+def test_a_capture_by_hand_with_no_text_is_not_marked_fixed(tmp_path, monkeypatch, no_batch):
+    task_dir = tmp_path / "agent" / "task"
+    cache = CacheFileSys(str(task_dir))
+    cache.put_web(A, "Access denied", png_bytes())
+    cache.record_failure(B, "HTTP 503")
+    events = []
+
+    async def record(event_type, data):
+        events.append((event_type, data))
+
+    monkeypatch.setattr(routes, "_push_event", record)
+    with client() as c:
+        c.post("/api/load", json={"path": str(tmp_path / "agent")})
+        c.post("/api/flag/task", json={"url": A})
+        # The page had not rendered yet: stored, but it keeps its flag, gets no review status, and stays red
+        response = c.post("/api/capture", json=capture(A) | {"html": "<html><body> </body></html>"}).json()
+        assert response["url"] == A and "no text" in response["warning"]
+        assert (flags(tmp_path), url_file(tmp_path, "reviewed.json")) == ([A], [])
+        assert url_states(c)[A] == ("web", ["flagged", "empty content"], "definite")
+        assert "no text" in events[-1][1]["warning"]
+        # So a batch still queues it, and a batch capture of an empty page is left for a person to look at
+        assert c.post("/api/capture/batch/start", json={"items": [{"task_id": "task", "url": A}]}).json()["total"] == 1
+        assert "warning" not in c.post("/api/capture", headers=EXTENSION,
+                                       json=capture(A, text="") | {"batch": True}).json()
+        assert url_file(tmp_path, "reviewed.json") == {A: "recaptured"}
+        # A capture with text is marked fixed as usual
+        assert "warning" not in c.post("/api/capture", json=capture(B)).json()
+        assert url_file(tmp_path, "reviewed.json") == {A: "recaptured", B: "fixed"}
+
+
+def test_captures_and_uploads_need_an_http_url_and_never_store_the_servers_own_address(tmp_path):
+    task_dir = tmp_path / "agent" / "task"
+    CacheFileSys(str(task_dir)).put_web(A, "page a", png_bytes())
+
+    with client() as c:
+        c.post("/api/load", json={"path": str(tmp_path / "agent")})
+        for bad in ("javascript:alert(1)", "example.com/page", "file:///etc/passwd", ""):
+            assert c.post("/api/capture", json=capture(bad)).status_code == 400
+            for route in ("/api/upload-pdf/task", "/api/upload-mhtml/task"):
+                response = c.post(route, params={"url": bad}, files={"file": ("f", b"%PDF-1.4")})
+                assert response.status_code == 400
+        # A redirect URL that is not http(s), or that is the Cache Manager itself, is ignored
+        for ignored in ("chrome://newtab/", "http://127.0.0.1:8000/", "http://localhost:8000/?task=1", "nonsense"):
+            assert c.post("/api/capture", json=capture(A) | {"actual_url": ignored}).json()["url"] == A
+        assert set(url_states(c)) == {A}
+        assert c.post("/api/capture", json=capture(A) | {"actual_url": B}).json()["url"] == A
+        assert set(url_states(c)) == {A, B}
+
+
+def test_review_accepts_only_the_reviewers_statuses_for_listed_urls(tmp_path):
+    CacheFileSys(str(tmp_path / "agent" / "task")).put_web(A, "page a", png_bytes())
+
+    with client() as c:
+        c.post("/api/load", json={"path": str(tmp_path / "agent")})
+        review = lambda task, url, status: c.post(f"/api/review/{task}", json={"url": url, "status": status})
+        for status in ("fixed", "recaptured", "skip", "done"):
+            assert review("task", A, status).status_code == 400
+        assert review("task", B, "ok").status_code == 404
+        assert review("no-such-task", A, "ok").status_code == 404
+        assert url_file(tmp_path, "reviewed.json") == []
+
+        assert review("task", "http://www.example.com/a/", "ok").json() == {"ok": True}  # any spelling
+        assert url_file(tmp_path, "reviewed.json") == {A: "ok"}
+        assert review("task", A, "").json() == {"ok": True}
+        assert url_file(tmp_path, "reviewed.json") == []
+
+
+def test_oversized_captures_and_uploads_are_refused(tmp_path, monkeypatch):
+    from cache_manager_web.backend import config
+    assert config.MAX_SCREENSHOT_SIZE > 1100 * 20000 * 4  # an incompressible RGBA PNG of a 20000-pixel-long page
+    CacheFileSys(str(tmp_path / "agent" / "task")).put_web(A, "page a", png_bytes())
+
+    with client() as c:
+        c.post("/api/load", json={"path": str(tmp_path / "agent")})
+        monkeypatch.setattr(config, "MAX_SCREENSHOT_SIZE", len(png_bytes()) - 1)
+        assert c.post("/api/capture", json=capture(A)).status_code == 413
+        monkeypatch.setattr(config, "MAX_SCREENSHOT_SIZE", len(png_bytes()))
+        monkeypatch.setattr(config, "MAX_TEXT_SIZE", 10)
+        assert c.post("/api/capture", json=capture(A, text="ü" * 6)).status_code == 413  # 12 bytes in UTF-8
+        assert c.post("/api/capture", json=capture(A, "x") | {"html": "<p>" + "x" * 8 + "</p>"}).status_code == 413
+        assert c.post("/api/capture", json=capture(A, text="0123456789")).json()["ok"]
+        monkeypatch.setattr(config, "MAX_UPLOAD_SIZE", 10)
+        for route in ("/api/upload-pdf/task", "/api/upload-mhtml/task"):
+            assert c.post(route, params={"url": A}, files={"file": ("f", b"%PDF-1.4 " + b"x" * 10)}).status_code == 413
+        assert CacheFileSys(str(tmp_path / "agent" / "task")).get_web(A, get_screenshot=False)[0] == "0123456789"
+
+        # The whole request is refused before its body is read: too large, or of undeclared size
+        monkeypatch.setattr(config, "max_request_size", lambda path: 100 if path == "/api/capture" else None)
+        assert c.post("/api/capture", json=capture(A, "x" * 100)).status_code == 413
+        undeclared = c.post("/api/capture", content=iter([json.dumps(capture(A)).encode()]),
+                            headers={"Content-Type": "application/json"})
+        assert undeclared.status_code == 411
+        assert c.post("/api/flag/task", json={"url": A, "padding": "x" * 200}).json() == {"ok": True}  # not limited
 
 
 def test_a_failed_load_keeps_the_loaded_cache(tmp_path, monkeypatch):

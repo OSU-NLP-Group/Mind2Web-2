@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 import json
 from pathlib import Path
-from typing import List, Dict, Set, Tuple
+from typing import List, Set, Tuple
 from dataclasses import dataclass
 import logging
 
@@ -20,10 +20,6 @@ class DetectionResult:
     matched_keywords: List[str]
     matched_patterns: List[str]
     severity: str  # "definite" or "possible"
-    
-    @property
-    def issue_count(self) -> int:
-        return len(self.matched_keywords) + len(self.matched_patterns)
 
 
 class KeywordDetector:
@@ -117,33 +113,6 @@ class KeywordDetector:
         except Exception as e:
             logger.error(f"Failed to load config from {self.config_path}: {e}")
     
-    def save_config(self):
-        """Save current configuration to file."""
-        if not self.config_path:
-            return False
-        
-        try:
-            default_patterns = {(p, d, l) for p, d, l in self.DEFAULT_PATTERNS}
-            config = {
-                'definite': sorted(list(self.definite_keywords - set([k.lower() for k in self.DEFAULT_DEFINITE]))),
-                'possible': sorted(list(self.possible_keywords - set([k.lower() for k in self.DEFAULT_POSSIBLE]))),
-                'patterns': [
-                    {'pattern': pattern, 'description': desc, 'level': lvl}
-                    for pattern, desc, lvl in self.patterns
-                    if (pattern, desc, lvl) not in default_patterns
-                ]
-            }
-            
-            self.config_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.config_path, 'w', encoding='utf-8') as f:
-                json.dump(config, f, indent=2, ensure_ascii=False)
-            
-            logger.info(f"Saved configuration to {self.config_path}")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to save config to {self.config_path}: {e}")
-            return False
-    
     def detect_issues(self, text: str) -> DetectionResult:
         """Detect issues in text content.
 
@@ -181,89 +150,3 @@ class KeywordDetector:
         has_issues = bool(matched_keywords or matched_patterns)
         severity = "definite" if definite and len(text) < SHORT_PAGE_CHARS else "possible"
         return DetectionResult(has_issues, matched_keywords, matched_patterns, severity)
-    
-    def add_keyword(self, keyword: str, priority: str = "possible") -> bool:
-        """Add a new keyword with specified priority."""
-        if not keyword or not keyword.strip():
-            return False
-        
-        keyword = keyword.strip().lower()
-        
-        # Remove existing
-        self.definite_keywords.discard(keyword)
-        self.possible_keywords.discard(keyword)
-        # Add
-        if priority == "definite":
-            self.definite_keywords.add(keyword)
-        else:
-            self.possible_keywords.add(keyword)
-        
-        logger.debug(f"Added keyword '{keyword}' with {priority} priority")
-        return True
-    
-    def remove_keyword(self, keyword: str) -> bool:
-        """Remove a keyword from all priority levels."""
-        keyword = keyword.strip().lower()
-        removed = False
-        
-        if keyword in self.definite_keywords:
-            self.definite_keywords.remove(keyword)
-            removed = True
-        if keyword in self.possible_keywords:
-            self.possible_keywords.remove(keyword)
-            removed = True
-        
-        if removed:
-            logger.debug(f"Removed keyword '{keyword}'")
-        
-        return removed
-    
-    def add_pattern(self, pattern: str, description: str = None) -> bool:
-        """Add a new regex pattern."""
-        try:
-            # Test if pattern is valid
-            re.compile(pattern)
-            
-            if not description:
-                description = pattern
-            
-            # Remove existing pattern if it exists
-            self.patterns = [(p, d, l) for p, d, l in self.patterns if p != pattern]
-            
-            # Add new pattern
-            self.patterns.append((pattern, description, "possible"))
-            logger.debug(f"Added pattern '{pattern}' - {description}")
-            return True
-        except re.error as e:
-            logger.error(f"Invalid regex pattern '{pattern}': {e}")
-            return False
-    
-    def remove_pattern(self, pattern: str) -> bool:
-        """Remove a regex pattern."""
-        original_count = len(self.patterns)
-        self.patterns = [(p, d, l) for p, d, l in self.patterns if p != pattern]
-        
-        if len(self.patterns) < original_count:
-            logger.debug(f"Removed pattern '{pattern}'")
-            return True
-        return False
-    
-    def get_all_keywords(self) -> Dict[str, List[str]]:
-        """Get all keywords organized by priority."""
-        return {
-            "definite": sorted(self.definite_keywords),
-            "possible": sorted(self.possible_keywords)
-        }
-    
-    def get_all_patterns(self) -> List[Tuple[str, str]]:
-        """Get all regex patterns."""
-        return self.patterns.copy()
-    
-    def get_keyword_priority(self, keyword: str) -> str:
-        """Get priority level of a keyword."""
-        keyword_lower = keyword.lower()
-        if keyword_lower in self.definite_keywords:
-            return "definite"
-        elif keyword_lower in self.possible_keywords:
-            return "possible"
-        return "none"

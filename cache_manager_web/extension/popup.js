@@ -200,18 +200,31 @@ async function onSaveBackend() {
 backendSaveBtn.addEventListener('click', onSaveBackend);
 backendInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') onSaveBackend(); });
 
-// Single capture
+// Single capture.  A tab of another site than the capture target is refused
+// first; the refusal is shown, and the button then captures anyway.
+let allowOtherSite = false;
 captureBtn.addEventListener('click', async () => {
     if (!currentTarget) return;
     captureBtn.disabled = true;
     captureBtn.textContent = 'Capturing...';
 
     try {
-        const result = await chrome.runtime.sendMessage({ action: 'capture' });
-        if (result?.success) {
+        const result = await chrome.runtime.sendMessage({ action: 'capture', allowOtherSite });
+        allowOtherSite = false;
+        if (result?.success && result.warning) {
+            captureBtn.textContent = 'Captured, but not marked fixed';
+            captureBtn.className = 'capture-btn error';
+            targetSection.insertAdjacentHTML('beforeend', `<div class="no-target">${escHtml(result.warning)}</div>`);
+        } else if (result?.success) {
             captureBtn.textContent = 'Captured!';
             captureBtn.className = 'capture-btn success';
             setTimeout(() => window.close(), 500);
+        } else if (result?.otherSite) {
+            targetSection.insertAdjacentHTML('beforeend', `<div class="no-target">${escHtml(result.error)}</div>`);
+            allowOtherSite = true;
+            captureBtn.textContent = 'Capture anyway';
+            captureBtn.className = 'capture-btn error';
+            captureBtn.disabled = false;
         } else {
             throw new Error(result?.error || 'Capture failed');
         }
