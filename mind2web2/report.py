@@ -16,9 +16,10 @@ external resources, that shows:
   the extracted information, and the answer text.
 
 Every text taken from results and answers is HTML-escaped and only ``http(s)``
-URLs become links; the page's Content Security Policy allows no resource and
-only its own script, so that a page quoting untrusted answers and judge output
-cannot run anything else.
+URLs become links; the page's Content Security Policy allows no external
+resource (only inline styles and ``data:`` images) and only its own script,
+identified by a nonce, so that a page quoting untrusted answers and judge
+output cannot load or run anything else.
 """
 from __future__ import annotations
 
