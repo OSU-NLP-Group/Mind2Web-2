@@ -309,12 +309,6 @@ class CacheFileSys:
         key = self._find_key(url)
         return self._types[key] if key is not None else None
 
-    def has_web(self, url: str) -> bool:
-        return self.has(url) == "web"
-
-    def has_pdf(self, url: str) -> bool:
-        return self.has(url) == "pdf"
-
     def get_all_urls(self) -> List[str]:
         """The URL of every cached page, as :meth:`lookup` returns it, in the order the pages were first stored."""
         return [_address(key) for key in self._types]

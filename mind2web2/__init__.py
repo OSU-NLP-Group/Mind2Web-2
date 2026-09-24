@@ -1,12 +1,12 @@
 from .evaluator import Evaluator
 from .verification_tree import VerificationNode, AggregationStrategy
 from .utils.cache_filesys import CacheFileSys
-from .eval_toolkit import create_evaluator, Extractor, Verifier, EvaluatorConfig
+from .eval_toolkit import create_evaluator, Extractor, Verifier, EvaluatorConfig, HarnessError
 from .llm_client.base_client import LLMClient
 
 # Import from subpackages for convenience
 from .api_tools import ArxivTool, GoogleMapsTool, PDFParser
-from .llm_client import JudgeConfig, JudgeError, JudgeContentError, DEFAULT_JUDGE_MODEL, calculate_api_cost
+from .llm_client import JudgeConfig, JudgeError, JudgeContentError, DEFAULT_JUDGE_MODEL
 from .utils import (
     create_logger, cleanup_logger, create_sub_logger,
     BatchBrowserManager, Capture,
@@ -37,8 +37,8 @@ __all__ = [
     "JudgeConfig",
     "JudgeError",
     "JudgeContentError",
+    "HarnessError",
     "DEFAULT_JUDGE_MODEL",
-    "calculate_api_cost",
     
     # Utilities
     "create_logger",

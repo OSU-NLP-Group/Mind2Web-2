@@ -12,7 +12,7 @@ from typing import Dict, List, Mapping, Union, Optional
 from tqdm import tqdm
 
 from . import results
-from .eval_toolkit import EvaluatorConfig
+from .eval_toolkit import EvaluatorConfig, HarnessError, browser_for_run
 from .llm_client.judge import DEFAULT_JUDGE_MODEL, JudgeError
 from .metrics import is_success
 from .submission import answer_run, list_answer_files, metadata_path
@@ -106,8 +106,9 @@ async def _eval_one_answer(
     of the eval script (``eval_script_sha256``, given as ``script_sha256``),
     the framework's default :class:`EvaluatorConfig` settings
     (``evaluator_config``), such as the size limits of the screenshots sent to
-    the judge, and :data:`mind2web2.results.SCORING_VERSION`
-    (``scoring_version``).
+    the judge, :data:`mind2web2.results.SCORING_VERSION`
+    (``scoring_version``), and the value of
+    :data:`mind2web2.results.EVAL_DATE_VARIABLE` (``eval_date``).
     """
 
     answer_name = answer_path.name
@@ -171,13 +172,17 @@ async def _eval_one_answer(
 
         # A judge request that failed for good leaves the score undetermined, even if
         # the eval script caught the error and carried on.
-        failed_requests = (result.get("judge_usage") or {}).get("failed_requests", 0)
-        if failed_requests:
-            raise JudgeError(f"{failed_requests} judge request(s) failed; the answer is not scored")
+        usage = result.get("judge_usage") or {}
+        if usage.get("failed_requests", 0):
+            raise JudgeError(f"{usage['failed_requests']} judge request(s) failed; the answer is not scored")
+        if usage.get("harness_failures", 0):
+            raise HarnessError(f"{usage['harness_failures']} page load(s) failed because of the evaluation "
+                               f"environment; the answer is not scored")
         result["answer_sha256"] = hashlib.sha256(answer_bytes).hexdigest()  # what the result scored
         result["eval_script_sha256"] = script_sha256  # the script that scored it
         result["evaluator_config"] = EvaluatorConfig().as_dict()  # the defaults the script ran with
         result["scoring_version"] = results.SCORING_VERSION  # the framework logic that scored it
+        result["eval_date"] = results.eval_date()  # the date that date-dependent scripts took as today
 
         logger.info(
             f"✅ Evaluation completed with score: {result.get('final_score', 'unknown')}",
@@ -228,10 +233,12 @@ def _reusable_result(result_file: Path, answer_path: Path, client,
     the answer file as it is now, the same judge configuration as ``client``
     (``None`` for a client without one), ``script_sha256``, the SHA-256 of the
     eval script, the default :class:`EvaluatorConfig` settings as they are
-    now, and the current :data:`mind2web2.results.SCORING_VERSION`, as every
-    result saved by :func:`_eval_one_answer` does.  Settings that
-    an eval script passes itself are part of the script, so its SHA-256 covers
-    them.  Changes to the task's cached pages are not detected.
+    now, the current :data:`mind2web2.results.SCORING_VERSION`, and the
+    current value of :data:`mind2web2.results.EVAL_DATE_VARIABLE`, as every
+    result saved by :func:`_eval_one_answer` does; a result that does not
+    record ``eval_date`` counts as made without it.  Settings that an eval
+    script passes itself are part of the script, so its SHA-256 covers them.
+    Changes to the task's cached pages are not detected.
     """
     try:
         result = json.loads(result_file.read_text(encoding="utf-8"))
@@ -251,6 +258,9 @@ def _reusable_result(result_file: Path, answer_path: Path, client,
                       "or does not record them")
     if result.get("scoring_version") != results.SCORING_VERSION:
         return None, "its latest result was produced by another version of the scoring logic, or does not record it"
+    if result.get("eval_date") != results.eval_date():
+        return None, (f"its latest result was produced with {results.EVAL_DATE_VARIABLE}={result.get('eval_date')}, "
+                      f"not {results.eval_date()}")
     return result, ""
 
 
@@ -306,8 +316,9 @@ async def evaluate_task(
         reused.  Without it, an answer's latest result is reused, with no judge
         request, when it records the SHA-256 of the current answer file, the
         judge configuration of ``client``, the SHA-256 of the eval script, the
-        current default :class:`EvaluatorConfig` settings, and the current
-        :data:`mind2web2.results.SCORING_VERSION`.
+        current default :class:`EvaluatorConfig` settings, the current
+        :data:`mind2web2.results.SCORING_VERSION`, and the current value of
+        :data:`mind2web2.results.EVAL_DATE_VARIABLE`.
         Changes to the task's cached pages, such as pages recaptured in the
         Cache Manager, are not detected; evaluate with ``overwrite`` after
         changing them.  Before an answer is evaluated, its
@@ -324,7 +335,41 @@ async def evaluate_task(
     -------
     List[Dict]
         List of evaluation results for all answers
+
+    Live captures use the browser shared through
+    :func:`mind2web2.eval_toolkit.shared_browser`, or else one browser for
+    the task that is stopped at its end (:func:`mind2web2.eval_toolkit.browser_for_run`).
     """
+    async with browser_for_run():
+        return await _evaluate_task(
+            client=client,
+            task_id=task_id,
+            agent_name=agent_name,
+            answer_dir=answer_dir,
+            cache_dir=cache_dir,
+            output_dir=output_dir,
+            script_path=script_path,
+            overwrite=overwrite,
+            max_concurrent_answers=max_concurrent_answers,
+            webpage_semaphore=webpage_semaphore,
+            llm_semaphore=llm_semaphore,
+        )
+
+
+async def _evaluate_task(
+        client,
+        task_id: str,
+        agent_name: str,
+        answer_dir: Union[str, Path],
+        cache_dir: Union[str, Path],
+        output_dir: Union[str, Path],
+        script_path: Union[str, Path],
+        overwrite: bool = False,
+        max_concurrent_answers: int = 3,
+        webpage_semaphore: Optional[asyncio.Semaphore] = None,
+        llm_semaphore: Optional[asyncio.Semaphore] = None,
+) -> List[Dict]:
+    """The body of :func:`evaluate_task`, which runs it inside a shared browser."""
 
     # ------------------------------------------------------------------
     # 0. Setup paths & ensure dirs exist
@@ -605,7 +650,8 @@ async def evaluate_tasks(
     ``scripts`` maps each task ID to its eval script.  The semaphores are shared
     by all tasks.  Returns, in the order of ``scripts``, each task's results as
     :func:`evaluate_task` returns them; a task whose evaluation raised is logged
-    and maps to an empty list.
+    and maps to an empty list.  All tasks share one browser for live captures,
+    as :func:`evaluate_task` describes.
     """
     task_semaphore = asyncio.Semaphore(max_concurrent_tasks)
     webpage_semaphore = webpage_semaphore or asyncio.Semaphore(5)
@@ -625,11 +671,12 @@ async def evaluate_tasks(
                 return task_id, []
 
     results: Dict[str, List[Dict]] = {}
-    with tqdm(total=len(scripts), desc="Evaluating tasks", unit="task") as bar:
-        for coro in asyncio.as_completed([evaluate_one(task_id) for task_id in scripts]):
-            task_id, task_results = await coro
-            results[task_id] = task_results
-            bar.update(1)
+    async with browser_for_run():
+        with tqdm(total=len(scripts), desc="Evaluating tasks", unit="task") as bar:
+            for coro in asyncio.as_completed([evaluate_one(task_id) for task_id in scripts]):
+                task_id, task_results = await coro
+                results[task_id] = task_results
+                bar.update(1)
     return {task_id: results[task_id] for task_id in scripts}
 
 

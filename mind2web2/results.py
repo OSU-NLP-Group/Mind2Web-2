@@ -19,20 +19,33 @@ without a result instead of with the result of an earlier answer or judge.
 from __future__ import annotations
 
 import json
+import os
 import re
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 _TIMESTAMP_RE = re.compile(r"(\d{8})_?(\d{6})")
 SUPERSEDED_DIR = "superseded"
 
+#: Environment variable that pins the date that date-dependent eval scripts
+#: take as today (``YYYY-MM-DD``).  Its value is recorded in every result as
+#: ``eval_date`` (``None`` when unset), and a result is reused only under the
+#: same value.
+EVAL_DATE_VARIABLE = "MIND2WEB2_EVAL_DATE"
+
 #: Version of the framework's scoring logic, recorded in every result as
 #: ``scoring_version``.  A result is reused only under the current version, so
 #: raise it in any change to the framework that can change scores without
-#: changing an eval script or an :class:`~mind2web2.evaluator.EvaluatorConfig`
+#: changing an eval script or an :class:`~mind2web2.eval_toolkit.EvaluatorConfig`
 #: default: the prompts and page handling in ``eval_toolkit``, PDF rendering,
 #: what a failed capture means to the judge, or how rubric scores aggregate.
 SCORING_VERSION = 3
+
+
+def eval_date() -> Optional[str]:
+    """The value of :data:`EVAL_DATE_VARIABLE`, or ``None`` if it is unset or empty."""
+    return os.environ.get(EVAL_DATE_VARIABLE) or None
 
 
 def answer_base(answer_name: str) -> str:

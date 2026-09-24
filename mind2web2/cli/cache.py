@@ -71,6 +71,9 @@ def register(subparsers) -> None:
                              "for the task's current answers and URL models.")
     parser.add_argument("--llm-provider", choices=["openai", "azure_openai"], default="openai",
                         help="Provider of the URL-extraction models (default: %(default)s).")
+    parser.add_argument("--llm-base-url", default=None,
+                        help="OpenAI-compatible endpoint for the openai provider's URL-extraction requests, "
+                             "e.g. a LiteLLM proxy (default: $OPENAI_BASE_URL, else the OpenAI API).")
     parser.set_defaults(run=run)
 
 
@@ -90,7 +93,7 @@ def run(args: argparse.Namespace) -> int:
     extractor = None
     if not args.no_llm:
         try:
-            client = LLMClient(provider=args.llm_provider, is_async=True)
+            client = LLMClient(provider=args.llm_provider, is_async=True, base_url=args.llm_base_url)
         except Exception as exc:
             print(f"Cannot create the {args.llm_provider} client for URL extraction ({exc}); "
                   f"set its API key or pass --no-llm.", file=sys.stderr)
