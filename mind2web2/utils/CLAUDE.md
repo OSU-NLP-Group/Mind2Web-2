@@ -61,7 +61,7 @@ Custom formatters:
 - `normalize_url_simple(url)`: `normalize_url_keep_case(url)` lowercased; the form under which two URLs are the same page, for cache lookups and crawl deduplication
 - `remove_utm_parameters(url)`: Strip all `utm_*` query params
 - `normalize_url_for_browser(url)`: Ensure URL has protocol for navigation
-- `regex_find_urls(text)`: Extract URLs from markdown text using multiple regex patterns
+- `regex_find_urls(text)`: `http(s)://` and `www.` URLs in Markdown or plain text, in order of appearance; keeps balanced parentheses and brackets (Wikipedia titles, `?filter[type]=x`) and `|`, removes Markdown escapes, emphasis delimiters, and trailing punctuation, stops at CJK punctuation
 - `URLs` Pydantic model: For LLM structured output of URL lists
 
 ### load_eval_script.py — Dynamic Script Loading
