@@ -156,51 +156,7 @@ async def load_cache(req: LoadRequest):
         ok, total = _cm.load_agent_cache(str(p))
         stats = _cm.get_statistics()
 
-        # Run issue scan
-        issues_map = {}
-        try:
-            issues_map = _kd.scan_all_text_content(_cm)
-        except Exception as e:
-            logger.warning(f"Issue scan failed: {e}")
-
-        # Build per-URL issue cache and issue index
-        global _url_issue_cache
-        _url_issue_cache = {}
-        issue_index = []
-        for task_id in sorted(issues_map.keys()):
-            _url_issue_cache[task_id] = {}
-            for url, det in issues_map[task_id]:
-                _url_issue_cache[task_id][url] = {
-                    "issues": det.matched_keywords + det.matched_patterns,
-                    "severity": det.severity,
-                }
-                issue_index.append({
-                    "task_id": task_id,
-                    "url": url,
-                    "severity": det.severity,
-                    "issue_count": det.issue_count,
-                    "keywords": det.matched_keywords[:5],
-                })
-
-        # Merge manually flagged URLs (from flags.json) into issue cache
-        for task_id in _cm.get_task_ids():
-            flagged = _cm.get_flagged_urls(task_id)
-            if flagged:
-                if task_id not in _url_issue_cache:
-                    _url_issue_cache[task_id] = {}
-                for url in flagged:
-                    if url not in _url_issue_cache[task_id]:
-                        _url_issue_cache[task_id][url] = {
-                            "issues": ["flagged"],
-                            "severity": "definite",
-                        }
-                        issue_index.append({
-                            "task_id": task_id,
-                            "url": url,
-                            "severity": "definite",
-                            "issue_count": 1,
-                            "keywords": ["flagged"],
-                        })
+        issue_index = _rebuild_issue_cache()
 
         # Build task issue summaries
         task_issues = {}
@@ -265,6 +221,7 @@ async def list_tasks():
                 "total_urls": summary.total_urls,
                 "web_urls": summary.web_urls,
                 "pdf_urls": summary.pdf_urls,
+                "failed_urls": summary.failed_urls,
                 "issue_urls": summary.issue_urls,
                 "reviewed_count": len(reviewed),
                 "issue_count": len(task_issue_cache),
@@ -316,6 +273,7 @@ async def list_urls(task_id: str):
             "issues": issues,
             "severity": severity,
             "reviewed": reviewed_map.get(ui.url, ""),
+            "failure": ui.failure,
         })
 
     # Sort by domain then path
@@ -940,10 +898,29 @@ async def upload_pdf(task_id: str, url: str = Query(...), file: UploadFile = Fil
 @router.post("/scan")
 async def scan_all():
     _require_loaded()
-    issues_map = _kd.scan_all_text_content(_cm)
+    issue_index = _rebuild_issue_cache()
 
-    # Rebuild issue cache
+    return {"issue_count": len(issue_index), "issues": issue_index}
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _rebuild_issue_cache() -> list[dict]:
+    """Rebuild ``_url_issue_cache`` and return the issue index.
+
+    Issues come from the keyword scan of stored text, from flagged URLs
+    (flags.json), and from URLs whose capture failed (failures.json).  Flagged
+    and failed URLs are definite issues.
+    """
     global _url_issue_cache
+    issues_map = {}
+    try:
+        issues_map = _kd.scan_all_text_content(_cm)
+    except Exception as e:
+        logger.warning(f"Issue scan failed: {e}")
+
     _url_issue_cache = {}
     issue_index = []
     for task_id in sorted(issues_map.keys()):
@@ -961,31 +938,27 @@ async def scan_all():
                 "keywords": det.matched_keywords[:5],
             })
 
-    # Merge flags
+    def add_definite(task_id: str, url: str, label: str):
+        task_cache = _url_issue_cache.setdefault(task_id, {})
+        if url in task_cache:
+            return
+        task_cache[url] = {"issues": [label], "severity": "definite"}
+        issue_index.append({
+            "task_id": task_id,
+            "url": url,
+            "severity": "definite",
+            "issue_count": 1,
+            "keywords": [label],
+        })
+
     for task_id in _cm.get_task_ids():
-        flagged = _cm.get_flagged_urls(task_id)
-        for url in flagged:
-            if task_id not in _url_issue_cache:
-                _url_issue_cache[task_id] = {}
-            if url not in _url_issue_cache[task_id]:
-                _url_issue_cache[task_id][url] = {
-                    "issues": ["flagged"],
-                    "severity": "definite",
-                }
-                issue_index.append({
-                    "task_id": task_id,
-                    "url": url,
-                    "severity": "definite",
-                    "issue_count": 1,
-                    "keywords": ["flagged"],
-                })
+        for url in sorted(_cm.get_flagged_urls(task_id)):
+            add_definite(task_id, url, "flagged")
+        cache = _cm.get_task_cache(task_id)
+        for url, record in (cache.failures().items() if cache else ()):
+            add_definite(task_id, url, f"capture failed: {record.get('reason', 'unknown reason')}")
+    return issue_index
 
-    return {"issue_count": len(issue_index), "issues": issue_index}
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 def _placeholder_jpeg() -> bytes:
     """Generate a tiny valid JPEG placeholder."""

@@ -1,58 +1,53 @@
-# pdf_parser.py  ---------------------------------------------------------
+"""PDF detection, download, and parsing, for caching cited pages and for evaluation.
+
+* :func:`is_pdf` decides whether a URL serves a PDF, from the URL itself or
+  from the headers and first bytes of a single streamed request.
+* :meth:`PDFParser.fetch` downloads a PDF and returns its bytes only if they
+  really are a PDF, so that an HTML page behind a PDF-looking URL is loaded in
+  a browser instead of being stored as a broken PDF.
+* :meth:`PDFParser.extract` renders a PDF (URL, local path, or bytes) into page
+  screenshots and text, or returns ``(None, None)``.
+
+All network calls are asynchronous and bounded in time; none blocks the event
+loop.
 """
-Lightweight PDF parser:
-    * extract()   - Pass URL / local path / bytes, asynchronously returns (imgs, text)
-    * If download or parsing fails, always returns (None, None)
-    * imgs: screenshot of each page (JPEG, base64), up to 50 pages
-    * text: all plain text, up to 100 pages
-Dependencies:
-    pip install aiohttp pymupdf pillow
-"""
+from __future__ import annotations
 
 import asyncio
 import base64
+import logging
 import random
-import ssl
 from io import BytesIO
-from logging import Logger
-from typing import List, Tuple, Union, Optional
-from urllib.parse import urlparse, unquote
-import certifi
+from typing import List, Optional, Tuple, Union
+from urllib.parse import unquote, urlparse
 
-import aiohttp
-import certifi
-import pymupdf
 import httpx
-import requests
+import pymupdf
 from PIL import Image
-from ..utils.url_tools import remove_utm_parameters,normalize_url_for_browser
 
-def make_blank_png_b64() -> str:
-    # Create 1×1 RGBA fully transparent pixel
-    img = Image.new("RGBA", (1, 1), (0, 0, 0, 0))
-    buf = BytesIO()
-    img.save(buf, format="PNG")
-    # Convert to base64 and remove line breaks
-    return base64.b64encode(buf.getvalue()).decode()
+from ..utils.url_tools import normalize_url_for_browser
 
+_log = logging.getLogger(__name__)
 
-# ------------------ Constants ------------------
 PDF_MAGIC = b"%PDF-"  # PDF file header
 UA_CHROME = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/124.0.0.0 Safari/537.36"
 )
-
-# User-agent strings for PDF detection
 USER_AGENT_STRINGS = [
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 OPR/109.0.0.0',
 ]
 
-
-# ================================ PDF Detection Functions ================================
+PROBE_TIMEOUT_SECONDS = 10.0
+"""Upper bound for :func:`is_pdf`'s network check."""
+DOWNLOAD_TIMEOUT_SECONDS = 60.0
+"""Upper bound for one PDF download."""
+MAX_PDF_BYTES = 100 * 1024 * 1024
+"""Larger downloads are abandoned."""
+PROBE_BYTES = 1024
 
 
 def is_pdf_by_suffix(url: str) -> bool:
@@ -83,161 +78,48 @@ def is_pdf_by_suffix(url: str) -> bool:
     return any(pattern in url_lower for pattern in pdf_patterns)
 
 
+async def is_pdf(url: str, logger: Optional[logging.Logger] = None,
+                 timeout: float = PROBE_TIMEOUT_SECONDS) -> bool:
+    """Whether ``url`` serves a PDF.
 
-def is_pdf_by_requests_head(url: str) -> bool:
-    """Check via HEAD request whether URL is a PDF, with strict certificate verification."""
-    try:
-        r = requests.head(
-            url,
-            allow_redirects=True,
-            timeout=10,
-            verify=certifi.where()  # Use certifi's root CA bundle
-        )
-        ct = r.headers.get("content-type", "").lower()
-        return "pdf" in ct
-    except requests.RequestException as e:
-        # If some sites have certificate issues, you can log it
-        # print(f"HEAD request failed for {url}: {e}")
-        return False
-
-async def is_pdf_by_httpx_get_range(url: str, timeout: int = 10) -> bool:
-    """Check PDF via partial GET request to read file header."""
-    try:
-        # Configure httpx with custom SSL context
-        ssl_context = ssl.create_default_context()
-        ssl_context.check_hostname = False
-        ssl_context.verify_mode = ssl.CERT_NONE
-
-        async with httpx.AsyncClient(
-                follow_redirects=True,
-                timeout=timeout,
-                verify=False
-        ) as client:
-
-            headers = {
-                "User-Agent": random.choice(USER_AGENT_STRINGS),
-                "Range": "bytes=0-1023",  # Get first 1KB to check magic number
-                "Accept": "*/*",
-            }
-
-            r = await client.get(url, headers=headers)
-
-            # First check Content-Type
-            ctype = r.headers.get("content-type", "").split(";")[0].strip().lower()
-            if "pdf" in ctype:
-                return True
-
-            # If we got content, check PDF magic number
-            if r.content:
-                # PDF files start with %PDF-
-                return r.content.startswith(b'%PDF-')
-
-    except httpx.TimeoutException:
-        print(f"[is_pdf_httpx_get_range] Timeout for {url}")
-        return False
-    except httpx.ConnectError:
-        print(f"[is_pdf_httpx_get_range] Connection error for {url}")
-        return False
-    except Exception as e:
-        print(f"[is_pdf_httpx_get_range] Error for {url}: {type(e).__name__}: {e}")
-        return False
-
-
-async def is_pdf_by_full_get(url: str, timeout: int = 15) -> bool:
-    """Last resort: download beginning of file to check magic number."""
-    try:
-        async with httpx.AsyncClient(
-                follow_redirects=True,
-                timeout=timeout,
-                verify=False
-        ) as client:
-
-            headers = {
-                "User-Agent": random.choice(USER_AGENT_STRINGS),
-                "Accept": "*/*",
-            }
-
-            # Stream the response to avoid downloading large files
-            async with client.stream('GET', url, headers=headers) as response:
-                # Read first chunk to check PDF magic number
-                chunk_data = b""
-                async for chunk in response.aiter_bytes(chunk_size=5):
-                    chunk_data += chunk
-                    if len(chunk_data) >= 5:
-                        break
-
-                if chunk_data and chunk_data.startswith(b'%PDF-'):
-                    return True
-
-                # Also check Content-Type from response
-                ctype = response.headers.get("content-type", "").split(";")[0].strip().lower()
-                return "pdf" in ctype
-
-    except Exception as e:
-        print(f"[is_pdf_by_full_get] Error for {url}: {type(e).__name__}: {e}")
-        return False
-
-
-async def is_pdf(url: str, logger: Logger = None) -> bool:
+    True when the URL looks like a PDF (:func:`is_pdf_by_suffix`).  Otherwise
+    a single streamed GET, bounded by ``timeout`` seconds in total, reads the
+    response headers and first KiB: a PDF ``Content-Type`` or the ``%PDF-``
+    signature means a PDF.  Network errors and timeouts count as "not a PDF",
+    so the caller loads the URL in a browser.
     """
-    Robustly detect if a URL points to a PDF file using multiple strategies.
-    
-    Args:
-        url: The URL to check
-        logger: Optional logger instance
-        
-    Returns:
-        bool: True if URL points to a PDF, False otherwise
-    """
+    log = logger or _log
     url = normalize_url_for_browser(url)
-
-    if logger:
-        logger.debug(f"Checking if URL is PDF: {url}")
-
-    # 1. Fast URL pattern check
     if is_pdf_by_suffix(url):
-        if logger:
-            logger.info(f"URL pattern indicates PDF: {url}")
-        else:
-            print(f"{url} IS a PDF (by URL pattern)")
+        log.debug(f"URL pattern indicates PDF: {url}")
         return True
+    try:
+        return await asyncio.wait_for(_probe_is_pdf(url), timeout)
+    except Exception as e:  # timeouts, network and protocol errors
+        log.debug(f"PDF probe failed for {url}: {type(e).__name__}: {e}")
+        return False
 
-    # 2. Try HEAD request first (fastest network check)
-    if is_pdf_by_requests_head(url):
-        if logger:
-            logger.info(f"HEAD request confirms PDF: {url}")
-        else:
-            print(f"{url} IS a PDF (by HEAD request)")
-        return True
 
-    # 3. Try partial GET with magic number check
-    if await is_pdf_by_httpx_get_range(url):
-        if logger:
-            logger.info(f"Partial GET confirms PDF: {url}")
-        else:
-            print(f"{url} IS a PDF (by partial GET)")
-        return True
+async def _probe_is_pdf(url: str) -> bool:
+    headers = {"User-Agent": random.choice(USER_AGENT_STRINGS), "Accept": "*/*"}
+    async with httpx.AsyncClient(follow_redirects=True, verify=False, timeout=PROBE_TIMEOUT_SECONDS) as client:
+        async with client.stream("GET", url, headers=headers) as response:
+            if "pdf" in response.headers.get("content-type", "").lower():
+                return True
+            head = b""
+            async for chunk in response.aiter_bytes():
+                head += chunk
+                if len(head) >= PROBE_BYTES:
+                    break
+            return head.lstrip().startswith(PDF_MAGIC)
 
-    # 4. Last resort: stream beginning of file
-    if await is_pdf_by_full_get(url):
-        if logger:
-            logger.info(f"Full GET confirms PDF: {url}")
-        else:
-            print(f"{url} IS a PDF (by full GET)")
-        return True
 
-    # # Not a PDF
-    # if logger:
-    #     logger.debug(f"URL is not a PDF: {url}")
-    # else:
-    #     print(f"{url} IS NOT a PDF")
-    return False
+def _is_pdf_bytes(data: Optional[bytes]) -> bool:
+    return bool(data) and data.lstrip().startswith(PDF_MAGIC)
 
 
 class PDFParser:
-    """
-    Download and parse PDF. Returns (None, None) on failure.
-    """
+    """Download and parse PDFs; failures return ``None`` values instead of raising."""
 
     # Default limits
     MAX_PAGES: int = 100
@@ -250,157 +132,88 @@ class PDFParser:
             self,
             source: Union[str, bytes, BytesIO],
     ) -> Tuple[Optional[List[str]], Optional[str]]:
-        """
-        Parameters
-        ----------
-        source : str | bytes | BytesIO
-            URL / local file path / PDF byte stream
+        """Page screenshots and text of a PDF.
 
-        Returns
-        -------
-        imgs : list[str] | None
-        text : str | None
+        ``source`` is a URL, a local file path, or the PDF bytes.  Returns
+        ``(images, text)``: base64 JPEG renderings of the first
+        ``MAX_IMAGE_PAGES`` pages and the plain text of the first ``MAX_PAGES``
+        pages.  Returns ``(None, None)`` when the PDF cannot be obtained or
+        parsed, including when a URL does not serve a PDF.
         """
         try:
-            # 1) Obtain PDF bytes
             if isinstance(source, (bytes, BytesIO)):
                 data = source.getvalue() if isinstance(source, BytesIO) else source
             elif isinstance(source, str) and source.lower().startswith(("http://", "https://")):
-                data = await self._fetch_pdf_bytes(source)
+                data = await self.fetch(source)
             else:  # Local file
                 data = await asyncio.to_thread(lambda p: open(p, "rb").read(), str(source))
-
-            # 2) Magic number check
-            if not data.lstrip().startswith(PDF_MAGIC):
-                return [make_blank_png_b64()], "PDF extraction failed: Invalid PDF format"
-
-            # 3) Parsing (CPU-intensive, synchronous), run in thread
+            if not _is_pdf_bytes(data):
+                return None, None
+            # Parsing is CPU-intensive and synchronous: run it in a thread
             return await asyncio.to_thread(self._extract_from_bytes, data)
-
         except Exception as e:
-            print(f"PDF extraction failed: {e}")
-            return [make_blank_png_b64()], "PDF extraction failed: Download or parsing error"
+            _log.warning(f"PDF extraction failed: {type(e).__name__}: {e}")
+            return None, None
+
+    async def fetch(self, url: str) -> Optional[bytes]:
+        """Download the PDF at ``url``; ``None`` unless the response body is a PDF.
+
+        An arXiv URL that returns something else is retried on
+        ``export.arxiv.org``.  A download is abandoned after
+        ``DOWNLOAD_TIMEOUT_SECONDS`` or beyond ``MAX_PDF_BYTES``.
+        """
+        data = await self._download(url)
+        if not _is_pdf_bytes(data) and "arxiv.org" in url:
+            data = await self._download(url.replace("://arxiv.org", "://export.arxiv.org"))
+        return data if _is_pdf_bytes(data) else None
 
     # ------------------ Internal Implementation ------------------
-    async def _fetch_pdf_bytes(self, url: str) -> bytes:
-        """
-        Fetch PDF with browser User-Agent; if necessary, switch to export.arxiv.org as backup.
-        """
+    async def _download(self, url: str) -> Optional[bytes]:
         headers = {
             "User-Agent": UA_CHROME,
             "Accept": "application/pdf,application/octet-stream;q=0.9,*/*;q=0.8",
         }
+        try:
+            async with asyncio.timeout(DOWNLOAD_TIMEOUT_SECONDS):
+                async with httpx.AsyncClient(follow_redirects=True, verify=False,
+                                             timeout=DOWNLOAD_TIMEOUT_SECONDS) as client:
+                    async with client.stream("GET", url, headers=headers) as response:
+                        response.raise_for_status()
+                        chunks: List[bytes] = []
+                        size = 0
+                        async for chunk in response.aiter_bytes():
+                            size += len(chunk)
+                            if size > MAX_PDF_BYTES:
+                                _log.warning(f"Abandoned download of {url}: larger than {MAX_PDF_BYTES} bytes")
+                                return None
+                            chunks.append(chunk)
+                        return b"".join(chunks)
+        except Exception as e:  # timeouts, network errors, HTTP error statuses
+            _log.info(f"Download failed for {url}: {type(e).__name__}: {e}")
+            return None
 
-        async def _download(u: str) -> bytes:
-            async with aiohttp.ClientSession(headers=headers) as s:
-                async with s.get(u, allow_redirects=True, timeout=30) as r:
-                    r.raise_for_status()
-                    return await r.read()
-
-        data = await _download(url)
-        # print(data)
-
-        # If returned HTML, try backup domain for arxiv
-        if not data.lstrip().startswith(PDF_MAGIC) and "arxiv.org" in url:
-            backup = url.replace("://arxiv.org", "://export.arxiv.org")
-            try:
-                data = await _download(backup)
-            except Exception as e:
-                print(f"failed to download from {url} with backup export arxiv: {e}")
-
-        # print(data)
-
-        return data
-
-    def _extract_from_bytes(
-            self, data: bytes
-    ) -> Tuple[Optional[List[str]], Optional[str]]:
-        """
-        Actual parsing logic. Returns (None, None) on failure.
-        """
-        # Double-check magic number (in case called directly by other modules)
-        if not data.lstrip().startswith(PDF_MAGIC):
-            return [make_blank_png_b64()], "PDF extraction failed: Invalid PDF format"
-
+    def _extract_from_bytes(self, data: bytes) -> Tuple[Optional[List[str]], Optional[str]]:
         try:
             doc = pymupdf.open(stream=data, filetype="pdf")
         except (pymupdf.FileDataError, RuntimeError):
-            return [make_blank_png_b64()], "PDF extraction failed: Unable to parse PDF file"
+            return None, None
 
         imgs: List[str] = []
         texts: List[str] = []
         zoom = self.RENDER_DPI / 72
+        with doc:
+            max_pages = min(self.MAX_PAGES, doc.page_count)
+            max_img_pages = min(self.MAX_IMAGE_PAGES, doc.page_count)
+            for i in range(max_pages):
+                page = doc.load_page(i)
+                texts.append(page.get_text("text"))
 
-        max_pages = min(self.MAX_PAGES, doc.page_count)
-        max_img_pages = min(self.MAX_IMAGE_PAGES, doc.page_count)
+                if i < max_img_pages:
+                    pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=False)
+                    img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
 
-        for i in range(max_pages):
-            page = doc.load_page(i)
-            texts.append(page.get_text("text"))
-
-            if i < max_img_pages:
-                pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=False)
-                img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
-
-                buf = BytesIO()
-                img.save(buf, "JPEG", quality=self.JPEG_QUALITY,
-                         optimize=True, progressive=True)
-                imgs.append(base64.b64encode(buf.getvalue()).decode())
-        # print(texts)
+                    buf = BytesIO()
+                    img.save(buf, "JPEG", quality=self.JPEG_QUALITY,
+                             optimize=True, progressive=True)
+                    imgs.append(base64.b64encode(buf.getvalue()).decode())
         return imgs, "\n".join(texts)
-
-
-# ------------------ PDF Testing Functions ------------------
-
-async def test_pdf_detection():
-    """Test PDF detection functionality."""
-    # Test URLs
-    test_urls = [
-        "https://www.fhwa.dot.gov/policyinformation/statistics/2023/pdf/mv1.pdf",  # Should be PDF
-        "https://arxiv.org/pdf/2301.00001.pdf",  # Should be PDF (arxiv)
-        "https://www.google.com",  # Should NOT be PDF
-        "https://example.com/document.pdf",  # Should be PDF by suffix
-    ]
-
-    print("🧪 Testing PDF detection functionality...")
-    print("=" * 50)
-
-    for url in test_urls:
-        print(f"\n🔍 Testing: {url}")
-        try:
-            result = await is_pdf(url)
-            status = "✅ IS PDF" if result else "❌ NOT PDF"
-            print(f"   Result: {status}")
-        except Exception as e:
-            print(f"   Error: {e}")
-
-    print("\n" + "=" * 50)
-    print("✅ PDF detection test completed!")
-
-
-# ------------------ Local Quick Test ------------------
-if __name__ == "__main__":
-    async def _demo() -> None:
-        # Test PDF detection
-        # await test_pdf_detection()
-        #
-        # print("\n" + "=" * 50)
-        # print("🧪 Testing PDF parsing functionality...")
-
-        parser = PDFParser()
-
-        # # ✅ Normal PDF
-        # ok_imgs, ok_txt = await parser.extract(
-        #     "https://arxiv.org/pdf/2505.07880.pdf"
-        # )
-        # print("Normal PDF:", "Success" if ok_txt else "Failed")
-
-        # ❌ Fake PDF
-        bad_imgs, bad_txt = await parser.extract(
-            "https://arxiv.org/pdf/2408.XXXXXv1.pdf"
-        )
-        # print(bad_txt)
-        # print("Fake PDF:", "Success" if bad_txt else "Failed")
-
-
-    asyncio.run(_demo())

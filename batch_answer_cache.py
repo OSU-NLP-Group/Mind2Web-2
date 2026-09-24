@@ -19,6 +19,7 @@ import argparse
 import asyncio
 import json
 import random
+from collections import Counter
 from logging import Logger
 from pathlib import Path
 from typing import Any, Dict, List, Tuple, Optional
@@ -178,68 +179,44 @@ async def crawl_one_page(
     pdf_parser: PDFParser,
     browser_manager: BatchBrowserManager,
     logger: Logger,
-) -> None:
-    """Crawl a single page using a shared browser instance."""
+    retry_failed: bool = False,
+) -> str:
+    """Cache one page: download it if it is a PDF, otherwise capture it in the shared browser.
+
+    URLs that are already cached are skipped, and so are URLs with a failure
+    record unless ``retry_failed``.  A failed capture is recorded in the
+    cache.  Every step has its own time limit, so no URL can stall the crawl.
+
+    Returns what happened: ``"cached"`` (already cached), ``"skipped"`` (a
+    failure record, not retried), ``"stored"``, ``"failed"``, ``"blocked"``
+    (the site refused the browser), or ``"error"`` (an unexpected exception,
+    which is logged).
+    """
     try:
-        # Already cached? Skip
         if cache.has(url):
-            return
+            return "cached"
+        if not retry_failed and cache.failure(url) is not None:
+            return "skipped"
         url = remove_utm_parameters(url)
         logger.info(f"Crawling {url}")
-        # ---------- PDF ----------
-        is_pdf_or_not = await is_pdf(url)
-        if is_pdf_or_not:
-            try:
-                await asyncio.sleep(0.2 * random.random())
-                buf = await pdf_parser._fetch_pdf_bytes(url)
-                if buf is not None:
-                    cache.put_pdf(url, buf)
-                    return
-            except Exception as e:
-                logger.info(f"Fail to extract PDF from {url} : {e}")
+        if await is_pdf(url):
+            await asyncio.sleep(0.2 * random.random())
+            pdf_bytes = await pdf_parser.fetch(url)
+            if pdf_bytes is not None:
+                await asyncio.to_thread(cache.put_pdf, url, pdf_bytes)
+                return "stored"
+            logger.info(f"{url} did not return a PDF; loading it in the browser")
 
-        # ---------- Web page capture (using shared browser) ----------
-        if is_pdf_or_not:
-            logger.info(f"⚠Try to load the Seemingly PDF file by loading online: {url}")
-
-        shot, text = await browser_manager.capture_page(url, logger)
-
-        # ---------- Persist ----------
-        if shot and text:
-            cache.put_web(url, text, shot)
-
+        capture = await browser_manager.capture(url, logger)
+        if capture.ok:
+            await asyncio.to_thread(cache.put_web, url, capture.text, capture.screenshot_b64)
+            return "stored"
+        logger.warning(f"Could not capture {url}: {capture.error}")
+        await asyncio.to_thread(cache.record_failure, url, capture.error, blocked=capture.blocked)
+        return "blocked" if capture.blocked else "failed"
     except Exception:
         logger.error(f"Error crawling {url}", exc_info=True)
-
-
-# -------------------------------------------------------------------- #
-# Safe wrapper with timeout
-# -------------------------------------------------------------------- #
-async def crawl_one_page_safe(
-    url: str,
-    cache: CacheFileSys,
-    pdf_parser: PDFParser,
-    browser_manager: BatchBrowserManager,
-    logger: Logger,
-    overall_timeout: int = 300,
-) -> None:
-    """
-    Wrap `crawl_one_page()` with an overall timeout to prevent hanging.
-
-    Args:
-        overall_timeout: Maximum time in seconds for the entire page capture process.
-                        This prevents a single page from hanging the entire program.
-                        Playwright's internal timeouts (30s) handle navigation issues.
-    """
-    try:
-        await asyncio.wait_for(
-            crawl_one_page(url, cache, pdf_parser, browser_manager, logger),
-            timeout=overall_timeout,
-        )
-    except asyncio.TimeoutError:
-        logger.warning(f"Overall timeout: abandoned {url} after {overall_timeout}s to prevent program hanging")
-    except Exception:
-        logger.error(f"Unexpected error crawling {url}", exc_info=True)
+        return "error"
 
 
 # -------------------------------------------------------------------- #
@@ -261,7 +238,8 @@ async def process_cache(
     llm_provider: str = "openai",
     max_concurrent_pages: int = 30,
     max_retries: int = 1,
-    overall_timeout: int = 300,
+    page_timeout: float = 90.0,
+    retry_failed: bool = False,
     headless: bool = False,
     answers_root: Optional[Path] = None,
     cache_root: Optional[Path] = None,
@@ -272,6 +250,8 @@ async def process_cache(
     2) Crawl web/PDF content by unique URL; write to <cache_root>/<agent_name>/<task_id>/ directory
 
     Args:
+        page_timeout: Time limit in seconds for one attempt at capturing a page in the browser.
+        retry_failed: Crawl URLs whose capture failed in an earlier run again.
         answers_root: Base directory containing answers. If None, uses PathConfig defaults.
         cache_root: Base directory for cache storage. If None, uses PathConfig defaults.
         logger: Logger instance. If None, creates a default one.
@@ -363,28 +343,45 @@ async def process_cache(
     async with BatchBrowserManager(
         headless=headless,
         max_concurrent_pages=max_concurrent_pages,
-        max_retries=max_retries
+        max_retries=max_retries,
+        page_timeout=page_timeout,
     ) as browser_manager:
         logger.info(f"[{agent_name}/{task_id}] Browser manager initialized")
 
-        tasks = [
-            crawl_one_page_safe(u, cache, pdf_parser, browser_manager, logger, overall_timeout=overall_timeout)
-            for u in all_unique_urls
-        ]
-        with tqdm(total=len(tasks), desc="Crawling", unit="url", ncols=80) as bar:
-            for coro in asyncio.as_completed(tasks):
-                await coro
+        async def crawl_all(urls: List[str], retry: bool, desc: str) -> Dict[str, str]:
+            outcomes: Dict[str, str] = {}
+
+            async def crawl(url: str):
+                outcomes[url] = await crawl_one_page(url, cache, pdf_parser, browser_manager, logger,
+                                                     retry_failed=retry)
                 bar.update(1)
+
+            with tqdm(total=len(urls), desc=desc, unit="url", ncols=80) as bar:
+                await asyncio.gather(*(crawl(url) for url in urls))
+            return outcomes
+
+        outcomes = await crawl_all(all_unique_urls, retry_failed, "Crawling")
+        # A failure that is not a refusal is often transient (a slow, overloaded,
+        # or rate-limiting site): retry those from this run once, when nothing
+        # else is queued.
+        transient = [url for url, outcome in outcomes.items() if outcome == "failed"]
+        if transient:
+            logger.info(f"[{agent_name}/{task_id}] Retrying {len(transient)} failed URLs once")
+            outcomes.update(await crawl_all(transient, True, "Retrying"))
+        logger.info(f"[{agent_name}/{task_id}] Crawl outcomes: {dict(Counter(outcomes.values()))}")
 
         logger.info(f"[{agent_name}/{task_id}] Browser manager will be cleaned up automatically")
 
     # Update metadata with cached content types
     try:
         url_types: Dict[str, str] = {}
+        failed_urls: Dict[str, str] = {}
         for url in all_unique_urls:
             content_type = cache.has(url)
             if content_type:
                 url_types[url] = content_type
+            elif (failure := cache.failure(url)) is not None:
+                failed_urls[url] = failure["reason"]
 
         meta_data.update({
             "agent_name": agent_name,
@@ -394,9 +391,13 @@ async def process_cache(
             "urls": url_meta,
             "url_types": url_types,
             "cached_url_count": len(url_types),
+            "failed_urls": failed_urls,
         })
         meta_json.write_text(json.dumps(meta_data, ensure_ascii=False, indent=2), "utf-8")
         logger.info(f"[{agent_name}/{task_id}] Updated metadata with cache types -> {meta_json}")
+        if failed_urls:
+            logger.warning(f"[{agent_name}/{task_id}] {len(failed_urls)} of {len(all_unique_urls)} URLs "
+                           f"could not be captured; see failures.json in {cache_task_dir}")
     except Exception:
         logger.error(f"[{agent_name}/{task_id}] Failed to update metadata with cache types", exc_info=True)
 
@@ -436,13 +437,18 @@ if __name__ == "__main__":
         "--max_retries",
         type=int,
         default=1,
-        help="Maximum number of retries per page (default: 1)"
+        help="Attempts per page in the browser; exceptions and timeouts are retried (default: 1)"
     )
     parser.add_argument(
-        "--overall_timeout",
-        type=int,
-        default=120,
-        help="Overall timeout in seconds for each page capture to prevent hanging (default: 120s)"
+        "--page_timeout",
+        type=float,
+        default=90.0,
+        help="Time limit in seconds for one attempt at capturing a page in the browser (default: 90)"
+    )
+    parser.add_argument(
+        "--retry_failed",
+        action="store_true",
+        help="Crawl URLs whose capture failed in an earlier run again (default: skip them)"
     )
     parser.add_argument(
         "--headless",
@@ -459,6 +465,7 @@ if __name__ == "__main__":
         llm_provider=args.llm_provider,
         max_concurrent_pages=args.max_concurrent_pages,
         max_retries=args.max_retries,
-        overall_timeout=args.overall_timeout,
+        page_timeout=args.page_timeout,
+        retry_failed=args.retry_failed,
         headless=args.headless,
     ))

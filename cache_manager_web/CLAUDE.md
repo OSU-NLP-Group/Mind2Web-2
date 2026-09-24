@@ -58,10 +58,10 @@ This project uses `uv`, not pip. Use `uv run`, `uv sync`, `uv add`.
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| POST | /api/load | Load cache folder, run issue scan |
+| POST | /api/load | Load cache folder; build the issue list from the keyword scan, flags.json, and failures.json |
 | GET | /api/status | Current load status |
 | GET | /api/tasks | Task list with summaries |
-| GET | /api/tasks/{id}/urls | URLs with issue detection, reviewed status |
+| GET | /api/tasks/{id}/urls | URLs (stored pages, then `failed` URLs with their failure record), issues, reviewed status |
 | GET | /api/content/{id}/text | Text content + issues |
 | GET | /api/content/{id}/screenshot | Screenshot JPEG |
 | GET | /api/content/{id}/pdf | PDF content |

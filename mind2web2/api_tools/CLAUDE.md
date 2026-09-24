@@ -20,21 +20,14 @@ Tools for interacting with external services during evaluation. These are used b
 - `calculate_travel_time(addr1, addr2, mode)`: Travel time in seconds
 - Requires `GOOGLE_MAPS_API_KEY` env var
 
-### tool_pdf.py — PDF Detection & Parsing
-Two main components:
+### tool_pdf.py — PDF Detection, Download & Parsing
+All network calls are asynchronous (`httpx`), bounded in time, and never block the event loop.
 
-**`is_pdf(url)`**: Multi-strategy PDF detection:
-1. URL suffix pattern matching (fast, no network)
-2. HEAD request content-type check
-3. Partial GET with magic number check (`%PDF-`)
-4. Full GET stream with magic number check
+**`is_pdf(url)`**: true when the URL looks like a PDF (`.pdf` suffix and path or query patterns such as `arxiv.org/pdf/`; no network). Otherwise one streamed GET, bounded by 10 s, checks for a PDF `Content-Type` or the `%PDF-` signature in the first KiB. Network errors and timeouts count as "not a PDF".
 
-**`PDFParser`**: Download and parse PDFs:
-- `extract(source)`: Accept URL, file path, or bytes → returns `(images_b64_list, text)`
-- Renders pages as JPEG images (up to 50 pages)
-- Extracts plain text (up to 100 pages)
-- Uses PyMuPDF (fitz) for parsing, aiohttp for downloading
-- Special handling for arXiv URLs (fallback to export.arxiv.org)
+**`PDFParser`**:
+- `fetch(url)` → the PDF bytes, or `None` unless the response body starts with `%PDF-`, so that an HTML page behind a PDF-looking URL is loaded in the browser instead. arXiv URLs are retried on `export.arxiv.org`. A download is abandoned after 60 s or beyond 100 MB.
+- `extract(source)`: a URL, file path, or bytes → `(images_b64_list, text)`, or `(None, None)` when the PDF cannot be obtained or parsed. Renders up to 50 pages as JPEG and extracts the text of up to 100 pages with PyMuPDF, in a worker thread.
 
 ## Usage Context
 These tools are primarily used in:

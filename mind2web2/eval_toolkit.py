@@ -10,7 +10,7 @@ import uuid
 from typing import List, Type, Callable, Awaitable, Optional, Tuple, Union
 
 from PIL import Image
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from .api_tools import tool_pdf
 from .llm_client.base_client import LLMClient
@@ -24,6 +24,23 @@ from .utils.page_info_retrieval import (
 )
 from .api_tools.tool_pdf import is_pdf
 from .verification_tree import VerificationNode
+
+
+def empty_extraction(template_class: Type[BaseModel]) -> BaseModel:
+    """What an extraction returns when there is nothing to extract from.
+
+    That is the case when the page is unavailable or the extraction request
+    failed for a reason other than a :class:`JudgeError`.  The result is
+    ``template_class()`` when its fields all have defaults; otherwise it is an
+    unvalidated instance with the defaults and ``None`` for each required
+    field, so that a script reading it gets empty values instead of an
+    exception that would leave the whole answer unscored.
+    """
+    try:
+        return template_class()
+    except ValidationError:
+        required = {name: None for name, field in template_class.model_fields.items() if field.is_required()}
+        return template_class.model_construct(**required)
 
 
 class BinaryEvalResult(BaseModel):
@@ -123,19 +140,48 @@ class BaseEvaluator:
             return [{"type": "text", "text": prompt}]
 
     async def _capture_and_cache(self, url: str) -> Tuple[Optional[str], Optional[str]]:
-        """Capture page via browser and store in cache. Uses webpage semaphore."""
+        """Capture ``url`` in the browser under the webpage semaphore.
+
+        A captured page is stored in the cache and returned as
+        ``(screenshot_b64, text)``.  A failed capture is recorded in the cache
+        and returns ``(None, None)``.
+        """
         webpage_semaphore = getattr(self.semaphore, 'webpage', self.semaphore)
         async with webpage_semaphore:
             await asyncio.sleep(0.2 * random.random())
-            screenshot_b64, page_text = await self.browser_manager.capture_page(
-                url, self.logger,
-            )
-            if screenshot_b64 and page_text:
-                self.cache.put_web(url, page_text, screenshot_b64)
-            return screenshot_b64, page_text
+            capture = await self.browser_manager.capture(url, self.logger)
+        if not capture.ok:
+            self.logger.warning(f"Could not capture {url}: {capture.error}")
+            await asyncio.to_thread(self.cache.record_failure, url, capture.error, blocked=capture.blocked)
+            return None, None
+        await asyncio.to_thread(self.cache.put_web, url, capture.text, capture.screenshot_b64)
+        return capture.screenshot_b64, capture.text
+
+    async def _fetch_live(self, url: str) -> Tuple[Optional[Union[str, List[str]]], Optional[str]]:
+        """Fetch a page that is not cached, store it, and return its screenshots and text.
+
+        A URL that serves a PDF is downloaded; any other URL, including a
+        PDF-looking URL whose response is not a PDF, is loaded in the browser.
+        """
+        if await is_pdf(url):
+            pdf_bytes = await self.pdf_parser.fetch(url)
+            if pdf_bytes is not None:
+                await asyncio.to_thread(self.cache.put_pdf, url, pdf_bytes)
+                return await self.pdf_parser.extract(pdf_bytes)
+            self.logger.info(f"{url} did not return a PDF; loading it in the browser")
+        return await self._capture_and_cache(url)
 
     async def get_page_info(self, url: str, cancellation_event: Optional[asyncio.Event] = None):
-        """Return (screenshot_b64, page_text). Uses global cache + semaphore."""
+        """The page at ``url`` as ``(screenshots_b64, text)``, or ``(None, None)`` if it is unavailable.
+
+        Cached pages are served from the task's cache.  A URL with a failure
+        record in the cache (its capture already failed, during crawling or
+        an earlier evaluation) is unavailable, and it is not captured again,
+        so that its result does not depend on when the evaluation runs.  Any
+        other URL is fetched live and stored (see :meth:`_fetch_live`).
+        Screenshots are resized JPEGs; text longer than
+        ``config.max_text_chars`` is truncated.
+        """
 
         url = normalize_url_markdown(url)
         self.logger.info(f"🌍Retrieving page info for {url}")
@@ -143,31 +189,18 @@ class BaseEvaluator:
             self.logger.debug(f"Page info retrieval cancelled for {url}")
             return None, None
 
-        screenshot_b64 = None
-        page_text = None
-
-        # Try cache first
-        if self.cache.has(url):
-            if self.cache.has_pdf(url):
-                pdf_bytes = self.cache.get_pdf(url)
-                screenshot_b64, page_text = await self.pdf_parser.extract(pdf_bytes)
-            else:
-                page_text, screenshot_bytes = self.cache.get_web(url)
-                screenshot_b64 = base64.b64encode(screenshot_bytes).decode()
+        content_type = self.cache.has(url)
+        if content_type == "pdf":
+            screenshot_b64, page_text = await self.pdf_parser.extract(self.cache.get_pdf(url))
+        elif content_type == "web":
+            page_text, screenshot_bytes = self.cache.get_web(url)
+            screenshot_b64 = base64.b64encode(screenshot_bytes).decode()
+        elif (failure := self.cache.failure(url)) is not None:
+            self.logger.warning(f"{url} is unavailable: its capture failed ({failure['reason']})")
+            return None, None
         else:
             self.logger.warning(f"No cache for {url}, falling back to live capture")
-            if await is_pdf(url):
-                try:
-                    screenshot_b64, page_text = await self.pdf_parser.extract(url)
-                except Exception as e:
-                    self.logger.info(f"Fail to extract PDF from {url}: {e}")
-                    self.logger.info(f"Falling back to browser capture for {url}")
-                    screenshot_b64, page_text = await self._capture_and_cache(url)
-                # If PDF extraction returned None text, fall back to browser
-                if page_text is None:
-                    screenshot_b64, page_text = await self._capture_and_cache(url)
-            else:
-                screenshot_b64, page_text = await self._capture_and_cache(url)
+            screenshot_b64, page_text = await self._fetch_live(url)
 
         if page_text is None:
             self.logger.warning(f"Failed to retrieve any content for {url}")
@@ -179,8 +212,7 @@ class BaseEvaluator:
                 self.config.max_text_chars,
                 placeholder="… [CONTENT TRUNCATED]",
             )
-        if not isinstance(screenshot_b64, list):
-            screenshot_b64 = [screenshot_b64]
+        images = screenshot_b64 if isinstance(screenshot_b64, list) else [screenshot_b64]
 
         def _resize_b64_image(b64_str: str) -> str:
             try:
@@ -206,9 +238,9 @@ class BaseEvaluator:
                 self.logger.warning("Image resize failed: %s", e)
                 return b64_str
 
-        screenshot_b64 = [_resize_b64_image(b64) for b64 in screenshot_b64]
-
-        return screenshot_b64, page_text
+        # Re-encoding large screenshots in the event loop would stall concurrent evaluations
+        resized = await asyncio.to_thread(lambda: [_resize_b64_image(b64) for b64 in images])
+        return resized, page_text
 
 
 class Extractor(BaseEvaluator):
@@ -365,8 +397,7 @@ class Extractor(BaseEvaluator):
                     "error": str(e)
                 }
             )
-            # Return empty template instance
-            return template_class()
+            return empty_extraction(template_class)
 
     async def _core_extract(
             self,
@@ -444,7 +475,7 @@ class Extractor(BaseEvaluator):
                 f"[{op_id}] Failed to get page info for URL {url}",
                 extra=extract_context
             )
-            return template_class()
+            return empty_extraction(template_class)
 
         self.logger.debug(
             f"[{op_id}] Page content retrieved: text_length={len(web_text) if web_text else 0}, has_screenshot={bool(screenshot_b64)}"

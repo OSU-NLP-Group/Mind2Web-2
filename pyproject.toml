@@ -22,10 +22,7 @@ dependencies = [
     "patchright>=1.58.0",
     "arxiv",
     "googlemaps",
-    "aiohttp",
     "httpx",
-    "requests",
-    "certifi",
     "python-json-logger",
     "python-dateutil",  # imported by several eval scripts
     "PyMuPDF>=1.24.3",

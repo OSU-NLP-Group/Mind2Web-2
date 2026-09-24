@@ -9,7 +9,7 @@ from .api_tools import ArxivTool, GoogleMapsTool, PDFParser
 from .llm_client import JudgeConfig, JudgeError, DEFAULT_JUDGE_MODEL, calculate_api_cost
 from .utils import (
     create_logger, cleanup_logger, create_sub_logger,
-    PathConfig, PageManager,
+    PathConfig, BatchBrowserManager, Capture,
     load_eval_script,
     normalize_url_markdown, text_dedent, strip_extension,
     encode_image, encode_image_buffer,
@@ -44,7 +44,8 @@ __all__ = [
     "cleanup_logger",
     "create_sub_logger", 
     "PathConfig",
-    "PageManager",
+    "BatchBrowserManager",
+    "Capture",
     "load_eval_script",
     "normalize_url_markdown",
     "text_dedent",
