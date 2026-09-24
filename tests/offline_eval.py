@@ -150,7 +150,8 @@ def synthesize(model: type[BaseModel], list_len: int, depth: int = 0, index: int
 class FakeLLMClient:
     """Stands in for ``LLMClient(..., is_async=True)``; answers from the policy.
 
-    Records the model name of every request in ``models_requested``.
+    Records the model name of every request in ``models_requested``.  Like the
+    real client, it returns ``(result, tokens)`` when called with ``count_token=True``.
     """
 
     def __init__(self, policy: str):
@@ -164,9 +165,13 @@ class FakeLLMClient:
             return True
         return int(hashlib.sha256(text.encode()).hexdigest(), 16) % 3 != 0
 
-    async def async_response(self, **kwargs: Any) -> Any:
+    async def async_response(self, count_token: bool = False, **kwargs: Any) -> Any:
         self.calls += 1
         self.models_requested.add(str(kwargs.get("model")))
+        result = self._answer(kwargs)
+        return (result, {"input_tokens": 1, "output_tokens": 1}) if count_token else result
+
+    def _answer(self, kwargs: dict[str, Any]) -> Any:
         response_format = kwargs.get("response_format")
         request_text = json.dumps(kwargs.get("messages", []), sort_keys=True, default=str)
         if response_format is None:

@@ -8,6 +8,7 @@ from typing import List, Optional, Union, Type, Tuple, Any
 from pydantic import BaseModel
 
 from .eval_toolkit import create_evaluator, Extractor, Verifier
+from .llm_client.judge import DEFAULT_JUDGE_MODEL, JudgeError
 from .verification_tree import VerificationNode, AggregationStrategy
 
 class SourceKind(Enum):
@@ -56,6 +57,7 @@ class Evaluator:
         self._answer_name: Optional[str] = None
         self._judge_model: Optional[str] = None
         self._extract_model: Optional[str] = None
+        self._judge_config: Optional[dict] = None
         self._extraction_results: List[dict] = []
         self._ground_truth_info: List[dict] = []
         self._custom_info: List[dict] = []
@@ -113,10 +115,16 @@ class Evaluator:
         # Create extractor and verifier
         self.extractor, self.verifier = create_evaluator(**evaluator_kwargs)
 
-        # Record model information
-        default_model = evaluator_kwargs.get('default_model', 'o4-mini')
-        self._judge_model = evaluator_kwargs.get('verify_model', default_model)
-        self._extract_model = evaluator_kwargs.get('extract_model', default_model)
+        # Record model information.  A client with a judge configuration sends every
+        # request to the judge model, whatever model the eval script names.
+        judge = getattr(evaluator_kwargs.get('client'), 'judge', None)
+        if judge is not None:
+            self._judge_model = self._extract_model = judge.model
+            self._judge_config = judge.describe()
+        else:
+            default_model = evaluator_kwargs.get('default_model', DEFAULT_JUDGE_MODEL)
+            self._judge_model = evaluator_kwargs.get('verify_model', default_model)
+            self._extract_model = evaluator_kwargs.get('extract_model', default_model)
 
         return self.root
 
@@ -420,6 +428,13 @@ class Evaluator:
         -------
         List[bool | Exception]
             Corresponds to input order; If internal throws exception, returns exception object.
+
+        Raises
+        ------
+        JudgeError
+            If any verification's judge request failed for good.  The answer then
+            cannot be scored, so the first such error is raised, after the other
+            verifications have finished, instead of being returned.
         """
         tasks = []
         for claim, sources, node, add_ins in claims_and_sources:
@@ -433,7 +448,11 @@ class Evaluator:
             tasks.append(task)
 
         # Parallel execution; Maintain return order
-        return await asyncio.gather(*tasks, return_exceptions=True)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        judge_error = next((r for r in results if isinstance(r, JudgeError)), None)
+        if judge_error is not None:
+            raise judge_error
+        return results
 
     def _generate_verification_op_id(self, node: Optional[VerificationNode]) -> str:
         """Generate verification operation ID"""
@@ -453,7 +472,13 @@ class Evaluator:
             additional_instruction: str = "None",
             **kwargs,
     ) -> bool:
-        """Unified verification method"""
+        """Verify a claim, against its sources if given, and write the outcome into ``node``.
+
+        Returns whether the claim was verified.  A failure while verifying, such as
+        a page that cannot be loaded, marks the node as failed and returns False.
+        A :class:`JudgeError` (a judge request that failed for good) propagates
+        instead, because the answer then cannot be scored.
+        """
         if not self.verifier:
             raise ValueError("Evaluator not initialized. Call initialize() first.")
 
@@ -541,6 +566,9 @@ class Evaluator:
                 )
 
             return result
+
+        except JudgeError:
+            raise
 
         except Exception as e:
             if node:
@@ -752,6 +780,9 @@ class Evaluator:
             "final_score": self.score(),
             "judge_model": self._judge_model,
             "extract_model": self._extract_model,
+            "judge": self._judge_config,
+            # Judge requests made for this answer (Extractor and Verifier share one record)
+            "judge_usage": self.extractor.usage.as_dict(),
             "eval_breakdown": [
                 {
                     "info": info_list,

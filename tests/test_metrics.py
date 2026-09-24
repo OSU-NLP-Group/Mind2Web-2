@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import math
 import shutil
@@ -40,14 +41,15 @@ def answer_text(words: int) -> str:
     return " ".join(["https://example.com/source"] + ["word"] * (words - 1))
 
 
-def write_result(results_root: Path, task: str, run: int, score: float, timestamp: str) -> None:
+def write_result(results_root: Path, task: str, run: int, score: float, timestamp: str, **fields) -> None:
     result_dir = answer_output_dir(results_root, AGENT, task, f"answer_{run}.md") / "results"
     result_dir.mkdir(parents=True, exist_ok=True)
-    result = {"agent_name": AGENT, "answer_name": f"answer_{run}.md", "final_score": score}
+    result = {"agent_name": AGENT, "answer_name": f"answer_{run}.md", "final_score": score, **fields}
     (result_dir / result_file_name(timestamp, f"answer_{run}.md")).write_text(json.dumps(result))
 
 
-def build_submission(root: Path) -> tuple[Path, Path]:
+def build_submission(root: Path, judge: str | None = None) -> tuple[Path, Path]:
+    """The fixture's answers and results; the results record ``judge`` as their judge model if given."""
     answers_root, results_root = root / "answers", root / "eval_results"
     for (task, run), (words, score, seconds) in SUBMISSION.items():
         task_dir = answers_root / AGENT / task
@@ -56,7 +58,7 @@ def build_submission(root: Path) -> tuple[Path, Path]:
         if seconds is not None:
             (task_dir / f"answer_{run}.meta.json").write_text(json.dumps({"time_seconds": seconds}))
         if score is not None:
-            write_result(results_root, task, run, score, "20260102_120000")
+            write_result(results_root, task, run, score, "20260102_120000", **({"judge": {"model": judge}} if judge else {}))
     write_result(results_root, "t1", 2, 0.1, "20260101_120000")  # older result, superseded
     return answers_root, results_root
 
@@ -67,7 +69,7 @@ def test_success_tolerates_float_rounding():
 
 
 def test_metrics_match_hand_computed_values(tmp_path):
-    answers_root, results_root = build_submission(tmp_path)
+    answers_root, results_root = build_submission(tmp_path, judge="gpt-6-luna")
     records, num_runs = collect_records(AGENT, [t.task_id for t in TASKS], answers_root, results_root)
     assert num_runs == 3
     metrics = compute_metrics(records, TASKS, num_runs, AGENT, task_list=Path("split.csv"))
@@ -126,8 +128,8 @@ def test_answer_copies_next_to_results_replace_a_missing_answers_dir(tmp_path):
     assert metrics() == expected
 
 
-def test_leaderboard_entry_needs_a_task_list_and_three_runs(tmp_path):
-    answers_root, results_root = build_submission(tmp_path)
+def test_leaderboard_entry_needs_a_task_list_three_runs_and_one_recorded_judge(tmp_path):
+    answers_root, results_root = build_submission(tmp_path, judge="gpt-6-luna")
     split = Path("split.csv")
 
     def metrics(task_ids: list[str], task_list: Path | None, num_runs: int | None = None) -> dict:
@@ -147,12 +149,38 @@ def test_leaderboard_entry_needs_a_task_list_and_three_runs(tmp_path):
     assert metrics(["t1", "t2", "t3"], split, num_runs=2)["leaderboard_entry"] is None
     assert metrics(["t2"], split)["leaderboard_entry"]["time"] == "-"  # no answer reports a time
 
+    # Results that do not record their judge model, or come from several, get no entry
+    unjudged_answers, unjudged_results = build_submission(tmp_path / "unjudged")
+    records, runs = collect_records(AGENT, ["t1", "t2", "t3"], unjudged_answers, unjudged_results)
+    unjudged = compute_metrics(records, [TaskInfo(t) for t in ("t1", "t2", "t3")], runs, AGENT, split)
+    assert unjudged["leaderboard_entry"] is None
+    assert "No leaderboard entry: the results must all come from one judge model" in format_report(unjudged)
+
 
 def test_tasks_are_discovered_only_where_there_are_answers(tmp_path):
     answers_root, results_root = build_submission(tmp_path)
     (answers_root / AGENT / "t9").mkdir()
     (answers_root / AGENT / "t9" / "notes.txt").write_text("not an answer")
     assert discover_tasks(AGENT, answers_root, results_root) == ["t1", "t2", "t3"]
+
+
+def test_metrics_count_configured_and_served_judge_models(tmp_path):
+    answers_root, results_root = build_submission(tmp_path)
+
+    def judged(task: str, run: int, model: str, served: dict) -> None:
+        write_result(results_root, task, run, 1.0, "20260103_120000",
+                     judge={"model": model}, judge_usage={"served_models": served})
+
+    judged("t1", 1, "gpt-6-luna", {"gpt-6-luna-2026-05-01": 40})
+    judged("t1", 2, "gpt-6-luna", {"gpt-6-luna-2026-08-01": 38})
+    records, num_runs = collect_records(AGENT, ["t1"], answers_root, results_root)
+    metrics = compute_metrics(records, [TaskInfo("t1")], num_runs, AGENT)
+
+    assert metrics["judge_models"] == {"gpt-6-luna": 2, "unknown": 1}
+    assert metrics["served_models"] == {"gpt-6-luna-2026-05-01": 1, "gpt-6-luna-2026-08-01": 1}
+    report = format_report(metrics)
+    assert "results come from different judge models" in report
+    assert "different models serving the judge requests" in report
 
 
 def test_latest_result_is_chosen_by_timestamp(tmp_path):
@@ -163,7 +191,7 @@ def test_latest_result_is_chosen_by_timestamp(tmp_path):
 
 
 def test_metrics_command_prints_report_and_saves_json(tmp_path, capsys):
-    answers_root, results_root = build_submission(tmp_path)
+    answers_root, results_root = build_submission(tmp_path, judge="gpt-6-luna")
     task_list = tmp_path / "split.csv"
     task_list.write_text("task_id,task_description,domain,subdomain\n"
                          "t1,d,A,x\nt2,d,A,x\nt3,d,B,y\n")
@@ -237,3 +265,28 @@ def test_metrics_read_the_results_evaluate_task_writes(tmp_path, monkeypatch):
         script_path=REPO_ROOT / "eval_scripts" / "dev_set" / "yu_lineage.py",
     ))
     assert not (results_root / "example" / "yu_lineage" / "answer_1" / "answer_1.meta.json").exists()
+
+def test_a_result_for_a_replaced_answer_is_not_used(tmp_path):
+    answers_root, results_root = tmp_path / "answers", tmp_path / "eval_results"
+    task_dir = answers_root / AGENT / "t1"
+    task_dir.mkdir(parents=True)
+    # run -> (the answer file now, the answer text the result recorded; None: a result without a digest)
+    runs = {1: ("the evaluated answer", "the evaluated answer"),
+            2: ("the replacement", "the answer before it was replaced"),
+            3: ("an answer scored by an older framework", None)}
+    for run, (text, recorded) in runs.items():
+        (task_dir / f"answer_{run}.md").write_text(text)
+        write_result(results_root, "t1", run, 1.0, "20260102_120000")
+        if recorded is not None:
+            [path] = (answer_output_dir(results_root, AGENT, "t1", f"answer_{run}.md") / "results").glob("*.json")
+            result = json.loads(path.read_text())
+            result["answer_sha256"] = hashlib.sha256(recorded.encode()).hexdigest()
+            path.write_text(json.dumps(result))
+
+    records, num_runs = collect_records(AGENT, ["t1"], answers_root, results_root)
+    assert [(r.run, r.score, r.stale_result) for r in records] == [(1, 1.0, False), (2, None, True), (3, 1.0, False)]
+    metrics = compute_metrics(records, [TaskInfo("t1")], num_runs, AGENT)
+    assert metrics["stale_results"] == [{"task_id": "t1", "run": 2}]
+    assert metrics["missing_results"] == []
+    assert metrics["partial_completion"]["per_run"] == [1.0, 0.0, 1.0]
+    assert "Answers changed since their evaluation result (scored 0): 1" in format_report(metrics)

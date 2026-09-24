@@ -17,19 +17,28 @@ of its rubric tree.
 
 A (task, run) pair without an answer file, or whose answer has no evaluation
 result, scores 0 in the first three metrics, and the report lists every such
-pair so that it can be fixed.  Time and Answer Length describe the answers
-themselves: an answer that exists counts toward them whether or not it has an
-evaluation result, and a missing answer file does not.
+pair so that it can be fixed.  A result that records the SHA-256 of a
+different answer file (the answer was replaced after it was evaluated) is not
+used: the pair also scores 0 and is listed.  Time and Answer Length describe
+the answers themselves: an answer that exists counts toward them whether or
+not it has an evaluation result, and a missing answer file does not.
 
 The metrics record which tasks they cover (``task_selection``), and they
 include a ``leaderboard_entry`` only when they are computed over a task list
-with exactly 3 runs, the leaderboard's setting; otherwise it is ``None``.
+with exactly 3 runs, the leaderboard's setting, from results of one known judge
+model; otherwise it is ``None``.
+
+Scores are comparable only when one judge model produced them all, so the
+metrics count the results per configured judge model and per model that the
+server reported serving the requests, and the report warns when either count
+has more than one entry.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import statistics
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -53,7 +62,14 @@ class AnswerRecord:
     """Everything the metrics need about run ``run`` of task ``task_id``.
 
     ``score`` is ``None`` when there is no answer or the answer has no
-    evaluation result; ``word_count`` is ``None`` when there is no answer.
+    usable evaluation result; ``word_count`` is ``None`` when there is no
+    answer.  ``stale_result`` is true when the answer's latest result records
+    the SHA-256 of a different answer file, which leaves ``score`` ``None``.
+    ``judge_model`` is the configured judge model that scored the answer,
+    ``"unknown"`` for a result that does not record it, and ``None`` without a
+    score.  ``served_models`` names the models that the server reported
+    serving the answer's judge requests; it is empty without a score or when
+    the result does not record them.
     """
 
     task_id: str
@@ -62,6 +78,9 @@ class AnswerRecord:
     score: float | None = None
     word_count: int | None = None
     time_seconds: float | None = None
+    judge_model: str | None = None
+    served_models: tuple[str, ...] = ()
+    stale_result: bool = False
 
 
 def _mean_std(values: list[float]) -> dict:
@@ -150,10 +169,13 @@ def collect_records(
                 records.append(AnswerRecord(task_id, run, answer_present=False))
                 continue
             result = load_latest_result(results_root, agent_name, task_id, answer.name)
-            score = float(result["final_score"]) if result and "final_score" in result else None
+            data = answer.path.read_bytes()
+            recorded = result.get("answer_sha256") if result else None
+            stale = recorded is not None and recorded != hashlib.sha256(data).hexdigest()
+            score = float(result["final_score"]) if result and "final_score" in result and not stale else None
             metadata = load_metadata(answer)
             try:
-                text = answer.path.read_text(encoding="utf-8")
+                text = data.decode("utf-8")
             except UnicodeDecodeError as exc:
                 raise ValueError(f"{answer.path}: not UTF-8 text") from exc
             records.append(AnswerRecord(
@@ -163,8 +185,21 @@ def collect_records(
                 score=score,
                 word_count=count_words(text),
                 time_seconds=metadata.time_seconds if metadata else None,
+                judge_model=_judge_model(result) if score is not None else None,
+                served_models=_served_models(result) if score is not None else (),
+                stale_result=stale,
             ))
     return records, num_runs
+
+
+def _served_models(result: dict) -> tuple[str, ...]:
+    """The models that served a result's judge requests, from ``judge_usage.served_models``."""
+    return tuple(sorted((result.get("judge_usage") or {}).get("served_models") or {}))
+
+
+def _judge_model(result: dict) -> str:
+    """The judge model recorded in a result: ``judge.model``, else ``judge_model``, else ``"unknown"``."""
+    return (result.get("judge") or {}).get("model") or result.get("judge_model") or "unknown"
 
 
 def compute_metrics(
@@ -226,12 +261,19 @@ def compute_metrics(
         "answer_length_words": (
             {**_mean_std(measured_runs), "per_run": length_per_run} if measured_runs else None
         ),
+        "judge_models": dict(sorted(Counter(
+            rec.judge_model for rec in records if rec.judge_model is not None).items())),
+        "served_models": dict(sorted(Counter(
+            model for rec in records for model in rec.served_models).items())),
         "missing_answers": [
             {"task_id": rec.task_id, "run": rec.run} for rec in records if not rec.answer_present
         ],
         "missing_results": [
             {"task_id": rec.task_id, "run": rec.run}
-            for rec in records if rec.answer_present and rec.score is None
+            for rec in records if rec.answer_present and rec.score is None and not rec.stale_result
+        ],
+        "stale_results": [
+            {"task_id": rec.task_id, "run": rec.run} for rec in records if rec.stale_result
         ],
         "per_task": {
             t: {"scores": [table[(t, r)].score for r in runs], "pass": passed[t]} for t in task_ids
@@ -259,17 +301,29 @@ def _by_domain(tasks: list[TaskInfo], runs: range, score) -> dict | None:
     return out
 
 
+def no_leaderboard_entry_reason(metrics: dict) -> str | None:
+    """Why the metrics get no leaderboard entry, or ``None`` if they get one."""
+    if metrics["task_selection"]["source"] != "task_list" or metrics["num_runs"] != 3:
+        return "it needs --task-list (the split's task list) and 3 runs"
+    judges = metrics["judge_models"]
+    if len(judges) != 1 or "unknown" in judges:
+        return "the results must all come from one judge model that they record"
+    return None
+
+
 def leaderboard_entry(metrics: dict) -> dict | None:
     """The ``eval_set`` block of an entry in the leaderboard's ``leaderboard_data.json``.
 
-    Returns ``None`` unless the metrics cover a task list with exactly 3 runs,
-    so that metrics over the tasks an agent happened to answer, or over another
-    number of runs, cannot be mistaken for a leaderboard entry.  Whether the
-    task list is a whole split is not checked: pass the split's own list.  Values are strings as on the
-    leaderboard: two decimals, the answer length as an integer, and ``"-"``
-    when unavailable.
+    Returns ``None`` unless the metrics cover a task list with exactly 3 runs
+    and every result was scored by the same recorded judge model, so that
+    metrics over the tasks an agent happened to answer, over another number of
+    runs, or from mixed or unrecorded judges cannot be mistaken for a
+    leaderboard entry (:func:`no_leaderboard_entry_reason` says which).
+    Whether the task list is a whole split is not checked: pass the split's own
+    list.  Values are strings as on the leaderboard: two decimals, the answer
+    length as an integer, and ``"-"`` when unavailable.
     """
-    if metrics["task_selection"]["source"] != "task_list" or metrics["num_runs"] != 3:
+    if no_leaderboard_entry_reason(metrics) is not None:
         return None
     time = metrics["time_minutes"]
     length = metrics["answer_length_words"]
@@ -302,8 +356,10 @@ def format_report(metrics: dict, max_listed: int = 20) -> str:
     selection = metrics["task_selection"]
     source = (f"from {selection['path']}" if selection["source"] == "task_list"
               else "that have answers")
+    judges = metrics["judge_models"]
     lines = [
-        f"Agent {metrics['agent_name']!r}: {metrics['num_tasks']} tasks ({source}) x {metrics['num_runs']} runs",
+        f"Agent {metrics['agent_name']!r}: {metrics['num_tasks']} tasks ({source}) x {metrics['num_runs']} runs, "
+        f"judged by {', '.join(judges) if judges else 'no results'}",
         f"  Partial Completion  {mean_std(metrics['partial_completion'], '.4f')}"
         f"    per run: {per_run(metrics['partial_completion']['per_run'], '.4f')}",
         f"  Success Rate        {mean_std(metrics['success_rate'], '.4f')}"
@@ -320,6 +376,16 @@ def format_report(metrics: dict, max_listed: int = 20) -> str:
     if length:
         lines.append(f"  Answer Length       {mean_std(length, '.0f')} words")
 
+    if len(judges) > 1:
+        counts = ", ".join(f"{model}: {n}" for model, n in judges.items())
+        lines.append(f"  WARNING: results come from different judge models ({counts}); "
+                     f"re-evaluate with one judge before comparing scores")
+    served = metrics["served_models"]
+    if len(served) > 1:
+        counts = ", ".join(f"{model}: {n}" for model, n in served.items())
+        lines.append(f"  WARNING: the server reported different models serving the judge requests "
+                     f"(answers per model: {counts}); scores from different models are not comparable")
+
     if metrics["by_domain"]:
         lines.append("  By domain (Partial Completion / Success Rate):")
         for domain, block in metrics["by_domain"].items():
@@ -327,7 +393,8 @@ def format_report(metrics: dict, max_listed: int = 20) -> str:
                          f"{block['success_rate']:.4f}  ({block['num_tasks']} tasks)")
 
     for key, label in (("missing_answers", "Missing answer files"),
-                       ("missing_results", "Answers without an evaluation result")):
+                       ("missing_results", "Answers without an evaluation result"),
+                       ("stale_results", "Answers changed since their evaluation result")):
         items = metrics[key]
         if items:
             lines.append(f"  {label} (scored 0): {len(items)}")
@@ -336,6 +403,6 @@ def format_report(metrics: dict, max_listed: int = 20) -> str:
             if len(items) > max_listed:
                 lines.append(f"    ... and {len(items) - max_listed} more")
     if metrics["leaderboard_entry"] is None:
-        lines.append("  No leaderboard entry: it needs --task-list (the split's task list) and 3 runs.")
+        lines.append(f"  No leaderboard entry: {no_leaderboard_entry_reason(metrics)}.")
     return "\n".join(lines)
 

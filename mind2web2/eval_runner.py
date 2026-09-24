@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import shutil
@@ -10,6 +11,8 @@ from typing import Dict, List, Union, Optional
 from tqdm import tqdm
 
 from . import results
+from .eval_toolkit import EvaluatorConfig
+from .llm_client.judge import DEFAULT_JUDGE_MODEL, JudgeError
 from .metrics import is_success
 from .submission import answer_run, list_answer_files, metadata_path
 from .utils.cache_filesys import CacheFileSys
@@ -51,8 +54,17 @@ async def _eval_one_answer(
         llm_semaphore: asyncio.Semaphore,
         output_dir: Path,
         is_self_debug: bool = False,
+        script_sha256: Optional[str] = None,
 ):
-    """Evaluate a single answer file and write its result JSON / logs."""
+    """Evaluate a single answer file and write its result JSON / logs.
+
+    The result records the SHA-256 of the answer file (``answer_sha256``) and
+    of the eval script (``eval_script_sha256``, given as ``script_sha256``),
+    the framework's default :class:`EvaluatorConfig` settings
+    (``evaluator_config``), such as the size limits of the screenshots sent to
+    the judge, and :data:`mind2web2.results.SCORING_VERSION`
+    (``scoring_version``).
+    """
 
     answer_name = answer_path.name
     answer_base = results.answer_base(answer_name)
@@ -88,7 +100,8 @@ async def _eval_one_answer(
 
     # ---------- Read answer ----------
     try:
-        answer_text = answer_path.read_text(encoding="utf-8")
+        answer_bytes = answer_path.read_bytes()
+        answer_text = answer_bytes.decode("utf-8")
         logger.debug(
             f"Answer loaded: {len(answer_text)} characters",
             extra={"answer_length": len(answer_text)}
@@ -112,8 +125,18 @@ async def _eval_one_answer(
             cache=cache,
             semaphore=dual_semaphore,
             logger=logger,
-            model="o4-mini",
+            model=_judge_model(client),
         )
+
+        # A judge request that failed for good leaves the score undetermined, even if
+        # the eval script caught the error and carried on.
+        failed_requests = (result.get("judge_usage") or {}).get("failed_requests", 0)
+        if failed_requests:
+            raise JudgeError(f"{failed_requests} judge request(s) failed; the answer is not scored")
+        result["answer_sha256"] = hashlib.sha256(answer_bytes).hexdigest()  # what the result scored
+        result["eval_script_sha256"] = script_sha256  # the script that scored it
+        result["evaluator_config"] = EvaluatorConfig().as_dict()  # the defaults the script ran with
+        result["scoring_version"] = results.SCORING_VERSION  # the framework logic that scored it
 
         logger.info(
             f"✅ Evaluation completed with score: {result.get('final_score', 'unknown')}",
@@ -148,6 +171,46 @@ async def _eval_one_answer(
         return e
 
     return result
+
+
+def _judge_model(client) -> str:
+    """The model eval scripts are told to use: the client's judge model, if it has one."""
+    judge = getattr(client, "judge", None)
+    return judge.model if judge is not None else DEFAULT_JUDGE_MODEL
+
+
+def _reusable_result(result_file: Path, answer_path: Path, client,
+                     script_sha256: str) -> tuple[Optional[Dict], str]:
+    """Return ``(result, "")`` if ``result_file`` scored the current answer under the current settings.
+
+    Otherwise return ``(None, reason)``.  The result must record the SHA-256 of
+    the answer file as it is now, the same judge configuration as ``client``
+    (``None`` for a client without one), ``script_sha256``, the SHA-256 of the
+    eval script, the default :class:`EvaluatorConfig` settings as they are
+    now, and the current :data:`mind2web2.results.SCORING_VERSION`, as every
+    result saved by :func:`_eval_one_answer` does.  Settings that
+    an eval script passes itself are part of the script, so its SHA-256 covers
+    them.  Changes to the task's cached pages are not detected.
+    """
+    try:
+        result = json.loads(result_file.read_text(encoding="utf-8"))
+        answer_sha256 = hashlib.sha256(answer_path.read_bytes()).hexdigest()
+    except (OSError, ValueError) as exc:
+        return None, f"its latest result or the answer cannot be read ({exc})"
+    if result.get("answer_sha256") != answer_sha256:
+        return None, "its latest result is for a different version of the answer, or does not record it"
+    judge = getattr(client, "judge", None)
+    configured = judge.describe() if judge is not None else None
+    if result.get("judge") != configured:
+        return None, f"its latest result was judged by {result.get('judge')}, not {configured}"
+    if result.get("eval_script_sha256") != script_sha256:
+        return None, "its latest result was produced by another version of the eval script, or does not record it"
+    if result.get("evaluator_config") != EvaluatorConfig().as_dict():
+        return None, ("its latest result was produced with other evaluator settings, such as screenshot limits, "
+                      "or does not record them")
+    if result.get("scoring_version") != results.SCORING_VERSION:
+        return None, "its latest result was produced by another version of the scoring logic, or does not record it"
+    return result, ""
 
 
 def _save_result_json(result: Dict, agent_task_out_dir: Path, ts: str, is_debug: bool):
@@ -204,7 +267,17 @@ async def evaluate_task(
     is_self_debug : bool, default False
         Whether to add debug suffix to logs/results
     overwrite : bool, default False
-        Whether to overwrite existing results
+        Evaluate every answer again, even one whose latest result could be
+        reused.  Without it, an answer's latest result is reused, with no judge
+        request, when it records the SHA-256 of the current answer file, the
+        judge configuration of ``client``, the SHA-256 of the eval script, the
+        current default :class:`EvaluatorConfig` settings, and the current
+        :data:`mind2web2.results.SCORING_VERSION`.
+        Changes to the task's cached pages, such as pages recaptured in the
+        Cache Manager, are not detected; evaluate with ``overwrite`` after
+        changing them.  Before an answer is evaluated, its
+        earlier results move to ``results/superseded/`` (see
+        :mod:`mind2web2.results`).
     max_concurrent_answers : int, default 3
         Maximum number of concurrent answer evaluations
     webpage_semaphore : Optional[asyncio.Semaphore], default None
@@ -260,6 +333,7 @@ async def evaluate_task(
         # ------------------------------------------------------------------
         main_logger.info("📜 Loading evaluation script")
         eval_fn = load_eval_script(script_path)
+        script_sha256 = hashlib.sha256(Path(script_path).read_bytes()).hexdigest()
 
         cache_path = cache_root / f"{task_id}"
         cache = CacheFileSys(task_dir=str(cache_path))
@@ -324,54 +398,37 @@ async def evaluate_task(
                 answer_folder = output_root / agent_name / task_id / answer_base
                 answer_folder.mkdir(parents=True, exist_ok=True)
 
-                def copy_answer(refresh: bool) -> None:
+                def copy_answer() -> None:
                     for src in (ans_path, metadata_path(ans_path)):
-                        dst = answer_folder / src.name
-                        if src.exists() and (refresh or not dst.exists()):
-                            shutil.copyfile(src, dst)
-                        elif not src.exists():
-                            dst.unlink(missing_ok=True)  # a deleted metadata file must not live on in its copy
+                        if src.exists():
+                            shutil.copyfile(src, answer_folder / src.name)
+                        else:  # a deleted metadata file must not live on in its copy
+                            (answer_folder / src.name).unlink(missing_ok=True)
 
-                # 5‑B. Result reuse check
+                # 5‑B. Reuse the latest result if it scored this answer with this judge, script, and settings
                 result_dir = answer_folder / "results"
                 latest = results.latest_result_file(result_dir)
                 if latest and not overwrite:
-                    copy_answer(refresh=False)
-                    main_logger.info(
-                        f"⚠️ Using existing result for {agent_name}/{answer_name}",
-                        extra={
-                            "agent_name": agent_name,
-                            "answer_name": answer_name,
-                            "existing_result": str(latest),
-                            "operation": "reuse_result"
-                        }
-                    )
-                    main_logger.info(f"⚠️ Existing result -- {agent_name} {answer_name}")
-                    try:
-                        result = json.loads(latest.read_text(encoding="utf-8"))
-                        main_logger.debug(
-                            f"✅ Loaded existing result with score: {result.get('final_score')}",
+                    result, reason = _reusable_result(latest, ans_path, client, script_sha256)
+                    if result is not None:
+                        copy_answer()
+                        main_logger.info(
+                            f"⚠️ Using existing result for {agent_name}/{answer_name}",
                             extra={
                                 "agent_name": agent_name,
                                 "answer_name": answer_name,
-                                "final_score": result.get('final_score'),
-                                "operation": "existing_result_loaded"
+                                "existing_result": str(latest),
+                                "final_score": result.get("final_score"),
+                                "operation": "reuse_result"
                             }
                         )
                         return result
-                    except Exception as exc:
-                        main_logger.error(
-                            f"❌ Failed to load existing result: {exc}",
-                            extra={
-                                "agent_name": agent_name,
-                                "answer_name": answer_name,
-                                "error": str(exc),
-                                "operation": "existing_result_error"
-                            }
-                        )
+                    main_logger.info(f"🔁 Evaluating {agent_name}/{answer_name} again: {reason}")
 
-                # 5‑C. Real evaluation
-                copy_answer(refresh=True)
+                # 5‑C. Real evaluation.  Earlier results move aside first, so that a failed
+                # evaluation leaves the answer without a result instead of an outdated one.
+                results.supersede_results(result_dir)
+                copy_answer()
                 try:
                     res = await _eval_one_answer(
                         eval_fn,
@@ -384,6 +441,7 @@ async def evaluate_task(
                         llm_semaphore,
                         output_root,
                         is_self_debug,
+                        script_sha256,
                     )
 
                     if isinstance(res, dict):
