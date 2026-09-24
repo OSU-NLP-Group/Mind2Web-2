@@ -25,7 +25,8 @@ class VerificationNode(BaseModel):
       page, a request too long for the judge, an error).  A claim with several
       sources passes on the first source that supports it, and the checks of
       the other sources stop, so they may be missing.
-    - ``skipped_because``: the id of the prerequisite whose failure skipped the check.
+    - ``skipped_because``: the id of the prerequisite whose failure skipped the check, either before it was
+      verified or, after it was verified, when its sequential parent counted it as 0 (see :meth:`compute_score`).
     - ``error``: the error that failed the check before any judgment.
     """
 
@@ -129,6 +130,8 @@ class VerificationNode(BaseModel):
                         for c in self.children[valid_until + 1:]:
                             c.score, c.status = 0.0, "skipped"
                             c._cached_score = 0.0
+                            if c.evidence is not None and not c.evidence.get("skipped_because"):
+                                c.evidence = {**c.evidence, "skipped_because": self.children[valid_until].id}
                     child_scores = child_scores[:valid_until + 1] + [0] * (len(child_scores) - valid_until - 1)
 
             # -------- 4. Gate-then-Average ----------

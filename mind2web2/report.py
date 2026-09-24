@@ -157,9 +157,17 @@ def _metrics_html(metrics: Optional[dict]) -> str:
              ("Answer length (words)", stat("answer_length_words", "{:.0f}"))]
     counts = []
     for key, label in (("missing_answers", "missing answers"), ("missing_results", "answers without a result"),
+                       ("stale_results", "answers changed since their result"),
                        ("rejected_requests", "answers with rejected judge requests")):
         if metrics.get(key):
             counts.append(f"{len(metrics[key])} {label}")
+    warnings = []
+    for key, what in (("judge_models", "different judge models"),
+                      ("served_models", "different models, as the server reported them")):
+        if len(metrics.get(key) or {}) > 1:
+            models = ", ".join(f"{model}: {n}" for model, n in metrics[key].items())
+            warnings.append(f"Results come from {what} ({models}); re-evaluate with one judge before comparing "
+                            f"scores.")
     return (
         '<section class="card"><h2>Metrics</h2>'
         f'<p class="muted">From metrics.json: {_e(metrics.get("num_tasks"))} tasks × '
@@ -167,11 +175,13 @@ def _metrics_html(metrics: Optional[dict]) -> str:
         + (f" · {_e(', '.join(counts))}" if counts else "") + "</p>"
         '<div class="metrics">'
         + "".join(f'<div><span class="muted">{_e(k)}</span><b>{_e(v)}</b></div>' for k, v in cells)
-        + "</div></section>"
+        + "</div>" + "".join(f'<p class="note">{_e(w)}</p>' for w in warnings) + "</section>"
     )
 
 
-def _matrix_html(entries: list[AnswerEntry]) -> str:
+def _matrix_html(entries: list[AnswerEntry], stale: set[tuple[str, int]]) -> str:
+    """The table of every task's score in every run; a pair in ``stale`` (the metrics' ``stale_results``) shows
+    "changed" instead of its score, since the metrics count it as 0."""
     runs = sorted({e.run for e in entries})
     by_task: dict[str, dict[int, AnswerEntry]] = {}
     for entry in entries:
@@ -187,11 +197,11 @@ def _matrix_html(entries: list[AnswerEntry]) -> str:
             if entry is None:
                 tds.append('<td class="cell none">·</td>')
                 continue
-            score = _score(entry)
+            score = None if (task_id, r) in stale else _score(entry)
             if score is not None:
                 scores.append(score)
             below = below or score is None or score < 1 - 1e-6
-            label = f"{score:.2f}" if score is not None else "no result"
+            label = f"{score:.2f}" if score is not None else "changed" if (task_id, r) in stale else "no result"
             tds.append(f'<td class="cell {_score_class(score)}"><a href="#{_anchor(entry)}">{label}</a></td>')
         mean = f"{sum(scores) / len(scores):.3f}" if scores else "–"
         rows.append(f'<tr data-task="{_e(task_id)}" data-below="{int(below)}">'
@@ -278,7 +288,7 @@ def _answer_html(entry: AnswerEntry) -> str:
         if tree:
             if not _has_evidence(tree):
                 body.append('<p class="muted small">This result was saved without the evidence of its checks; '
-                            "evaluate the answer again to record it.</p>")
+                            "evaluate the answer again with <code>--overwrite</code> to record it.</p>")
             body.append(f'<ul class="tree">{_node_html(tree)}</ul>')
         rejections = usage.get("rejections") or []
         if rejections:
@@ -405,7 +415,7 @@ def render_report(agent: str, entries: list[AnswerEntry], metrics: Optional[dict
         '<label><input id="below" type="checkbox"> only answers below 1.0</label>'
         '<button id="expand" type="button">Open all</button><button id="collapse" type="button">Close all</button>'
         '<span class="muted small">Failed and skipped checks show their evidence open.</span></div>'
-        + _matrix_html(entries)
+        + _matrix_html(entries, {(s.get("task_id"), s.get("run")) for s in (metrics or {}).get("stale_results") or []})
         + "".join(_answer_html(e) for e in entries)
         + f'</main><script nonce="{nonce}">{_JS}</script></body></html>'
     )

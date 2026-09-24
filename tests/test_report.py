@@ -72,6 +72,27 @@ def test_a_multi_url_check_records_every_source_checked_and_a_skipped_check_its_
                               "skipped_because": "sources"}
 
 
+class FailsTheFirstStep(FakeLLMClient):
+    def _verdict(self, text: str) -> bool:
+        return "The first step holds." not in text
+
+
+def test_a_leaf_that_passed_before_an_earlier_step_failed_records_why_it_counts_as_skipped():
+    async def calls(ev, root):
+        seq = ev.add_sequential(id="steps", desc="Steps", parent=root)
+        first = ev.add_leaf(id="first", desc="First step.", parent=seq)
+        second = ev.add_leaf(id="second", desc="Second step.", parent=seq)
+        await ev.verify(claim="The second step holds.", node=second)  # verified out of order
+        await ev.verify(claim="The first step holds.", node=first)
+
+    root = verify_all(FailsTheFirstStep("all_true"), calls)
+    root.compute_score(mutate=True)
+    first, second = root.children[0].children
+    assert (first.status, second.status) == ("failed", "skipped")
+    assert second.evidence["checks"][0]["passed"] is True
+    assert second.evidence["skipped_because"] == "first"
+
+
 # ------------------------------------------------------------------ report
 
 def test_evaluate_writes_the_report_with_scores_and_evidence_and_no_summary_json(tmp_path, run_evaluate, capsys):
@@ -119,3 +140,15 @@ def test_a_result_saved_without_evidence_says_so():
                                    AnswerEntry("t2", "answer_1.md", 1, None, None, None)])
     assert "saved without the evidence of its checks" in page
     assert "This answer has no result" in page
+
+
+def test_the_report_shows_what_the_metrics_flag_changed_answers_and_mixed_judges():
+    tree = {"id": "root", "desc": "d", "status": "passed", "score": 1.0, "strategy": "parallel",
+            "critical": False, "children": []}
+    metrics = {"num_tasks": 1, "num_runs": 1, "stale_results": [{"task_id": "t1", "run": 1}],
+               "judge_models": {"judge-a": 1, "judge-b": 1}, "served_models": {}}
+    page = render_report("agent", [entry(final_score=1.0, eval_breakdown=[{"verification_tree": tree}])], metrics)
+    assert "1 answers changed since their result" in page
+    assert "Results come from different judge models (judge-a: 1, judge-b: 1)" in page
+    assert '>changed</a>' in page and ">1.00</a>" not in page
+    assert "with <code>--overwrite</code> to record it" in page

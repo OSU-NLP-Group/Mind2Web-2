@@ -43,6 +43,7 @@ Two classes that do the actual LLM-based work:
 - `AggregationStrategy.PARALLEL`: gate-then-average (critical nodes gate, soft nodes averaged)
 - `AggregationStrategy.SEQUENTIAL`: short-circuit on first failure
 - `compute_score(mutate=True)`: Recursive score computation with write-back
+- `evidence`: on each leaf that `Evaluator.verify` checked, the claim, its sources, one record per judgment (URL, verdict, votes, reasoning, or a note when no judgment counted), and `skipped_because` or `error`; `None` on aggregating and custom nodes. It never affects the score
 
 ### eval_runner.py — Async Execution Engine
 - `resolve_scripts_dir(root, version)`: The eval-script version directory to run: `version` if given, else the newest dated (`YYYY_MM_DD`) subdirectory, else the only one; raises `ScriptsNotFound` listing the available versions
@@ -56,13 +57,14 @@ Two classes that do the actual LLM-based work:
 - `crawl_one_page()`: Downloads a PDF or captures the page in the browser, trying the page's other spellings in turn when a capture fails; records a failure in the cache's `failures.json` only when every spelling failed. It skips a page that the cache holds, or has a failure record for, looked up with `ignore_case=False`, so a page stored under another letter case does not count
 - `cache_answers()`: Discovers and captures the URLs of many tasks through one browser, `max_concurrent_urls` URLs at a time (which bounds the PDF checks and downloads outside the browser), retries this crawl's non-refusal failures once (with `retry_failed`, also every failure record of the task that is not in its URL list, such as those evaluation wrote for URLs it captured live), and returns a `TaskCrawl` report per task (URL count, outcomes, whether URL extraction was complete, and an error when the task's URLs, cache, or URL list could not be read or updated, which fails only that task)
 
-### submission.py, results.py, metrics.py — Submissions, Results, Leaderboard Metrics
+### submission.py, results.py, metrics.py, report.py — Submissions, Results, Metrics, Report
 - `submission.py`: the answers layout (`<agent>/<task_id>/answer_<k>.md` with k = 1, 2, 3, ..., optional `answer_<k>.meta.json`), task lists (CSV with a `task_id` column, text file, or eval-script directory), and `validate_submission()`
 - `results.py`: the results layout (`<results>/<agent>/<task_id>/answer_<k>/results/<timestamp>_answer_<k>.md.json`) and lookup of an answer's latest result
 - `metrics.py`: Partial Completion, Success Rate, Pass@k, Time, and Answer Length over a task list; a missing answer or result counts as 0 in the first three and is listed
+- `report.py`: `write_report()` renders an agent's results as one self-contained HTML page (`<results>/<agent>/report.html`): the saved metrics, every task's score in every run, and each answer's rubric tree with the evidence of its checks. All text from answers and the judge is escaped, only http(s) URLs become links, and a Content Security Policy with a per-report nonce admits only the page's own script
 
 ### cli/ — The `mind2web2` Command
-One module per subcommand (`validate`, `cache`, `evaluate`, `metrics`); each defines `register(subparsers)` and `run(args) -> int`. Shared options live in `cli/_common.py`.
+One module per subcommand (`validate`, `cache`, `evaluate`, `metrics`, `report`); each defines `register(subparsers)` and `run(args) -> int`. Shared options live in `cli/_common.py`.
 
 ## Data Flow
 
@@ -76,7 +78,7 @@ mind2web2 evaluate (cli/evaluate.py)
         → eval_fn(client, answer, cache, semaphore, logger, model)
           → Evaluator.initialize() + extract() + verify()
           → Evaluator.get_summary() → result dict
-      → save results JSON + summary
+      → save the answer's result JSON
 ```
 
 ## Eval Script Contract
