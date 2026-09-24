@@ -3,30 +3,31 @@
 ## Modules
 
 ### cache_filesys.py — File-Based Webpage Cache
-`CacheFileSys`: One instance per task, stores cached webpage content on disk.
+`CacheFileSys`: the cached pages of one task (one instance per task directory).
 
 **Directory layout:**
 ```
 task_dir/
-├── index.json      # {url: "web"|"pdf"}
-├── <md5_hash>.txt  # page text content
-├── <md5_hash>.jpg  # page screenshot
-├── <md5_hash>.pdf  # PDF content
+├── index.json      # {storage key: "web"|"pdf"}
+├── <md5(key)>.txt  # web page text (Markdown)
+├── <md5(key)>.jpg  # web page screenshot
+├── <md5(key)>.pdf  # PDF
 ```
 
 **Key methods:**
-- `put_web(url, text, screenshot)`: Store webpage (converts screenshot to JPG)
-- `put_pdf(url, pdf_bytes)`: Store PDF
-- `get_web(url)` → `(text, screenshot_bytes)`
-- `get_pdf(url)` → `pdf_bytes`
-- `has(url)` → `"web"` | `"pdf"` | `None`
-- `save()`: Persist index.json to disk
+- `put_web(url, text, screenshot)` / `put_pdf(url, pdf_bytes)`: store a page under `storage_key(url)` (fragment removed, percent-decoded, trailing slash removed), replacing any page under the same key whatever its type; return the page's URL as `lookup` returns it.
+- `get_web(url)` → `(text, jpeg_bytes)`; `get_pdf(url)` → `pdf_bytes`; `has(url)` → `"web"` | `"pdf"` | `None`
+- `lookup(url)` → the URL of the cached page `url` refers to, or `None`; `get_all_urls()` lists these URLs; `remove(url)` deletes a page and its files. A URL from `lookup` or `get_all_urls` passed to any method addresses the same page.
 
-**URL matching** is the most complex part. `_find_url()` tries:
-1. Direct lookup
-2. Normalized form (`normalize_url_simple`)
-3. Reverse normalized comparison against all stored URLs
-4. Full variant expansion (`_get_url_variants`) — generates 100+ variants per URL by combining scheme swaps, encoding variants, www prefix, utm params, trailing slashes
+**Persistence:** every put and remove is on disk, fsynced, when it returns. Each file is replaced atomically (a page's text and screenshot are two files), and each change, including deleting the files of a replaced page, runs under an `flock` on the task directory with `index.json` re-read and merged, so the crawler, an eval run, and the Cache Manager can write to one task at the same time, and an interrupted crawl keeps the pages it stored. There is no separate save step. An `index.json` that exists but cannot be read raises `CacheIndexError` instead of being treated as empty.
+
+**URL matching** (`lookup`). A key that `storage_key` would change again (a decoded `#` or `%XX`, or a trailing slash from `//`; a "raw" key) is found only through a URL whose storage key is that key, or is raw with the same form once UTM parameters, the scheme, and `www.` are disregarded; a URL with a raw storage key finds no other key, since normalizing it can turn it into another page's URL (`?q=C%23` into `?q=C`). Other keys are found by these rules, first hit wins:
+1. `url` is the key
+2. `normalize_url_keep_case(url)` is the key, or the key has the same case-preserving normalized form (dictionary index; the earliest stored wins)
+3. the same with the lowercased form `normalize_url_simple(url)`
+4. a surface variant of `url` is the key (scheme, `www.`, UTM suffixes, percent-encoding forms, trailing slash). Runs only when 1-3 miss; it finds keys whose normalized form changes under percent-decoding.
+
+Rule 2 comes first so that, among pages stored for URLs that differ only in letter case (which a server may serve as different pages), a URL finds the one with its own letter case, and another only when there is none.
 
 ### page_info_retrieval.py — Browser-Based Web Capture
 **`BatchBrowserManager`**: Manages a shared Chromium browser (via patchright) for concurrent page capture.
@@ -58,7 +59,8 @@ Custom formatters:
 - `CompactJsonFormatter`: Compact JSONL for machine parsing
 
 ### url_tools.py — URL Normalization & Extraction
-- `normalize_url_simple(url)`: Normalize for comparison (lowercase, remove www/utm/fragments/trailing slash, force https)
+- `normalize_url_keep_case(url)`: A normalized form that keeps letter case (UTM parameters and fragment removed, percent-decoded, trailing slash removed, `https`, no `www.`)
+- `normalize_url_simple(url)`: `normalize_url_keep_case(url)` lowercased; the form under which two URLs are the same page, for cache lookups and crawl deduplication
 - `remove_utm_parameters(url)`: Strip all `utm_*` query params
 - `normalize_url_for_browser(url)`: Ensure URL has protocol for navigation
 - `regex_find_urls(text)`: Extract URLs from markdown text using multiple regex patterns

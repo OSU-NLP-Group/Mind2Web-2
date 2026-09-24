@@ -105,5 +105,5 @@ uv run mind2web2 metrics example --task-list <split.csv> --num-runs 3
 - `cache_manager/` is deprecated and scheduled for removal. Do not invest effort there.
 - Eval scripts are per-task Python files downloaded from HuggingFace; they are not part of this repo's source.
 - The default judge model is `gpt-6-luna` (`DEFAULT_JUDGE_MODEL`, set with `run_eval.py --judge_model`); the paper used `o4-mini`. The judge client sends every request to the configured judge, and each result records the judge and its token usage.
-- URL matching is complex due to variants (utm params, www prefix, encoding, trailing slashes); see `CacheFileSys._find_url()` and `url_tools.py`.
+- Cache lookups accept surface variants of a stored URL (scheme, `www.`, UTM parameters, encoding, trailing slash); the rules are in `CacheFileSys.lookup()` and `url_tools.normalize_url_simple()`. Cache writes are on disk as soon as `put_web` / `put_pdf` / `remove` return.
 - Judge requests retry transient errors (connection errors, timeouts, HTTP 408/409/429/5xx) within a time budget; any other failure raises `JudgeError`, which must propagate so the answer is left unscored instead of losing points.
