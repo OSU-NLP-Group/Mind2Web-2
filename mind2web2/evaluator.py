@@ -508,6 +508,8 @@ class Evaluator:
                 if failed_prereq_id:
                     node.score = 0.0
                     node.status = "skipped"
+                    node.evidence = {"claim": claim, "sources": _normalize_sources(sources).urls, "checks": [],
+                                     "skipped_because": failed_prereq_id}
                     self.verifier.logger.info(
                         f"Check {node.id} skipped: check {failed_prereq_id}, which it depends on, did not pass",
                         extra={**verify_context, "skipped_due_to": failed_prereq_id, "status": "skipped"}
@@ -554,6 +556,8 @@ class Evaluator:
             if node:
                 node.score = 0.0
                 node.status = "failed"
+                node.evidence = {**(node.evidence or {"claim": claim, "sources": [], "checks": []}),
+                                 "error": f"{type(e).__name__}: {e}"}
             self.verifier.logger.error(f"{name} failed with an error, so it counts as failed: {e}",
                                        extra={**verify_context, "status": "error"}, exc_info=True)
             return False

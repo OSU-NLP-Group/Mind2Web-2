@@ -12,21 +12,22 @@ Usage::
     uv run mind2web2 cache <agent_name>
     uv run mind2web2 evaluate <agent_name>
     uv run mind2web2 metrics <agent_name>
+    uv run mind2web2 report <agent_name>
 """
 from __future__ import annotations
 
 import argparse
 
-from . import cache, evaluate, metrics, validate
+from . import cache, evaluate, metrics, report, validate
 
-COMMANDS = (validate, cache, evaluate, metrics)
+COMMANDS = (validate, cache, evaluate, metrics, report)
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mind2web2",
         description="Mind2Web 2: check a submission, cache the pages its answers cite, evaluate the "
-                    "answers, and compute the leaderboard metrics.",
+                    "answers, compute the leaderboard metrics, and browse the results.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True, metavar="<command>")
     for command in COMMANDS:

@@ -1,13 +1,17 @@
 """On-disk layout of evaluation results.
 
-For every evaluated answer, evaluation (``mind2web2 evaluate``) writes::
+Evaluation (``mind2web2 evaluate``) writes, for an agent and each answer it evaluates::
 
-    <results_root>/<agent_name>/<task_id>/<answer_base>/
-    ├── <answer_name>                               # copy of the evaluated answer
-    ├── logs/                                       # <timestamp>_<answer_name>.log and .jsonl per evaluation
-    └── results/
-        ├── <timestamp>_<answer_name>.json          # output of Evaluator.get_summary()
-        └── superseded/                             # results of earlier evaluations
+    <results_root>/<agent_name>/
+    ├── logs/                                   # the run log of each mind2web2 evaluate
+    ├── metrics.json                            # mind2web2 metrics
+    ├── report.html                             # mind2web2 report (mind2web2.report)
+    └── <task_id>/<answer_base>/
+        ├── <answer_name>                       # copy of the evaluated answer
+        ├── logs/                               # <timestamp>_<answer_name>.log and .jsonl per evaluation
+        └── results/
+            ├── <timestamp>_<answer_name>.json  # Evaluator.get_summary(), with each checked leaf's evidence
+            └── superseded/                     # results of earlier evaluations
 
 ``<answer_base>`` is the answer file name without its extension (``answer_1``
 for ``answer_1.md``) and ``<timestamp>`` is ``YYYYMMDD_HHMMSS``.  The newest
