@@ -158,7 +158,7 @@ Key state fields:
 - **Two modes**: Auto (captures CAPTCHA pages and moves on) and Pause-on-CAPTCHA (waits for manual solving)
 - **Retry logic**: Pages with body < 200 chars are auto-retried up to 2 times
 - **15s timeout**: Force-captures after 15s if page hasn't loaded
-- **URL redirect handling**: `actual_url` field saves content for both original and redirected URLs
+- **URL redirect handling**: `actual_url` field saves content for both original and redirected URLs, except that a redirected URL whose page the task lists only under a URL differing in letter case is not stored (`CacheManager.listed_in_other_case()`), since a case-sensitive server can serve another page there
 - **CAPTCHA detection**: Cloudflare, Turnstile, reCAPTCHA, hCaptcha, generic blocked pages
 - **Rich popup UI**: Live progress bar, status badge, current URL, scrollable log
 - **Skip on failure**: Failed captures skip and advance to prevent infinite loops

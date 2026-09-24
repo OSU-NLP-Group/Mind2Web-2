@@ -648,6 +648,25 @@ def test_captures_and_uploads_need_an_http_url_and_never_store_the_servers_own_a
         assert set(url_states(c)) == {A, B}
 
 
+def test_a_redirect_never_replaces_a_page_listed_under_a_url_that_differs_in_letter_case(tmp_path):
+    news, other = "https://example.com/News", "https://example.com/other"
+    task_dir = tmp_path / "agent" / "task"
+    cache = CacheFileSys(str(task_dir))
+    cache.put_web(news, "the news page", png_bytes())
+    cache.record_failure(other, "timeout")
+
+    with client() as c:
+        c.post("/api/load", json={"path": str(tmp_path / "agent")})
+        # other redirected to /news, which a case-sensitive server can serve apart from /News
+        response = c.post("/api/capture", json=capture(other, text="the other page") | {
+            "actual_url": "https://example.com/news"}).json()
+        assert response["url"] == other
+        assert set(url_states(c)) == {news, other}
+    cache = CacheFileSys(str(task_dir))
+    assert cache.get_web(news, get_screenshot=False)[0] == "the news page"
+    assert cache.get_web(other, get_screenshot=False)[0] == "the other page"
+
+
 def test_review_accepts_only_the_reviewers_statuses_for_listed_urls(tmp_path):
     CacheFileSys(str(tmp_path / "agent" / "task")).put_web(A, "page a", png_bytes())
 

@@ -423,6 +423,11 @@ async def receive_capture(req: CaptureRequest, request: Request):
       capture of such a page is marked "recaptured" as usual, for a person
       to look at.
 
+    The capture is not stored for ``actual_url`` when the task lists that
+    page only under a URL that differs from it in letter case (see
+    :meth:`CacheManager.listed_in_other_case`), since a server can serve
+    another page there and the capture would replace it.
+
     Returns the URL the task lists the page under.
     """
     _require_loaded()
@@ -451,7 +456,10 @@ async def receive_capture(req: CaptureRequest, request: Request):
     if stored is None:
         raise HTTPException(500, "Failed to save capture")
     stored_urls = [stored]
-    if actual_url and actual_url != url:
+    if actual_url and actual_url != url and _cm.listed_in_other_case(req.task_id, actual_url):
+        logger.info(f"Did not store the capture of {url} for {actual_url}, where it redirected: the task lists "
+                    f"a URL that differs from it in letter case, which can be another page")
+    elif actual_url and actual_url != url:
         redirected = _cm.store_page(req.task_id, actual_url, text=text, screenshot=screenshot_bytes)
         if redirected is not None and redirected != stored:
             stored_urls.append(redirected)

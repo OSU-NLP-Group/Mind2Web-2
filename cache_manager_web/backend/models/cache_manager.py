@@ -45,7 +45,7 @@ import logging
 
 # _write_atomic: the cache's atomic, fsynced file replacement, used for the review-state files too
 from mind2web2.utils.cache_filesys import CacheFileSys, _raw_form, _write_atomic, storage_key
-from mind2web2.utils.url_tools import normalize_url_simple
+from mind2web2.utils.url_tools import normalize_url_keep_case, normalize_url_simple
 
 logger = logging.getLogger(__name__)
 
@@ -296,6 +296,17 @@ class CacheManager:
         form = _page_form(url)
         return next((pending for pending in sorted(self._pending.get(task_id, ()))
                      if _page_form(pending) == form and _stored_state(cache, pending) is None), url)
+
+    def listed_in_other_case(self, task_id: str, url: str) -> bool:
+        """Whether the task lists the page that ``url`` names only under a URL that differs from it in letter case.
+
+        :meth:`canonical_url` disregards letter case as a last resort, which
+        suits a URL the reviewer chose from the list.  A server can serve
+        different pages for two such URLs, so a page reached otherwise, such
+        as the target of a redirect, must not be stored in the place of the
+        other one.
+        """
+        return _case_form(self.canonical_url(task_id, url)) != _case_form(url)
 
     def url_state(self, task_id: str, url: str) -> Optional[str]:
         """``"web"`` or ``"pdf"`` for a stored page, ``"failed"``, ``"pending"``, or ``None`` if the task does not have ``url``."""
@@ -639,6 +650,14 @@ def _other_pages(urls: Set[str], url: str) -> Set[str]:
     """The URLs of ``urls`` that name another page than ``url`` does (another :func:`_page_form`)."""
     form = _page_form(url)
     return {other for other in urls if _page_form(other) != form}
+
+
+def _case_form(url: str) -> str:
+    """``url``'s case-preserving normalized form (:func:`normalize_url_keep_case`), or ``url`` if it cannot be parsed."""
+    try:
+        return normalize_url_keep_case(url)
+    except ValueError:
+        return url
 
 
 def _page_form(url: str) -> str:
