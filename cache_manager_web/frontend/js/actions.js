@@ -63,9 +63,12 @@ export async function selectUrl(taskId, url) {
         return;
     }
 
-    // Load text content for web URLs
+    // Load text content for web URLs.  Another URL can be selected before the text
+    // arrives: then the text is not shown and the URL is not marked as reviewed.
+    const stillSelected = () => getState().selectedTaskId === taskId && getState().selectedUrl === url;
     try {
         const data = await api.getText(taskId, url);
+        if (!stillSelected()) return;
         setState({ currentText: data.text, currentIssues: data.issues });
 
         // Auto-mark as reviewed when viewed:
@@ -87,7 +90,7 @@ export async function selectUrl(taskId, url) {
             }
         }
     } catch {
-        setState({ currentText: null, currentIssues: null });
+        if (stillSelected()) setState({ currentText: null, currentIssues: null });
     }
 }
 
