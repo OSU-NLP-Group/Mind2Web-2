@@ -19,7 +19,8 @@ Without ``--task-list`` or ``--task``, the tasks are those the agent has
 answers for (task directories with ``answer_<k>.md`` files) and the
 eval-script version has scripts for; the others are counted and skipped, since
 an agent's answers may cover tasks whose scripts are not available locally.
-With either option, a selected task without an eval script is an error.
+With either option, a selected task without an eval script is listed, and
+its answers are left without a result.
 Unless ``--task`` selects tasks, the run ends by printing and saving the
 metrics over the selected tasks with ``--num-runs`` runs per task (by default
 the highest run index found), exactly as ``mind2web2 metrics`` computes them;
