@@ -40,6 +40,7 @@ def test_detection_and_download_check_what_the_server_returns():
         "/blob": Route(body=pdf, headers={"Content-Type": "application/octet-stream"}),
         "/landing.pdf": Route(body=b"<html><body>Log in to read this paper</body></html>"),
         "/article": Route(body=b"<html><body>An article</body></html>"),
+        "/link.pdf": Route(302, headers={"Location": "/paper"}),
     }
 
     async def check(site: LocalSite):
@@ -47,14 +48,22 @@ def test_detection_and_download_check_what_the_server_returns():
         return {path: (await is_pdf(site.url(path)), await parser.fetch(site.url(path)) == pdf)
                 for path in [*routes, "/gone.pdf"]}
 
+    async def final_urls(site: LocalSite):
+        parser = PDFParser()
+        return {path: (await parser.fetch_with_final_url(site.url(path)))[1]
+                for path in ("/paper", "/link.pdf", "/landing.pdf")}
+
     with LocalSite(routes) as site:
         assert asyncio.run(check(site)) == {
             "/paper": (True, True),          # PDF content type
             "/blob": (True, True),           # %PDF- signature
             "/landing.pdf": (True, False),   # looks like a PDF, but the download is HTML
             "/article": (False, False),
+            "/link.pdf": (True, True),       # redirected to /paper
             "/gone.pdf": (True, False),      # 404
         }
+        assert asyncio.run(final_urls(site)) == {
+            "/paper": site.url("/paper"), "/link.pdf": site.url("/paper"), "/landing.pdf": None}
 
 
 def test_detection_gives_up_after_its_timeout_without_blocking_the_event_loop():

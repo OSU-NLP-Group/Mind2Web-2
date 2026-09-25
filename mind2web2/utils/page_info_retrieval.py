@@ -96,6 +96,11 @@ class Capture:
     when the site refused the automated browser (see :func:`detect_block`),
     so that a person may still be able to capture the page.  ``status`` is
     the HTTP status of the displayed document, when one was received.
+    ``final_url`` is the URL of the page captured, which differs from the
+    URL requested after a redirect: the page's URL once it has loaded and
+    any bot check has passed, read before the capture scrolls it, since some
+    pages change their URL while scrolled (to the next article of an
+    endless feed).  It is set on success.
     """
 
     screenshot_b64: Optional[str] = None
@@ -103,6 +108,7 @@ class Capture:
     error: Optional[str] = None
     blocked: bool = False
     status: Optional[int] = None
+    final_url: Optional[str] = None
 
     @property
     def ok(self) -> bool:
@@ -253,6 +259,7 @@ class BatchBrowserManager:
             return Capture(error="navigation failed: the browser showed an error page")
 
         await _wait_for_js_challenge(page)
+        final_url = page.url  # before scrolling, which some pages answer by changing their URL
 
         # Scroll to trigger lazy-loaded content
         for _ in range(3):
@@ -270,7 +277,7 @@ class BatchBrowserManager:
             return Capture(error=f"blocked: {block}", blocked=True, status=status)
         if status is not None and (status == 429 or status >= 500) and len(text) < SHORT_PAGE_CHARS:
             return Capture(error=f"HTTP {status}", status=status)
-        return Capture(screenshot_b64=screenshot_b64, text=text, status=status)
+        return Capture(screenshot_b64=screenshot_b64, text=text, status=status, final_url=final_url)
 
 
 async def _grant_permissions(context: BrowserContext, url: str, logger: Logger) -> None:

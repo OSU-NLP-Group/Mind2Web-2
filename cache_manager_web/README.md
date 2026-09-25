@@ -78,13 +78,13 @@ A capture whose page has no text (for example, because the page had not rendered
 - **Flag** (`f`) — mark a URL for recapture (red). Its stored page is kept, and evaluation keeps using it, until a capture replaces it
 - **Reset** (`x`) — delete the URL's stored page (or its failure record); it is listed as `pending` until captured again. Asks first
 - **Edit** (`e`) — change the URL link. A stored page moves to the new URL, with its flag and review status; a failed or pending URL leaves the new URL `pending`
-- **Add** (`a`) — add a URL the crawl missed; it is listed as `pending` until you capture it or upload a file. A URL the task already lists, in any spelling, is refused
+- **Add** (`a`) — add a URL the crawl missed; it is listed as `pending` until you capture it or upload a file. A URL the task already lists, in any spelling, is refused, and so is a URL that another URL's capture was redirected to, since it already resolves to that capture
 - **Delete** (`d`) — remove a URL: its stored page, failure record, flag, and review status, and every pending spelling of its page. Asks first when a page or failure record is stored
 - **Upload** — drag-and-drop `.pdf` or `.mhtml` files onto the preview panel. A file that is not a PDF, or an MHTML file without text, is refused
 
 ### What evaluation sees
 
-Evaluation reads only the stored pages (`index.json` and their files) and the failure records (`failures.json`) of each task: a stored page is used as it is, a URL with a failure record counts as unavailable, and any other URL is captured live. The Cache Manager's own state, pending URLs (`pending.json`), flags (`flags.json`), and review statuses (`reviewed.json`), is never read by evaluation, and no Cache Manager action stores content that was not captured. So a flagged page is still evaluated from its stored content, and a `pending` URL is captured live until you capture it.
+Evaluation reads only the stored pages (`index.json` and their files), the URLs their captures were redirected to (`redirects.json`), and the failure records (`failures.json`) of each task: a stored page is used as it is, a URL with a failure record counts as unavailable, and any other URL is captured live. The Cache Manager's own state, pending URLs (`pending.json`), flags (`flags.json`), and review statuses (`reviewed.json`), is never read by evaluation, and no Cache Manager action stores content that was not captured. So a flagged page is still evaluated from its stored content, and a `pending` URL is captured live until you capture it.
 
 ## Keyboard Shortcuts
 

@@ -387,19 +387,22 @@ async def get_capture_target():
 
 @router.post("/capture")
 async def receive_capture(req: CaptureRequest, request: Request):
-    """Store a page captured by the Chrome extension, for ``url`` and, after a redirect, for ``actual_url`` too.
+    """Store a page captured by the Chrome extension for ``url``, recording ``actual_url`` after a redirect.
 
-    ``url`` must be an http(s) URL (status 400 otherwise).  ``actual_url``
-    is ignored unless it is an http(s) URL on another host than this
-    server's, so a capture of the Cache Manager's own page is never stored
-    under the Cache Manager's address.  The decoded screenshot may have at
+    ``url`` must be an http(s) URL (status 400 otherwise).  The page is
+    stored once, under the URL the task lists for ``url``; ``actual_url``,
+    the URL the tab ended at, is recorded as its final URL (see
+    :meth:`CacheManager.store_page`), so a lookup of it finds the page.
+    ``actual_url`` is ignored unless it is an http(s) URL on another host
+    than this server's, so a capture of the Cache Manager's own page never
+    adds the Cache Manager's address to the task.  The decoded screenshot may have at
     most ``MAX_SCREENSHOT_SIZE`` bytes and the HTML (or the text) at most
     ``MAX_TEXT_SIZE`` bytes (status 413 otherwise).
 
     With ``html``, the stored text is ``html_to_markdown(html)``, the text the
     crawler stores for the pages it captures, so a page's text has the same
     form whichever of the two captured it; ``text`` is stored only when no
-    HTML is sent.  Each stored page's flag is cleared and its review status
+    HTML is sent.  The stored page's flag is cleared and its review status
     set to "recaptured" for a batch capture (a person still has to look at
     it) and "fixed" otherwise.  A reviewed URL no longer qualifies for the
     batch, so a URL captured by hand while it is queued is left out when the
@@ -414,7 +417,7 @@ async def receive_capture(req: CaptureRequest, request: Request):
     Two captures are stored without being marked done, and the response and
     the capture_complete event carry a ``warning`` that says why:
 
-    - With ``visible_part_only``, the full-page screenshot failed: each
+    - With ``visible_part_only``, the full-page screenshot failed: the
       stored page is flagged, and its review status cleared, so that it
       stays a definite issue until a full-page capture.
     - A capture by hand whose stored text is empty (or only whitespace)
@@ -447,26 +450,20 @@ async def receive_capture(req: CaptureRequest, request: Request):
     text = await asyncio.to_thread(html_to_markdown, req.html) if req.html else (req.text or "")
     if req.batch:
         _refuse_a_stale_batch_capture(req.task_id, url)
-    stored = _cm.store_page(req.task_id, url, text=text, screenshot=screenshot_bytes)
+    stored = _cm.store_page(req.task_id, url, text=text, screenshot=screenshot_bytes, final_url=actual_url)
     if stored is None:
         raise HTTPException(500, "Failed to save capture")
-    stored_urls = [stored]
-    if actual_url and actual_url != url:
-        redirected = _cm.store_page(req.task_id, actual_url, text=text, screenshot=screenshot_bytes)
-        if redirected is not None and redirected != stored:
-            stored_urls.append(redirected)
 
     empty_by_hand = not req.batch and not text.strip()
-    for listed in stored_urls:
-        if req.visible_part_only:
-            _cm.flag_url(req.task_id, listed)
-            _cm.mark_url_reviewed(req.task_id, listed, "")
-        elif empty_by_hand:
-            _cm.mark_url_reviewed(req.task_id, listed, "")
-        else:
-            _cm.unflag_url(req.task_id, listed)
-            _cm.mark_url_reviewed(req.task_id, listed, "recaptured" if req.batch else "fixed")
-    _refresh_issues(req.task_id, *stored_urls)
+    if req.visible_part_only:
+        _cm.flag_url(req.task_id, stored)
+        _cm.mark_url_reviewed(req.task_id, stored, "")
+    elif empty_by_hand:
+        _cm.mark_url_reviewed(req.task_id, stored, "")
+    else:
+        _cm.unflag_url(req.task_id, stored)
+        _cm.mark_url_reviewed(req.task_id, stored, "recaptured" if req.batch else "fixed")
+    _refresh_issues(req.task_id, stored)
 
     warnings = []
     if req.visible_part_only:
@@ -759,7 +756,10 @@ async def delete_url(task_id: str, url: str = Query(...)):
 async def rename_url(task_id: str, req: RenameUrlRequest):
     """Change a URL's link; returns the new URL as the task lists it, and its content type.
 
-    A stored page moves to the new URL, with its flag and review status.  A
+    A stored page moves to the new URL, with its flag, its review status, and
+    the final URL recorded for it after a redirect (see
+    ``CacheFileSys.put_web``), so that URL resolves to the page under its new
+    link.  A
     URL whose capture failed or that is pending leaves the new URL pending,
     since the new link has not been captured.  Nothing changes when the
     stored page cannot be read.
@@ -774,10 +774,12 @@ async def rename_url(task_id: str, req: RenameUrlRequest):
         text, data = _cm.get_url_content(task_id, old_url)
         if data is None or (state == "web" and text is None):
             raise HTTPException(500, f"Cannot read the stored page of {old_url}")
+        final_url = next((final for final, page in _cm.get_task_cache(task_id).redirects().items()
+                          if page == old_url), None)
         if state == "web":
-            listed = _cm.store_page(task_id, new_url, text=text, screenshot=data)
+            listed = _cm.store_page(task_id, new_url, text=text, screenshot=data, final_url=final_url)
         else:
-            listed = _cm.store_page(task_id, new_url, pdf_bytes=data)
+            listed = _cm.store_page(task_id, new_url, pdf_bytes=data, final_url=final_url)
         if listed is None:
             raise HTTPException(500, "Failed to store the page under the new URL")
         _cm.move_review_state(task_id, old_url, listed)
@@ -854,9 +856,13 @@ async def upload_mhtml(task_id: str, url: str = Query(...), file: UploadFile = F
 # ---------------------------------------------------------------------------
 
 @router.post("/upload-pdf/{task_id}")
-async def upload_pdf(task_id: str, url: str = Query(...), file: UploadFile = File(...),
-                     batch: bool = Query(False)):
+async def upload_pdf(request: Request, task_id: str, url: str = Query(...), file: UploadFile = File(...),
+                     batch: bool = Query(False), actual_url: Optional[str] = Query(None)):
     """Store an uploaded PDF for a URL, replacing its stored page of either type.
+
+    ``actual_url``, sent by the extension when the PDF's tab ended at another
+    URL, is recorded as the page's final URL, as ``/api/capture`` records it
+    (and ignored in the same cases, see :func:`_redirect_url`).
 
     A file without the PDF signature (``%PDF-`` in its first 1024 bytes),
     such as a login page saved in place of a paper, is refused with status
@@ -873,13 +879,14 @@ async def upload_pdf(task_id: str, url: str = Query(...), file: UploadFile = Fil
     if not _cm.get_task_cache(task_id):
         raise HTTPException(404, f"Task not found: {task_id}")
     url = _valid_url(url)
+    final_url = _redirect_url(actual_url, request)
 
     pdf_bytes = await _read_upload(file)
     if b"%PDF-" not in pdf_bytes[:1024]:
         raise HTTPException(422, "Not a PDF file: it does not start with the PDF signature %PDF-")
     if batch:
         _refuse_a_stale_batch_capture(task_id, url)
-    stored = _cm.store_page(task_id, url, pdf_bytes=pdf_bytes)
+    stored = _cm.store_page(task_id, url, pdf_bytes=pdf_bytes, final_url=final_url)
     if stored is None:
         raise HTTPException(500, "Failed to save PDF")
 
@@ -899,10 +906,15 @@ async def upload_pdf(task_id: str, url: str = Query(...), file: UploadFile = Fil
 # ---------------------------------------------------------------------------
 
 def _listed_url(task_id: str, url: str) -> str:
-    """The URL under which the task lists ``url`` (see ``CacheManager.canonical_url``); 404 if the task or URL is unknown."""
+    """The URL under which the task lists ``url`` (see ``CacheManager.canonical_url``); 404 if the task or URL is unknown.
+
+    A URL that the task does not list but that resolves to a stored page as
+    the final URL of its capture (``CacheManager.resolves_through_redirect``)
+    is unknown too, so that no edit named by it acts on that page.
+    """
     if not _cm.get_task_cache(task_id):
         raise HTTPException(404, f"Task not found: {task_id}")
-    if _cm.url_state(task_id, url) is None:
+    if _cm.url_state(task_id, url) is None or _cm.resolves_through_redirect(task_id, url):
         raise HTTPException(404, f"URL not found: {url}")
     return _cm.canonical_url(task_id, url)
 
@@ -921,7 +933,7 @@ def _valid_url(url: str) -> str:
 
 
 def _redirect_url(actual_url: Optional[str], request: Request) -> Optional[str]:
-    """The URL a capture was redirected to, if the page is to be stored under it too; else ``None``.
+    """The URL a capture was redirected to, if it is to be recorded as the page's final URL; else ``None``.
 
     ``actual_url`` counts only when it is an http(s) URL that the cache can
     store (see :func:`_valid_url`) and its host is neither the ``Host`` of

@@ -76,7 +76,8 @@ def reference_lookup(stored: list[str], url: str):
     plain = [k for k in stored if not is_raw(k)]
     if url in plain:
         return url
-    for normalize in (normalize_url_keep_case, normalize_url_simple):
+
+    def by_form(normalize):
         match = normalize(url)
         if match in plain:
             return match
@@ -86,7 +87,11 @@ def reference_lookup(stored: list[str], url: str):
                     return key
             except ValueError:
                 pass
-    return next((variant for variant in _surface_variants(url) if variant in plain), None)
+        return None
+
+    return (by_form(normalize_url_keep_case)
+            or next((variant for variant in _surface_variants(url) if variant in plain), None)
+            or by_form(normalize_url_simple))
 
 
 def found_key(cache: CacheFileSys, url: str):
@@ -412,3 +417,154 @@ def test_failure_records_being_read_are_never_changed(tmp_path, monkeypatch):
     monkeypatch.setattr(cache, "_is_stored", lambda url, ignore_case=True: cache.clear_failure(url) and False)
     assert cache.failure("https://example.com/b")["reason"] == "HTTP 503"
     assert CacheFileSys(str(tmp_path)).failures() == {}
+
+
+# ------------------------------------------------------------------ redirects
+
+START, FINAL = "https://example.com/start", "https://example.org/Final"
+
+
+def test_a_redirected_page_is_stored_once_and_found_by_its_final_url(tmp_path):
+    cache = CacheFileSys(str(tmp_path))
+    assert cache.put_web(START, "the page", png_bytes(), final_url=FINAL) == START
+
+    for reader in (cache, CacheFileSys(str(tmp_path))):
+        assert reader.get_all_urls() == [START]
+        assert reader.redirects() == {FINAL: START}
+        for spelling in (FINAL, "http://www.example.org/Final/", FINAL + "?utm_source=chatgpt.com", FINAL + "#top"):
+            assert reader.lookup(spelling, ignore_case=False) == START, spelling
+        assert reader.lookup("https://example.org/final", ignore_case=False) is None  # another page
+        assert reader.lookup("https://example.org/final") == START  # letter case disregarded
+        assert reader.get_web(FINAL, get_screenshot=False)[0] == "the page"
+    assert len(list(tmp_path.glob("*.txt"))) == 1
+    assert json.loads((tmp_path / "redirects.json").read_text()) == {FINAL: START}
+
+
+@pytest.mark.parametrize("final_url", [None, "", START, "http://www.example.com/start/", START + "#top",
+                                       START + "?utm_source=x", "about:blank", "chrome-error://chromewebdata/"])
+def test_no_redirect_is_recorded_for_the_same_page_or_a_url_that_is_not_http(tmp_path, final_url):
+    cache = CacheFileSys(str(tmp_path))
+    cache.put_pdf(START, b"%PDF-1.4", final_url=final_url)
+    assert cache.redirects() == {} and not (tmp_path / "redirects.json").exists()
+
+
+def test_storing_a_page_again_replaces_its_redirect_records(tmp_path):
+    cache = CacheFileSys(str(tmp_path))
+    cache.put_web(START, "first capture", png_bytes(), final_url=FINAL)
+    cache.put_web(START, "second capture", png_bytes(), final_url="https://example.org/elsewhere")
+    assert cache.redirects() == {"https://example.org/elsewhere": START}
+    cache.put_web(START, "no redirect", png_bytes())
+    assert cache.redirects() == {} and cache.lookup(FINAL) is None
+    # The latest capture that ended at a final URL wins it
+    cache.put_web(START, "page", png_bytes(), final_url=FINAL)
+    cache.put_web("https://example.com/other", "other", png_bytes(), final_url=FINAL)
+    assert CacheFileSys(str(tmp_path)).redirects() == {FINAL: "https://example.com/other"}
+
+
+def test_a_page_stored_under_a_final_url_takes_its_place(tmp_path):
+    cache = CacheFileSys(str(tmp_path))
+    cache.put_web(START, "redirected", png_bytes(), final_url=FINAL)
+    cache.put_web(FINAL, "captured directly", png_bytes())
+    assert cache.redirects() == {} and cache.get_web(FINAL, get_screenshot=False)[0] == "captured directly"
+    # A capture that ends at a stored page's URL records nothing
+    cache.put_web("https://example.com/third", "third", png_bytes(), final_url=FINAL + "/")
+    assert cache.redirects() == {} and cache.get_web(FINAL, get_screenshot=False)[0] == "captured directly"
+    cache.remove(FINAL)
+    assert cache.lookup(FINAL) is None  # no redirect record comes back
+
+
+def test_removing_a_page_deletes_its_redirect_records(tmp_path):
+    cache = CacheFileSys(str(tmp_path))
+    cache.put_web(START, "page", png_bytes(), final_url=FINAL)
+    cache.put_web("https://example.com/kept", "kept", png_bytes(), final_url="https://example.org/kept-final")
+    assert cache.remove(START) == "web"
+    assert cache.lookup(FINAL) is None
+    assert CacheFileSys(str(tmp_path)).redirects() == {"https://example.org/kept-final": "https://example.com/kept"}
+
+
+def test_a_redirect_in_the_query_letter_case_wins_over_a_page_in_another(tmp_path):
+    cache = CacheFileSys(str(tmp_path))
+    cache.put_web("https://example.com/News", "the news page", png_bytes())
+    cache.put_web("https://example.com/other", "the other page", png_bytes(), final_url="https://example.com/news")
+    for ignore_case in (True, False):
+        assert cache.lookup("https://example.com/news", ignore_case=ignore_case) == "https://example.com/other"
+        assert cache.lookup("https://example.com/News", ignore_case=ignore_case) == "https://example.com/News"
+    assert cache.lookup("https://example.com/NEWS") == "https://example.com/News"  # pages come first when case differs
+
+
+def test_a_final_url_keeps_its_failure_record_hidden_until_its_page_is_removed(tmp_path):
+    cache = CacheFileSys(str(tmp_path))
+    stale = CacheFileSys(str(tmp_path))  # reads the redirect records before the page is stored
+    cache.record_failure(FINAL, "HTTP 503")
+    cache.put_web(START, "page", png_bytes(), final_url=FINAL)
+    assert cache.failures() == {} and cache.failure(FINAL) is None and cache.lookup(FINAL) == START
+    assert FINAL in json.loads((tmp_path / "failures.json").read_text())  # kept on disk
+    # A process that has not seen the redirect records a failure for the final URL: also hidden
+    stale.record_failure(FINAL, "timed out")
+    assert CacheFileSys(str(tmp_path)).failures() == {}
+    cache.remove(START)
+    assert CacheFileSys(str(tmp_path)).failure(FINAL)["reason"] == "timed out"  # applies again
+
+
+def test_lookup_without_redirects_finds_only_pages_stored_for_the_url(tmp_path):
+    cache = CacheFileSys(str(tmp_path))
+    cache.put_web(START, "page", png_bytes(), final_url=FINAL)
+    assert cache.lookup(FINAL, follow_redirects=False) is None
+    assert cache.lookup(START, follow_redirects=False) == START
+
+
+def test_one_final_url_has_one_record_whatever_its_spelling(tmp_path):
+    cache = CacheFileSys(str(tmp_path))
+    cache.put_web(START, "first", png_bytes(), final_url="http://example.org/login")
+    cache.put_web("https://example.com/second", "second", png_bytes(), final_url="https://www.example.org/login/")
+    assert cache.redirects() == {"https://www.example.org/login": "https://example.com/second"}
+    assert cache.lookup("https://example.org/login") == "https://example.com/second"
+
+
+def test_a_page_another_process_stored_under_the_final_url_prevents_the_record(tmp_path):
+    stale = CacheFileSys(str(tmp_path))
+    CacheFileSys(str(tmp_path)).put_web("http://www.example.org/Final/", "captured directly", png_bytes())
+    stale.put_web(START, "redirected", png_bytes(), final_url=FINAL)
+    assert stale.redirects() == {} and CacheFileSys(str(tmp_path)).lookup(FINAL) == "http://www.example.org/Final"
+
+
+def test_a_final_url_with_an_encoded_hash_is_matched_as_raw_keys_are(tmp_path):
+    cache = CacheFileSys(str(tmp_path))
+    cache.put_web(START, "page", png_bytes(), final_url="https://example.org/search?q=C%23")
+    assert cache.lookup("https://example.org/search?q=C%23") == START
+    assert cache.lookup("https://example.org/search?q=C") is None
+
+
+def test_redirect_records_of_several_instances_are_all_kept(tmp_path):
+    first, second = CacheFileSys(str(tmp_path)), CacheFileSys(str(tmp_path))
+    first.put_web(START, "a", png_bytes(), final_url=FINAL)
+    second.put_web("https://example.com/b", "b", png_bytes(), final_url="https://example.org/b-final")
+    assert CacheFileSys(str(tmp_path)).redirects() == {FINAL: START,
+                                                        "https://example.org/b-final": "https://example.com/b"}
+
+
+def test_an_unreadable_redirects_file_stops_the_task_before_anything_changes(tmp_path):
+    cache = CacheFileSys(str(tmp_path))
+    cache.put_web(START, "page", png_bytes())
+    (tmp_path / "redirects.json").write_text("{not json")
+    with pytest.raises(CacheIndexError, match="recorded redirects"):
+        CacheFileSys(str(tmp_path))
+    with pytest.raises(CacheIndexError):
+        cache.put_web("https://example.com/new", "new", png_bytes())
+    with pytest.raises(CacheIndexError):
+        cache.remove(START)
+    assert index_on_disk(tmp_path) == {START: "web"} and len(list(tmp_path.glob("*.txt"))) == 1
+
+
+def test_a_final_url_that_is_another_spelling_of_a_stored_page_is_that_page(tmp_path):
+    cache = CacheFileSys(str(tmp_path))
+    cache.put_web(FINAL, "captured directly", png_bytes())
+    cache.put_web(START, "redirected", png_bytes(), final_url="http://www.example.org/Final/?utm_source=x")
+    assert cache.redirects() == {} and not (tmp_path / "redirects.json").exists()
+    # Stored under another spelling of a recorded final URL, a page deletes the record
+    cache.put_web(START, "redirected", png_bytes(), final_url="https://example.org/Other")
+    cache.put_web("http://www.example.org/Other/", "captured directly", png_bytes())
+    assert cache.redirects() == {} and json.loads((tmp_path / "redirects.json").read_text()) == {}
+    # A page that differs from the final URL in letter case only is another page
+    cache.put_web(START, "redirected", png_bytes(), final_url="https://example.org/final")
+    assert cache.redirects() == {"https://example.org/final": START}

@@ -557,7 +557,8 @@ def test_a_batch_leaves_out_urls_that_stop_needing_a_capture_while_queued(tmp_pa
         assert c.post("/api/review/task", json={"url": d_url, "status": "ok"}).json()["ok"]
         assert status() == {"active": True, "total": 6, "completed": 0, "remaining": 6,
                             "current": {"task_id": "task", "url": A}}
-        # The batch captures A, whose page redirected to C; the paper, B, C, and D are left out when they come up
+        # The batch captures A, whose page redirected to C, which now refers to A's page; the paper, B, C, and D
+        # are left out when they come up
         assert c.post("/api/capture", headers=EXTENSION, json=capture(A, "page a") | {
             "actual_url": c_url, "batch": True}).json()["ok"]
         assert status() == {"active": True, "total": 6, "completed": 5, "remaining": 1,
@@ -568,8 +569,8 @@ def test_a_batch_leaves_out_urls_that_stop_needing_a_capture_while_queued(tmp_pa
 
     fresh = CacheFileSys(str(task_dir))
     assert (fresh.has(paper), fresh.get_web(B, get_screenshot=False)[0]) == ("pdf", "captured by hand")
-    assert url_file(tmp_path, "reviewed.json") == {paper: "fixed", B: "fixed", d_url: "ok",
-                                                   A: "recaptured", c_url: "recaptured"}
+    assert url_file(tmp_path, "reviewed.json") == {paper: "fixed", B: "fixed", d_url: "ok", A: "recaptured"}
+    assert fresh.redirects() == {c_url: A} and fresh.failures().keys() == {d_url}
 
 
 def test_a_batch_capture_is_stored_only_while_the_batch_waits_for_its_url(tmp_path, no_batch):
@@ -673,7 +674,8 @@ def test_captures_and_uploads_need_an_http_url_and_never_store_the_servers_own_a
             assert c.post("/api/capture", json=capture(A) | {"actual_url": ignored}).json()["url"] == A
         assert set(url_states(c)) == {A}
         assert c.post("/api/capture", json=capture(A) | {"actual_url": B}).json()["url"] == A
-        assert set(url_states(c)) == {A, B}
+        assert set(url_states(c)) == {A}  # stored once, with B recorded as its final URL
+    assert CacheFileSys(str(task_dir)).redirects() == {B: A}
 
 
 @pytest.mark.parametrize("target", ["http://localhost:8000/", "http://127.0.0.2/", "http://[::1]:8000/",
@@ -702,11 +704,11 @@ def test_a_redirect_never_replaces_a_page_listed_under_a_url_that_differs_in_let
         response = c.post("/api/capture", json=capture(other, text="the other page") | {
             "actual_url": "https://example.com/news"}).json()
         assert response["url"] == other
-        assert set(url_states(c)) == {news, other, "https://example.com/news"}
+        assert set(url_states(c)) == {news, other}
     cache = CacheFileSys(str(task_dir))
     assert cache.get_web(news, get_screenshot=False)[0] == "the news page"
     assert cache.get_web(other, get_screenshot=False)[0] == "the other page"
-    assert cache.get_web("https://example.com/news", get_screenshot=False)[0] == "the other page"
+    assert cache.redirects() == {"https://example.com/news": other}
 
 
 def test_review_accepts_only_the_reviewers_statuses_for_listed_urls(tmp_path):
@@ -891,6 +893,95 @@ def test_a_url_that_differs_in_letter_case_from_a_stored_page_is_another_page(tm
     assert cache.failure("https://example.com/Gone", ignore_case=False) is not None
 
 
+def test_a_final_url_entry_is_hidden_while_its_redirect_resolves_and_back_when_the_page_goes(tmp_path):
+    failed, queued = "https://example.com/failed", "https://example.com/queued"
+    task_dir = tmp_path / "agent" / "task"
+    cache = CacheFileSys(str(task_dir))
+    cache.record_failure(failed, "HTTP 503")
+    cache.record_failure(B, "HTTP 503")
+
+    with client() as c:
+        c.post("/api/load", json={"path": str(tmp_path / "agent")})
+        assert c.post("/api/urls/task", json={"url": queued}).json()["ok"]
+        c.post("/api/capture", json=capture(A) | {"actual_url": failed})
+        c.post("/api/capture", json=capture(B) | {"actual_url": queued})
+        assert set(url_states(c)) == {A, B}
+        # Resetting A and deleting B bring back the entries their captures ended at
+        assert c.post("/api/reset/task", json={"url": A}).json()["ok"]
+        assert c.delete("/api/urls/task", params={"url": B}).json() == {"ok": True}
+        states = url_states(c)
+        assert (states[failed][0], states[queued][0], states[A][0]) == ("failed", "pending", "pending")
+        assert B not in states
+
+
+def test_edits_named_by_a_final_url_never_act_on_the_page_captured_there(tmp_path):
+    final = "https://example.com/final"
+    task_dir = tmp_path / "agent" / "task"
+    CacheFileSys(str(task_dir)).put_web(A, "page a", png_bytes(), final_url=final)
+
+    with client() as c:
+        c.post("/api/load", json={"path": str(tmp_path / "agent")})
+        assert c.get("/api/content/task/text", params={"url": final}).status_code == 200  # viewing is fine
+        for response in (c.delete("/api/urls/task", params={"url": final}),
+                         c.post("/api/reset/task", json={"url": final}),
+                         c.post("/api/flag/task", json={"url": final}),
+                         c.post("/api/urls/task/rename", json={"old_url": final, "new_url": A + "2"})):
+            assert response.status_code == 404
+        # Nor can it be added, or be a rename's target: it already resolves to A's capture
+        assert c.post("/api/urls/task", json={"url": final}).status_code == 409
+        assert c.post("/api/urls/task/rename", json={"old_url": A, "new_url": final}).status_code == 409
+        assert set(url_states(c)) == {A}
+    cache = CacheFileSys(str(task_dir))
+    assert cache.get_web(A, get_screenshot=False)[0] == "page a" and cache.redirects() == {final: A}
+    manager = CacheManager()
+    manager.load_agent_cache(tmp_path / "agent")
+    assert not manager.delete_url("task", final) and manager.reset_url("task", final) is None
+
+
+def test_a_capture_named_by_a_final_url_becomes_its_own_page(tmp_path):
+    final = "https://example.com/final"
+    task_dir = tmp_path / "agent" / "task"
+    cache = CacheFileSys(str(task_dir))
+    cache.record_failure(final, "HTTP 503")
+    cache.put_web(A, "page a", png_bytes(), final_url=final)
+
+    with client() as c:
+        c.post("/api/load", json={"path": str(tmp_path / "agent")})
+        assert c.post("/api/capture", json=capture(final, "the final page")).json()["url"] == final
+        assert {url: state[0] for url, state in url_states(c).items()} == {A: "web", final: "web"}
+    cache = CacheFileSys(str(task_dir))
+    assert cache.get_web(A, get_screenshot=False)[0] == "page a"
+    assert cache.get_web(final, get_screenshot=False)[0] == "the final page"
+    assert cache.redirects() == {} and cache.failures() == {}
+    assert url_file(tmp_path, "reviewed.json") == {final: "fixed"}
+
+
+def test_a_capture_named_by_another_spelling_of_a_final_url_updates_that_url_s_entry(tmp_path):
+    final = "https://example.com/final"
+    task_dir = tmp_path / "agent" / "task"
+    cache = CacheFileSys(str(task_dir))
+    cache.record_failure(final, "HTTP 503")
+    with client() as c:
+        c.post("/api/load", json={"path": str(tmp_path / "agent")})
+        assert c.post("/api/flag/task", json={"url": final}).json() == {"ok": True}
+        c.post("/api/capture", json=capture(A) | {"actual_url": final})
+        assert c.post("/api/capture", json=capture("http://www.example.com/final/", "the final page")
+                      ).json()["url"] == final
+    assert json.loads((task_dir / "index.json").read_text()) == {A: "web", final: "web"}
+    assert flags(tmp_path) == [] and url_file(tmp_path, "reviewed.json") == {A: "fixed", final: "fixed"}
+
+
+def test_renaming_a_page_moves_its_redirect_record(tmp_path):
+    final, new = "https://example.com/final", "https://example.com/renamed"
+    task_dir = tmp_path / "agent" / "task"
+    CacheFileSys(str(task_dir)).put_web(A, "page a", png_bytes(), final_url=final)
+
+    with client() as c:
+        c.post("/api/load", json={"path": str(tmp_path / "agent")})
+        assert c.post("/api/urls/task/rename", json={"old_url": A, "new_url": new}).json()["url"] == new
+    assert CacheFileSys(str(task_dir)).redirects() == {final: new}
+
+
 def test_a_failure_that_differs_in_letter_case_from_a_stored_page_is_listed(tmp_path):
     task_dir = tmp_path / "agent" / "task"
     cache = CacheFileSys(str(task_dir))
@@ -901,3 +992,18 @@ def test_a_failure_that_differs_in_letter_case_from_a_stored_page_is_listed(tmp_
         c.post("/api/load", json={"path": str(tmp_path / "agent")})
         assert url_states(c)["https://example.com/Page"][0] == "failed"
         assert c.get("/api/tasks").json()["tasks"][0]["failed_urls"] == 1
+
+
+def test_a_pdf_upload_records_the_url_the_pdf_came_from(tmp_path):
+    task_dir = tmp_path / "agent" / "task"
+    CacheFileSys(str(task_dir)).record_failure(A, "HTTP 503")
+
+    with client() as c:
+        c.post("/api/load", json={"path": str(tmp_path / "agent")})
+        for ignored in ("http://127.0.0.1:8000/x.pdf", "nonsense"):
+            assert c.post("/api/upload-pdf/task", params={"url": A, "actual_url": ignored},
+                          files={"file": ("a.pdf", b"%PDF-1.4")}).json()["ok"]
+        assert CacheFileSys(str(task_dir)).redirects() == {}
+        assert c.post("/api/upload-pdf/task", params={"url": A, "actual_url": "https://cdn.example.org/a.pdf"},
+                      files={"file": ("a.pdf", b"%PDF-1.4")}).json()["ok"]
+    assert CacheFileSys(str(task_dir)).redirects() == {"https://cdn.example.org/a.pdf": A}

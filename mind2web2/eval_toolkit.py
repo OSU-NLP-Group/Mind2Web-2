@@ -349,9 +349,11 @@ class BaseEvaluator:
     async def _capture_and_cache(self, url: str) -> Tuple[Optional[str], Optional[str]]:
         """Capture ``url`` in the browser under the webpage semaphore.
 
-        A captured page is stored in the cache and returned as
-        ``(screenshot_b64, text)``.  A failed capture is recorded in the cache
-        and returns ``(None, None)``.
+        A captured page is stored in the cache under ``url``, with the URL it
+        ended at after redirects recorded as its final URL (see
+        :meth:`CacheFileSys.put_web`), and returned as ``(screenshot_b64,
+        text)``.  A failed capture is recorded in the cache and returns
+        ``(None, None)``.
         """
         webpage_semaphore = getattr(self.semaphore, 'webpage', self.semaphore)
         async with webpage_semaphore:
@@ -364,7 +366,7 @@ class BaseEvaluator:
             self.logger.warning(f"Could not capture {url}: {capture.error}")
             await self._cache(self.cache.record_failure, url, capture.error, blocked=capture.blocked)
             return None, None
-        await self._cache(self.cache.put_web, url, capture.text, capture.screenshot_b64)
+        await self._cache(self.cache.put_web, url, capture.text, capture.screenshot_b64, capture.final_url)
         return capture.screenshot_b64, capture.text
 
     async def _fetch_live(self, url: str) -> Tuple[Optional[Union[str, List[str]]], Optional[str]]:
@@ -372,18 +374,19 @@ class BaseEvaluator:
 
         A URL that serves a PDF is downloaded; any other URL, including a
         PDF-looking URL whose response is not a PDF, is loaded in the browser.
+        A downloaded PDF is stored with its final URL, as a captured page is.
         The PDF check and download run under the webpage semaphore, like
         browser captures.
         """
         webpage_semaphore = getattr(self.semaphore, 'webpage', self.semaphore)
-        pdf_bytes = None
+        pdf_bytes = final_url = None
         async with webpage_semaphore:
             if await is_pdf(url):
-                pdf_bytes = await self.pdf_parser.fetch(url)
+                pdf_bytes, final_url = await self.pdf_parser.fetch_with_final_url(url)
                 if pdf_bytes is None:
                     self.logger.debug(f"{url} did not return a PDF; loading it in the browser")
         if pdf_bytes is not None:
-            await self._cache(self.cache.put_pdf, url, pdf_bytes)
+            await self._cache(self.cache.put_pdf, url, pdf_bytes, final_url)
             return await self.pdf_parser.extract(pdf_bytes)
         return await self._capture_and_cache(url)
 
