@@ -14,7 +14,6 @@ from tqdm import tqdm
 from . import results
 from .eval_toolkit import EvaluatorConfig, HarnessError, browser_for_run
 from .llm_client.judge import DEFAULT_JUDGE_MODEL, JudgeError
-from .metrics import is_success
 from .submission import answer_run, list_answer_files, metadata_path
 from .utils.cache_filesys import CacheFileSys
 from .utils.load_eval_script import load_eval_script
@@ -448,7 +447,6 @@ async def _evaluate_task(
             if progress is None:
                 bar.close()
 
-        _save_agent_task_summary(output_root / agent_name / task_id, ok_results)
         log.debug(f"{task_id}: {len(ok_results)} of {len(answer_paths)} answers scored",
                   extra={"task_id": task_id, "scored": len(ok_results), "answers": len(answer_paths)})
         return ok_results
@@ -520,27 +518,4 @@ class _CountingProgress:
     def update(self, n: int = 1) -> None:
         self.n += n
         self.bar.update(n)
-
-
-# --------------------------------------------------------------------------- #
-# Summary helpers                                                             #
-# --------------------------------------------------------------------------- #
-
-
-def _save_agent_task_summary(agent_task_dir: Path, task_results: List[Dict]):
-    """Save summary for a specific agent/task combination."""
-    if not task_results:
-        return
-
-    summary = []
-    for res in sorted(task_results, key=lambda x: x.get("answer_name", "")):
-        summary.append({
-            "answer_name": res["answer_name"],
-            "score": float(res["final_score"]),
-            "status": "success" if res["final_score"] > 0 else "failed",
-            "success": is_success(float(res["final_score"])),
-        })
-
-    with (agent_task_dir / "summary.json").open("w", encoding="utf-8") as fp:
-        json.dump(summary, fp, ensure_ascii=False, indent=4)
 

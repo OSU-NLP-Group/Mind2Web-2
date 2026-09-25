@@ -20,7 +20,8 @@ mind2web2/                   # Core Python package
 ├── submission.py            # Answers layout, answer metadata, task lists, submission validation
 ├── results.py               # Results layout and latest-result lookup
 ├── metrics.py               # Leaderboard metrics (Partial Completion, Success Rate, Pass@k, Time, Answer Length)
-├── cli/                     # The `mind2web2` command (validate, cache, evaluate, metrics)
+├── report.py                # HTML report of an agent's results, with the evidence of each check
+├── cli/                     # The `mind2web2` command (validate, cache, evaluate, metrics, report)
 ├── api_tools/               # External API integrations (arXiv, Google Maps, PDF)
 ├── llm_client/              # Judge LLM client (OpenAI, Azure OpenAI, OpenAI-compatible servers)
 ├── utils/                   # Shared utilities (caching, logging, browser, URLs)

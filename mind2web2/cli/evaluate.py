@@ -26,7 +26,8 @@ Unless ``--task`` selects tasks, the run ends by printing and saving the
 metrics over the selected tasks with ``--num-runs`` runs per task (by default
 the highest run index found), exactly as ``mind2web2 metrics`` computes them;
 they record the task list, if one was given, and include a leaderboard entry
-only for a task list with 3 runs.
+only for a task list with 3 runs.  It then writes the HTML page of the
+agent's results, ``<results-dir>/<agent>/report.html`` (``mind2web2 report``).
 
 Exits with status 0 when every answer of the selected tasks has a result; 1
 when some answer has none, because its evaluation raised, a judge request
@@ -47,6 +48,7 @@ from ..eval_runner import ScriptsNotFound, evaluate_tasks, resolve_scripts_dir
 from ..eval_toolkit import shared_browser
 from ..llm_client import DEFAULT_JUDGE_MODEL, DEFAULT_JUDGE_REASONING_EFFORT, JudgeConfig, LLMClient
 from ..metrics import collect_records, compute_metrics, format_report, save_metrics
+from ..report import write_report
 from ..submission import TaskInfo, list_answer_files
 from ..utils.logging_setup import close_run_logging, configure_run_logging
 from ..utils.page_info_retrieval import BatchBrowserManager
@@ -58,7 +60,8 @@ def register(subparsers) -> None:
     parser = subparsers.add_parser(
         "evaluate", help="Score an agent's answers with the tasks' eval scripts.",
         description="Run each task's eval script on the agent's answers and write one result per answer "
-                    "to <results-dir>/<agent>/<task_id>/, then print and save the metrics. An answer whose "
+                    "to <results-dir>/<agent>/<task_id>/, then print and save the metrics and write the HTML report "
+                    "(report.html) of the results. An answer whose "
                     "latest result scored the same answer with the same judge, script, and settings is skipped unless "
                     "--overwrite. Exits with status 1 if some answer has no result afterwards.",
     )
@@ -186,6 +189,8 @@ def run(args: argparse.Namespace) -> int:
 
         if scripts and not args.tasks:
             _report_metrics(args, tasks)
+        if scripts:
+            _write_report(args)
         return 1 if unscored else 0
     finally:
         close_run_logging()
@@ -203,6 +208,23 @@ async def _evaluate(args: argparse.Namespace, client: LLMClient, scripts: dict[s
             )
     finally:
         await browser.stop()
+
+
+def _write_report(args: argparse.Namespace) -> None:
+    """Write the HTML page of the agent's results (``mind2web2 report``), over every task with results.
+
+    Failed checks show thumbnails of the pages in the run's cache (``args.cache_dir``).
+    """
+    try:
+        path = write_report(args.results_dir, args.agent, cache_root=args.cache_dir)
+    except FileNotFoundError as exc:  # no answer has been evaluated
+        print(f"Report not written: {exc}", file=sys.stderr)
+        return
+    except Exception as exc:  # the report is an extra; the evaluation and its metrics stand without it
+        log.error("The report could not be written", exc_info=True, extra={"console": False})
+        print(f"Report not written: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return
+    print(f"Browse the results and the evidence of each check: {path}")
 
 
 def _describe_judge(judge: JudgeConfig) -> str:

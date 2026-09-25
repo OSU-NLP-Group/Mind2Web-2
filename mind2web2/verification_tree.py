@@ -1,6 +1,6 @@
 from __future__ import annotations
 from enum import Enum
-from typing import List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field, field_validator, PrivateAttr
 
 class AggregationStrategy(str, Enum):
@@ -10,7 +10,25 @@ class AggregationStrategy(str, Enum):
 
 
 class VerificationNode(BaseModel):
-    """One evaluation item in a rubric tree."""
+    """One evaluation item in a rubric tree.
+
+    ``evidence`` records what decided a leaf that :meth:`Evaluator.verify
+    <mind2web2.evaluator.Evaluator.verify>` checked, and is ``None`` on every
+    other node (aggregating nodes, custom nodes) and in results saved before it
+    was recorded.  It never affects the score.  Its keys:
+
+    - ``claim``: the claim verified; ``sources``: the URLs it was verified against (empty for none).
+    - ``checks``: one record per judgment, in the order they finished: ``url``
+      (``None`` without a source), ``passed``, ``votes`` (every vote cast, one
+      without majority voting), ``reasoning`` (of the vote that decided), and
+      ``note`` when no judgment was made or it did not count (an unavailable
+      page, a request too long for the judge, an error).  A claim with several
+      sources passes on the first source that supports it, and the checks of
+      the other sources stop, so they may be missing.
+    - ``skipped_because``: the id of the prerequisite whose failure skipped the check, either before it was
+      verified or, after it was verified, when its sequential parent counted it as 0 (see :meth:`compute_score`).
+    - ``error``: the error that failed the check before any judgment.
+    """
 
     # Core data
     id: str
@@ -20,6 +38,7 @@ class VerificationNode(BaseModel):
     status: Literal["passed", "failed", "partial", "skipped", 'initialized'] = 'initialized'
     strategy: AggregationStrategy = AggregationStrategy.PARALLEL
     children: List["VerificationNode"] = Field(default_factory=list)
+    evidence: Optional[Dict[str, Any]] = None
 
 
     _cached_score: Optional[float] = PrivateAttr(default=None)
@@ -111,6 +130,8 @@ class VerificationNode(BaseModel):
                         for c in self.children[valid_until + 1:]:
                             c.score, c.status = 0.0, "skipped"
                             c._cached_score = 0.0
+                            if c.evidence is not None and not c.evidence.get("skipped_because"):
+                                c.evidence = {**c.evidence, "skipped_because": self.children[valid_until].id}
                     child_scores = child_scores[:valid_until + 1] + [0] * (len(child_scores) - valid_until - 1)
 
             # -------- 4. Gate-then-Average ----------

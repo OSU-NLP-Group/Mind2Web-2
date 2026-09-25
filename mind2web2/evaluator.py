@@ -500,6 +500,7 @@ class Evaluator:
         try:
 
             if node:
+                node.evidence = None  # the evidence of an earlier verification of the node does not carry over
                 # Get all preceding leaf nodes
                 prerequisite_leaves = self._get_auto_preconditions(node, extra_prerequisites=extra_prerequisites)
 
@@ -508,6 +509,8 @@ class Evaluator:
                 if failed_prereq_id:
                     node.score = 0.0
                     node.status = "skipped"
+                    node.evidence = {"claim": claim, "sources": _normalize_sources(sources).urls, "checks": [],
+                                     "skipped_because": failed_prereq_id}
                     self.verifier.logger.info(
                         f"Check {node.id} skipped: check {failed_prereq_id}, which it depends on, did not pass",
                         extra={**verify_context, "skipped_due_to": failed_prereq_id, "status": "skipped"}
@@ -554,6 +557,13 @@ class Evaluator:
             if node:
                 node.score = 0.0
                 node.status = "failed"
+                try:
+                    urls = _normalize_sources(sources).urls
+                except TypeError:  # the sources themselves are what failed
+                    urls = []
+                # Keeps the checks this call recorded before the error
+                node.evidence = {**(node.evidence or {"claim": claim, "sources": urls, "checks": []}),
+                                 "error": f"{type(e).__name__}: {e}"}
             self.verifier.logger.error(f"{name} failed with an error, so it counts as failed: {e}",
                                        extra={**verify_context, "status": "error"}, exc_info=True)
             return False

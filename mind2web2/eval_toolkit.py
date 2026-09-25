@@ -9,7 +9,7 @@ import random
 import uuid
 from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
-from typing import AsyncIterator, Iterator, List, Type, Callable, Awaitable, Optional, Tuple, Union
+from typing import AsyncIterator, Iterator, List, Type, Callable, Awaitable, Optional, Sequence, Tuple, Union
 
 from PIL import Image
 from pydantic import BaseModel, ValidationError
@@ -529,6 +529,15 @@ def _capitalized(text: str) -> str:
     return text[:1].upper() + text[1:]
 
 
+def _check_record(url: Optional[str], passed: bool, votes: Sequence[bool] = (), reasoning: Optional[str] = None,
+                  note: Optional[str] = None) -> dict:
+    """One entry of ``VerificationNode.evidence["checks"]`` (see :class:`VerificationNode`)."""
+    record = {"url": url, "passed": passed, "votes": list(votes), "reasoning": reasoning}
+    if note is not None:
+        record["note"] = note
+    return record
+
+
 class Extractor(BaseEvaluator):
     """Responsible for structured information extraction from *answer* or URL."""
 
@@ -970,14 +979,17 @@ class Verifier(BaseEvaluator):
             verify_context: dict,
             node: Optional[VerificationNode] = None,
             cancellation_event: Optional[asyncio.Event] = None,
+            checks: Optional[list] = None,
             **kwargs
     ) -> bool:
         """Ask the judge (once, or by majority vote), log the outcome, and write it into ``node``.
 
         The outcome is one INFO record naming the check, with the claim and
-        the judge's reasoning, and the votes under majority voting.  A
-        cancelled check is marked skipped and re-raises; an error other than
-        a judge failure counts as failed; :class:`JudgeError` and
+        the judge's reasoning, and the votes under majority voting.  Its
+        evidence record (:func:`_check_record`) becomes ``node.evidence`` and
+        is appended to ``checks`` when given.  A cancelled check is marked
+        skipped and re-raises, without a record; an error other than a judge
+        failure counts as failed; :class:`JudgeError` and
         :class:`ContextLengthError` propagate.
         """
 
@@ -1017,6 +1029,8 @@ class Verifier(BaseEvaluator):
                              extra={**verify_context, "reasoning": final_result.reasoning, "passed": result,
                                     "votes": votes, "status": status})
 
+            self._record_check(_check_record(verify_context.get("url"), result, votes, final_result.reasoning),
+                               claim, node, checks)
             if node is not None:
                 node.score = 1.0 if result else 0.0
                 node.status = status
@@ -1044,11 +1058,23 @@ class Verifier(BaseEvaluator):
         except Exception as e:
             self.logger.error(f"{subject} failed with an error, so it counts as failed: {e}",
                               extra={**verify_context, "status": "error"}, exc_info=True)
+            self._record_check(_check_record(verify_context.get("url"), False, note=f"error: {e}"),
+                               claim, node, checks)
 
             if node is not None:
                 node.score = 0.0
                 node.status = "failed"
             return False
+
+    @staticmethod
+    def _record_check(record: dict, claim: str, node: Optional[VerificationNode],
+                      checks: Optional[list]) -> None:
+        """Append a check's evidence record to ``checks``, and make it ``node``'s evidence."""
+        if checks is not None:
+            checks.append(record)
+        if node is not None:
+            node.evidence = {"claim": claim, "sources": [record["url"]] if record["url"] else [],
+                             "checks": [record]}
 
     async def simple_verify(
             self,
@@ -1081,7 +1107,7 @@ class Verifier(BaseEvaluator):
                 claim, prompt, prompt, verify_context, node, cancellation_event, **kwargs
             )
         except ContextLengthError as e:
-            return self._fail_too_long(verify_context, e, node)
+            return self._fail_too_long(verify_context, e, claim, node, None)
 
     async def verify_by_url(
             self,
@@ -1091,13 +1117,16 @@ class Verifier(BaseEvaluator):
             cancellation_event: Optional[asyncio.Event] = None,
             op_id: Optional[str] = None,
             node_id: Optional[str] = None,
+            checks: Optional[list] = None,
             **kwargs
     ) -> bool:
         """Verify ``claim`` against the page at ``url``; an unavailable page fails the check.
 
         ``op_id`` identifies the check in the log (generated when None);
         ``node_id`` names the check in the log when ``node`` is None, as for one
-        source of a multi-URL check.
+        source of a multi-URL check.  The check's evidence record becomes
+        ``node.evidence`` and is appended to ``checks`` when given, as
+        :meth:`verify_by_urls` collects them.
         """
 
         operation_id = op_id or self._generate_operation_id(node)
@@ -1118,6 +1147,7 @@ class Verifier(BaseEvaluator):
         if screenshot_b64 is None or web_text is None:
             self.logger.info(f"{_capitalized(subject)} failed: the page is unavailable",
                              extra={**verify_context, "passed": False, "status": "failed"})
+            self._record_check(_check_record(url, False, note="the page is unavailable"), claim, node, checks)
             if node is not None:
                 node.score = 0.0
                 node.status = "failed"
@@ -1139,23 +1169,29 @@ class Verifier(BaseEvaluator):
             )
             message_content = self._build_message_content(prompt, screenshot_b64, params.use_screenshot)
             return self._core_verify(
-                claim, prompt, message_content, verify_context, node, cancellation_event, **kwargs
+                claim, prompt, message_content, verify_context, node, cancellation_event, checks, **kwargs
             )
 
         try:
             return await self._with_shorter_text_on_overflow(web_text, verify, verify_context)
         except ContextLengthError as e:
-            return self._fail_too_long(verify_context, e, node)
+            return self._fail_too_long(verify_context, e, claim, node, checks)
 
-    def _fail_too_long(self, context: dict, error: ContextLengthError, node: Optional[VerificationNode]) -> bool:
+    def _fail_too_long(self, context: dict, error: ContextLengthError, claim: str, node: Optional[VerificationNode],
+                       checks: Optional[list]) -> bool:
         """Fail the check that ``context`` describes because its request stayed too long for the judge; return ``False``.
 
-        The rejection is recorded (:meth:`_record_rejection`), and the check's
-        outcome is logged at INFO like that of any judged check.
+        The rejection is recorded (:meth:`_record_rejection`), the check's
+        outcome is logged at INFO like that of any judged check, and its
+        evidence record carries the rejection as its note (see
+        :meth:`_record_check`, which also appends it to ``checks`` when given).
         """
         self._record_rejection(context, error)
         self.logger.info(f"{_capitalized(_subject(context))} failed: the request was too long for the judge",
                          extra={**context, "passed": False, "status": "failed"})
+        self._record_check(_check_record(context.get("url"), False,
+                                         note=f"the request was too long for the judge: {error}"),
+                           claim, node, checks)
         if node is not None:
             node.score = 0.0
             node.status = "failed"
@@ -1173,6 +1209,7 @@ class Verifier(BaseEvaluator):
 
         Each page's check is logged under the node's id; once one passes, the
         others stop, and one INFO record gives the node's overall outcome.
+        ``node.evidence`` lists the checks that finished.
         """
         assert urls, "No URLs provided for verification"
 
@@ -1184,12 +1221,13 @@ class Verifier(BaseEvaluator):
 
         cancellation_event = asyncio.Event()
         node_id = verify_context["node_id"]
+        checks: list = []
 
         async def _check_one(url: str, url_index: int) -> tuple[str, bool]:
             sub_op_id = f"{main_op_id}_url_{url_index + 1}"
             try:
                 result = await self.verify_by_url(claim, url, None, cancellation_event, op_id=sub_op_id,
-                                                  node_id=node_id, **kwargs)
+                                                  node_id=node_id, checks=checks, **kwargs)
                 return url, result
             except asyncio.CancelledError:
                 return url, False
@@ -1198,6 +1236,7 @@ class Verifier(BaseEvaluator):
             except Exception as e:
                 self.logger.error(f"{subject} against {url} failed with an error, so it counts as failed: {e}",
                                   extra={"op_id": sub_op_id, "url": url}, exc_info=True)
+                checks.append(_check_record(url, False, note=f"error: {e}"))
                 return url, False
 
         # Create all tasks
@@ -1240,6 +1279,8 @@ class Verifier(BaseEvaluator):
         finally:
             # Ensure all tasks are completed
             await asyncio.gather(*tasks, return_exceptions=True)
+            if node is not None:
+                node.evidence = {"claim": claim, "sources": list(urls), "checks": checks}
 
         self.logger.info(
             f"{subject} failed: none of the {len(urls)} sources supports the claim",
