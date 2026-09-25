@@ -322,6 +322,21 @@ def test_a_page_none_of_whose_spellings_can_be_captured_gets_one_failure_record(
     assert CacheFileSys(str(tmp_path / "cache" / "agent" / "task")).failure(BARE)["blocked"] is True
 
 
+def test_retry_failed_retries_a_failure_that_differs_in_letter_case_from_a_stored_page(tmp_path, monkeypatch):
+    """A server may serve another page for ``/Page`` than for ``/page``, so the stored page does not hide its failure."""
+    stored, failed = "https://docs.test/page", "https://docs.test/Page"
+    write_answers(tmp_path, [f"Source: {stored}"])
+    cache = CacheFileSys(str(tmp_path / "cache" / "agent" / "task"))
+    cache.put_web(stored, "Stored page", png_b64())
+    cache.record_failure(failed, "HTTP 503")
+    site = CaseSensitiveSite({stored: "Stored page", failed: "The other page"})
+
+    [report] = asyncio.run(crawl.cache_answers(
+        "agent", ["task"], answers_root=tmp_path / "answers", cache_root=tmp_path / "cache", browser=site,
+        extractor=None, logger=LOGGER, show_progress=False, retry_failed=True))
+    assert (dict(report.outcomes), site.urls) == ({"cached": 1, "stored": 1}, [failed])
+
+
 def test_retry_failed_also_retries_failures_that_evaluation_recorded(tmp_path, monkeypatch):
     """Evaluation records failures for the URLs it captures live, which the task's URL list does not contain."""
     listed, unlisted = "https://docs.test/listed", "https://docs.test/Seen-Only-In-Evaluation"

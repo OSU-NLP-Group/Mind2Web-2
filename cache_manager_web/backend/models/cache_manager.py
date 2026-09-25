@@ -44,8 +44,7 @@ from dataclasses import dataclass
 import logging
 
 # _write_atomic: the cache's atomic, fsynced file replacement, used for the review-state files too
-from mind2web2.utils.cache_filesys import CacheFileSys, _raw_form, _write_atomic, storage_key
-from mind2web2.utils.url_tools import normalize_url_keep_case, normalize_url_simple
+from mind2web2.utils.cache_filesys import CacheFileSys, _write_atomic, page_form
 
 logger = logging.getLogger(__name__)
 
@@ -200,21 +199,22 @@ class CacheManager:
     def _has_content(self, cache: CacheFileSys) -> bool:
         """Whether the task has any stored page or failed URL."""
         try:
-            return bool(cache.get_all_urls() or cache.failures())
+            return bool(cache.get_all_urls() or cache.failures(ignore_case=False))
         except Exception:
             return False
 
     def _create_task_summary(self, task_id: str, cache: CacheFileSys) -> TaskSummary:
         """Create summary information for a task."""
         counts = cache.summary()
+        failed = len(cache.failures(ignore_case=False))
         pending = len(self._pending_urls(task_id, cache))
         return TaskSummary(
             task_id=task_id,
-            total_urls=counts["total_urls"] + counts["failed_urls"] + pending,
+            total_urls=counts["total_urls"] + failed + pending,
             web_urls=counts["web_pages"],
             pdf_urls=counts["pdf_pages"],
             cache_path=str(cache.task_dir),
-            failed_urls=counts["failed_urls"],
+            failed_urls=failed,
             pending_urls=pending,
         )
 
@@ -270,7 +270,7 @@ class CacheManager:
         url_infos = [URLInfo(url=url, task_id=task_id, content_type=cache.has(url))
                      for url in cache.get_all_urls()]
         url_infos += [URLInfo(url=url, task_id=task_id, content_type="failed", failure=record)
-                      for url, record in cache.failures().items()]
+                      for url, record in cache.failures(ignore_case=False).items()]
         url_infos += [URLInfo(url=url, task_id=task_id, content_type="pending")
                       for url in self._pending_urls(task_id, cache)]
         return url_infos
@@ -281,32 +281,24 @@ class CacheManager:
         That is the URL of the stored page that ``url`` refers to (see
         :meth:`CacheFileSys.lookup`), else the URL of its failure record (see
         :meth:`CacheFileSys.failure_url`), else a pending URL that names the
-        same page (see :func:`_page_form`).  Review state is recorded under
-        this URL.
+        same page (see :func:`page_form`).  Review state is recorded under
+        this URL.  Letter case is never disregarded, as the crawler never
+        disregards it: a server may serve different pages for URLs that
+        differ in letter case, so a page stored under one is not the page of
+        the other.
         """
         cache = self.get_task_cache(task_id)
         if not cache:
             return url
         try:
-            listed = cache.lookup(url) or cache.failure_url(url)
+            listed = cache.lookup(url, ignore_case=False) or cache.failure_url(url, ignore_case=False)
         except ValueError:  # cannot be parsed, so the cache has nothing for it
             listed = None
         if listed is not None:
             return listed
-        form = _page_form(url)
+        form = page_form(url)
         return next((pending for pending in sorted(self._pending.get(task_id, ()))
-                     if _page_form(pending) == form and _stored_state(cache, pending) is None), url)
-
-    def listed_in_other_case(self, task_id: str, url: str) -> bool:
-        """Whether the task lists the page that ``url`` names only under a URL that differs from it in letter case.
-
-        :meth:`canonical_url` disregards letter case as a last resort, which
-        suits a URL the reviewer chose from the list.  A server can serve
-        different pages for two such URLs, so a page reached otherwise, such
-        as the target of a redirect, must not be stored in the place of the
-        other one.
-        """
-        return _case_form(self.canonical_url(task_id, url)) != _case_form(url)
+                     if page_form(pending) == form and _stored_state(cache, pending) is None), url)
 
     def url_state(self, task_id: str, url: str) -> Optional[str]:
         """``"web"`` or ``"pdf"`` for a stored page, ``"failed"``, ``"pending"``, or ``None`` if the task does not have ``url``."""
@@ -323,17 +315,18 @@ class CacheManager:
         if not cache:
             return None, None
 
-        content_type = cache.has(url)
+        key = _stored_key(cache, url)
+        content_type = cache.has(key) if key is not None else None
         if content_type == "web":
             try:
-                text, screenshot = cache.get_web(url, get_screenshot)
+                text, screenshot = cache.get_web(key, get_screenshot)
                 return text, screenshot
             except Exception as e:
                 logger.error(f"Failed to get web content for {url}: {e}")
                 return None, None
         elif content_type == "pdf":
             try:
-                pdf_bytes = cache.get_pdf(url)
+                pdf_bytes = cache.get_pdf(key)
                 return None, pdf_bytes
             except Exception as e:
                 logger.error(f"Failed to get PDF content for {url}: {e}")
@@ -380,17 +373,17 @@ class CacheManager:
         """Add ``url`` to a task as pending, with nothing stored; ``False`` if the task already has its page.
 
         Whether ``pending.json`` lists another spelling of the page (the same
-        :func:`_page_form`) is decided from the file as it is when the URL is
+        :func:`page_form`) is decided from the file as it is when the URL is
         added, so a spelling that another manager of the folder added and
         this one has not read yet is found too.
         """
         cache = self.get_task_cache(task_id)
         if cache is None or self.url_state(task_id, url) is not None:
             return False
-        form = _page_form(url)
+        form = page_form(url)
 
         def add(urls: Set[str]) -> Set[str]:
-            listed = any(_page_form(pending) == form and _stored_state(cache, pending) is None for pending in urls)
+            listed = any(page_form(pending) == form and _stored_state(cache, pending) is None for pending in urls)
             return urls if listed else urls | {url}
 
         before, after = self._update_url_set(task_id, PENDING_FILE, add)
@@ -401,7 +394,7 @@ class CacheManager:
         """Delete a URL from a task: its stored page, its failure record, its pending entries, and its flag.
 
         The pending entries deleted are every spelling of the URL's page that
-        ``pending.json`` lists (the URLs with the same :func:`_page_form`).
+        ``pending.json`` lists (the URLs with the same :func:`page_form`).
         Returns ``False`` if the task had none of these.  Raises
         :class:`ReviewStateError` if a review-state file cannot be read.
         """
@@ -411,7 +404,7 @@ class CacheManager:
 
         try:
             target = self.canonical_url(task_id, url)
-            removed = cache.remove(target)
+            removed = cache.remove(target) if _stored_key(cache, target) is not None else None
             cleared = cache.clear_failure(target)
             flags_before, _ = self._update_url_set(task_id, FLAGS_FILE, lambda urls: urls - {target})
             pending_before, pending_after = self._update_url_set(
@@ -434,7 +427,7 @@ class CacheManager:
         What is deleted is the URL's stored page and its failure record; its
         flag, which was about the deleted page, is cleared.  The URL becomes
         the only pending entry of its page: other spellings of the page that
-        ``pending.json`` lists (the URLs with the same :func:`_page_form`)
+        ``pending.json`` lists (the URLs with the same :func:`page_form`)
         are dropped.  Returns ``"web"`` or ``"pdf"`` if a page was deleted,
         ``"failed"`` if only a failure record was, or ``None`` if the task had
         neither (then nothing changes).  Raises :class:`ReviewStateError` if a
@@ -447,7 +440,7 @@ class CacheManager:
 
         try:
             target = self.canonical_url(task_id, url)
-            content_type = cache.remove(target)
+            content_type = cache.remove(target) if _stored_key(cache, target) is not None else None
             if not cache.clear_failure(target) and content_type is None:
                 return None
             self._update_url_set(task_id, FLAGS_FILE, lambda urls: urls - {target})
@@ -647,36 +640,18 @@ def _still_pending(cache: CacheFileSys, urls: Set[str]) -> Set[str]:
 
 
 def _other_pages(urls: Set[str], url: str) -> Set[str]:
-    """The URLs of ``urls`` that name another page than ``url`` does (another :func:`_page_form`)."""
-    form = _page_form(url)
-    return {other for other in urls if _page_form(other) != form}
+    """The URLs of ``urls`` that name another page than ``url`` does (another :func:`page_form`)."""
+    form = page_form(url)
+    return {other for other in urls if page_form(other) != form}
 
 
-def _case_form(url: str) -> str:
-    """``url``'s case-preserving normalized form (:func:`normalize_url_keep_case`), or ``url`` if it cannot be parsed."""
+def _stored_key(cache: CacheFileSys, url: str) -> Optional[str]:
+    """The URL of the page stored for ``url`` in its own letter case (see :meth:`CacheManager.canonical_url`), or
+    ``None``, also for a URL that cannot be parsed."""
     try:
-        return normalize_url_keep_case(url)
+        return cache.lookup(url, ignore_case=False)
     except ValueError:
-        return url
-
-
-def _page_form(url: str) -> str:
-    """The form by which the Cache Manager tells that two URLs not yet stored name the same page.
-
-    It is the URL's normalized form (:func:`normalize_url_simple`), which the
-    cache also matches stored pages by, except for a URL whose storage key
-    :func:`storage_key` would change again (a percent-decoded ``#`` or
-    ``%XX``): such a URL is matched by its storage key with UTM parameters
-    removed, ``http`` made ``https``, and ``www.`` dropped, as the cache
-    matches such keys, because normalizing it can turn it into another page's
-    URL, as with ``.../search?q=C%23`` and ``.../search?q=C``.  A URL that
-    cannot be parsed is its own form.
-    """
-    try:
-        key = storage_key(url)
-        return _raw_form(key) if storage_key(key) != key else normalize_url_simple(url)
-    except ValueError:
-        return url
+        return None
 
 
 def _stored_state(cache: CacheFileSys, url: str) -> Optional[str]:
@@ -685,8 +660,8 @@ def _stored_state(cache: CacheFileSys, url: str) -> Optional[str]:
     A URL that cannot be parsed has neither, since nothing can be stored for it.
     """
     try:
-        if content_type := cache.has(url):
-            return content_type
-        return "failed" if cache.failure(url) is not None else None
+        if (key := _stored_key(cache, url)) is not None:
+            return cache.has(key)
+        return "failed" if cache.failure(url, ignore_case=False) is not None else None
     except ValueError:
         return None

@@ -97,6 +97,27 @@ def _raw_form(key: str) -> str:
     return base.replace("://www.", "://", 1)
 
 
+def page_form(url: str) -> str:
+    """The form by which two URLs of pages not yet stored are told to name the same page.
+
+    It is ``url`` under :func:`~mind2web2.utils.url_tools.normalize_url_keep_case`
+    (scheme, ``www.``, trailing slash, fragment, UTM parameters, and
+    percent-encoding disregarded, letter case kept, since a server may serve
+    different pages for URLs that differ in letter case, as :meth:`CacheFileSys.lookup`
+    assumes).  A URL whose :func:`storage_key` would change again (an encoded
+    ``#`` or ``%``, as in ``?q=C%23``) is instead its storage key under
+    :func:`_raw_form`, the form by which the cache matches such keys, since
+    normalizing it can give another page's URL (``?q=C``).  A URL that cannot
+    be parsed is its own form.  The crawler groups a task's spellings by this
+    form, and the Cache Manager keeps one pending entry per form.
+    """
+    try:
+        key = storage_key(url)
+        return _raw_form(key) if _is_raw(key) else normalize_url_keep_case(url)
+    except ValueError:
+        return url
+
+
 def _address(key: str) -> str:
     """A URL whose storage key is ``key``: the key itself, or a raw key re-encoded (see :func:`_is_raw`)."""
     if not _is_raw(key):
@@ -338,17 +359,19 @@ class CacheFileSys:
             return None
         return dict(failures.records[key])
 
-    def failure_url(self, url: str) -> Optional[str]:
-        """The URL of the record :meth:`failure` returns for ``url``, as :meth:`failures` lists it, or ``None``."""
-        key = self._failures.find(url)
-        if key is None or self._is_stored(_address(key)):
+    def failure_url(self, url: str, ignore_case: bool = True) -> Optional[str]:
+        """The URL of the record :meth:`failure` returns for ``url`` (with the same ``ignore_case``), as
+        :meth:`failures` lists it, or ``None``."""
+        key = self._failures.find(url, ignore_case)
+        if key is None or self._is_stored(_address(key), ignore_case):
             return None
         return _address(key)
 
-    def failures(self) -> Dict[str, Dict[str, Any]]:
-        """Every failure record that :meth:`failure` returns, by its URL as :meth:`lookup` returns URLs."""
+    def failures(self, ignore_case: bool = True) -> Dict[str, Dict[str, Any]]:
+        """Every failure record that :meth:`failure` returns (with the same ``ignore_case``), by its URL as
+        :meth:`lookup` returns URLs."""
         return {_address(key): dict(record) for key, record in self._failures.records.items()
-                if not self._is_stored(_address(key))}
+                if not self._is_stored(_address(key), ignore_case)}
 
     def record_failure(self, url: str, reason: str, *, blocked: bool = False) -> str:
         """Record that capturing ``url`` failed; returns the URL of the record, as :meth:`failures` lists it.

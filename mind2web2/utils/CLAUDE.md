@@ -19,7 +19,7 @@ task_dir/
 - `put_web(url, text, screenshot)` / `put_pdf(url, pdf_bytes)`: store a page under `storage_key(url)` (fragment removed, percent-decoded, trailing slash removed), replacing any page under the same key whatever its type; return the page's URL as `lookup` returns it.
 - `get_web(url)` → `(text, jpeg_bytes)`; `get_pdf(url)` → `pdf_bytes`; `has(url)` → `"web"` | `"pdf"` | `None`
 - `lookup(url)` → the URL of the cached page `url` refers to, or `None`; `get_all_urls()` lists these URLs; `remove(url)` deletes a page and its files. A URL from `lookup` or `get_all_urls` passed to any method addresses the same page.
-- `record_failure(url, reason, blocked=False)`, `failure(url)`, `failure_url(url)`, `failures()`, `clear_failure(url)`: URLs whose capture failed, matched like pages; `failures()` lists them by URL, as `lookup` returns URLs, and `failure_url` returns the listed URL of the record `url` matches. `blocked` means the site refused the automated browser, so a person may still capture the page. Storing a page clears its URL's failure record, a record is ignored while a page is stored for its URL, and `remove` deletes the ignored records whose URL matches the page by a rule that respects letter case (a URL differing in letter case only may be another page, so its record is kept).
+- `record_failure(url, reason, blocked=False)`, `failure(url)`, `failure_url(url)`, `failures()`, `clear_failure(url)`: URLs whose capture failed, matched like pages; `failures(ignore_case=True)` lists them by URL, as `lookup` returns URLs, and `failure_url` returns the listed URL of the record `url` matches. `blocked` means the site refused the automated browser, so a person may still capture the page. Storing a page clears its URL's failure record, a record is ignored while a page is stored for its URL, and `remove` deletes the ignored records whose URL matches the page by a rule that respects letter case (a URL differing in letter case only may be another page, so its record is kept).
 
 **Persistence:** every change is on disk, fsynced, when it returns. Each file is replaced atomically (a page's text and screenshot are two files), and each change, including deleting the files of a replaced page, runs under an `flock` on the task directory with `index.json` and `failures.json` re-read and merged, so the crawler, an eval run, and the Cache Manager can write to one task at the same time, and an interrupted crawl keeps the pages it stored. There is no separate save step. An `index.json` or `failures.json` that exists but cannot be read raises `CacheIndexError` instead of being treated as empty.
 
@@ -30,6 +30,8 @@ task_dir/
 4. a surface variant of `url` is the key (scheme, `www.`, UTM suffixes, percent-encoding forms, trailing slash). Runs only when 1-3 miss; it finds keys whose normalized form changes under percent-decoding.
 
 Rule 2 comes first so that, among pages stored for URLs that differ only in letter case (which a server may serve as different pages), a URL finds the one with its own letter case, and another only when there is none. `lookup(url, ignore_case=False)` and `failure(url, ignore_case=False)` skip rule 3, for callers such as the crawler that must not take a page of another letter case for this one; recording or clearing a failure always matches that way. Pages and failure records are matched by one implementation, `_UrlIndex`.
+
+**Pages not yet stored** (`page_form(url)`): the form by which the crawler groups a task's spellings of one page and the Cache Manager keeps one pending entry per page: `normalize_url_keep_case(url)`, so spellings that differ in letter case are different pages, as in rule 2; a spelling whose storage key is raw is matched by the raw-key form instead, as `lookup` matches it.
 
 ### page_info_retrieval.py — Browser Capture
 **`BatchBrowserManager`**: one shared Chromium browser (patchright) for concurrent captures.
@@ -47,7 +49,7 @@ Every log is written twice: a readable `.log` file (INFO and above) and a `.json
 - `ConsoleFormatter`: the message alone, with a `warning:` or `error:` prefix, colored only on a terminal without `NO_COLOR`.
 
 ### url_tools.py — URL Normalization & Extraction
-- `normalize_url_keep_case(url)`: A normalized form that keeps letter case (UTM parameters and fragment removed, percent-decoded, trailing slash removed, `https`, no `www.`); the crawler merges the spellings of one page under it, since paths that differ in letter case can be different pages (except a spelling whose storage key would change again, such as `?q=C%23`, which it merges by the cache's raw-key form)
+- `normalize_url_keep_case(url)`: A normalized form that keeps letter case (UTM parameters and fragment removed, percent-decoded, trailing slash removed, `https`, no `www.`); `cache_filesys.page_form()` is built on it
 - `normalize_url_simple(url)`: `normalize_url_keep_case(url)` lowercased; the form under which cache lookups disregard letter case
 - `remove_utm_parameters(url)`: Strip all `utm_*` query params
 - `normalize_url_for_browser(url)`: Ensure URL has protocol for navigation

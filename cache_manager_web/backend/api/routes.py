@@ -342,7 +342,7 @@ async def get_screenshot(task_id: str, url: str = Query(...)):
     cache = _cm.get_task_cache(task_id)
     if not cache:
         raise HTTPException(404, "Task not found")
-    ct = cache.has(url)
+    ct = _cm.url_state(task_id, url)
     if ct != "web" or data is None:
         raise HTTPException(404, "Screenshot not found")
     return Response(content=data, media_type="image/jpeg",
@@ -356,7 +356,7 @@ async def get_pdf(task_id: str, url: str = Query(...)):
     cache = _cm.get_task_cache(task_id)
     if not cache:
         raise HTTPException(404, "Task not found")
-    ct = cache.has(url)
+    ct = _cm.url_state(task_id, url)
     if ct != "pdf" or data is None:
         raise HTTPException(404, "PDF not found")
     return Response(content=data, media_type="application/pdf")
@@ -423,11 +423,6 @@ async def receive_capture(req: CaptureRequest, request: Request):
       capture of such a page is marked "recaptured" as usual, for a person
       to look at.
 
-    The capture is not stored for ``actual_url`` when the task lists that
-    page only under a URL that differs from it in letter case (see
-    :meth:`CacheManager.listed_in_other_case`), since a server can serve
-    another page there and the capture would replace it.
-
     Returns the URL the task lists the page under.
     """
     _require_loaded()
@@ -456,10 +451,7 @@ async def receive_capture(req: CaptureRequest, request: Request):
     if stored is None:
         raise HTTPException(500, "Failed to save capture")
     stored_urls = [stored]
-    if actual_url and actual_url != url and _cm.listed_in_other_case(req.task_id, actual_url):
-        logger.info(f"Did not store the capture of {url} for {actual_url}, where it redirected: the task lists "
-                    f"a URL that differs from it in letter case, which can be another page")
-    elif actual_url and actual_url != url:
+    if actual_url and actual_url != url:
         redirected = _cm.store_page(req.task_id, actual_url, text=text, screenshot=screenshot_bytes)
         if redirected is not None and redirected != stored:
             stored_urls.append(redirected)
@@ -986,7 +978,7 @@ def _issue_entry(cm: CacheManager, task_id: str, url: str, state: Optional[str])
         return {"issues": ["not captured yet"], "severity": "definite"}
     issues = []
     if state == "failed":
-        record = cm.get_task_cache(task_id).failure(url) or {}
+        record = cm.get_task_cache(task_id).failure(url, ignore_case=False) or {}
         issues.append(f"capture failed: {record.get('reason', 'unknown reason')}")
     if cm.is_flagged(task_id, url):
         issues.append("flagged")

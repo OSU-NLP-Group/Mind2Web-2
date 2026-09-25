@@ -397,6 +397,34 @@ def test_a_pending_spelling_with_an_encoded_hash_is_matched_as_the_cache_matches
     assert sorted(pending(tmp_path)) == ["https://example.com/search?q=C", "https://example.com/search?q=C%23"]
 
 
+def test_pending_spellings_that_differ_in_letter_case_are_different_pages(tmp_path):
+    """A server may serve different pages for ``/Docs/Page`` and ``/docs/page``, as the cache's lookup assumes."""
+    CacheFileSys(str(tmp_path / "agent" / "task")).put_web(A, "page a", png_bytes())
+    manager = CacheManager()
+    manager.load_agent_cache(tmp_path / "agent")
+
+    assert manager.add_pending_url("task", "https://example.com/Docs/Page")
+    assert manager.add_pending_url("task", "https://example.com/docs/page")
+    assert not manager.add_pending_url("task", "http://www.example.com/Docs/Page/")  # another spelling of the first
+    assert sorted(pending(tmp_path)) == ["https://example.com/Docs/Page", "https://example.com/docs/page"]
+    assert manager.canonical_url("task", "https://example.com/docs/page/") == "https://example.com/docs/page"
+
+
+def test_the_cache_manager_keeps_one_pending_entry_per_page_the_crawler_groups(tmp_path):
+    from mind2web2.crawl import group_url_variants
+    spellings = ["https://example.com/Docs/Page", "http://www.example.com/Docs/Page/", "https://example.com/docs/page",
+                 "https://example.com/search?q=C%23", "https://example.com/search?q=C",
+                 "http://www.example.com/search?q=C%23&utm_source=x", "https://example.com/new#top",
+                 "https://example.com/new?utm_medium=y"]
+    CacheFileSys(str(tmp_path / "agent" / "task")).put_web(A, "page a", png_bytes())
+    manager = CacheManager()
+    manager.load_agent_cache(tmp_path / "agent")
+
+    added = [url for url in spellings if manager.add_pending_url("task", url)]
+    groups = group_url_variants(spellings)
+    assert len(groups) == 5 and all(sum(url in added for url in group) == 1 for group in groups)
+
+
 def test_deleting_a_pending_url_deletes_its_other_spellings(tmp_path):
     task_dir = tmp_path / "agent" / "task"
     CacheFileSys(str(task_dir)).put_web(A, "page a", png_bytes())
@@ -670,14 +698,15 @@ def test_a_redirect_never_replaces_a_page_listed_under_a_url_that_differs_in_let
 
     with client() as c:
         c.post("/api/load", json={"path": str(tmp_path / "agent")})
-        # other redirected to /news, which a case-sensitive server can serve apart from /News
+        # other redirected to /news, which a case-sensitive server can serve apart from /News: another page
         response = c.post("/api/capture", json=capture(other, text="the other page") | {
             "actual_url": "https://example.com/news"}).json()
         assert response["url"] == other
-        assert set(url_states(c)) == {news, other}
+        assert set(url_states(c)) == {news, other, "https://example.com/news"}
     cache = CacheFileSys(str(task_dir))
     assert cache.get_web(news, get_screenshot=False)[0] == "the news page"
     assert cache.get_web(other, get_screenshot=False)[0] == "the other page"
+    assert cache.get_web("https://example.com/news", get_screenshot=False)[0] == "the other page"
 
 
 def test_review_accepts_only_the_reviewers_statuses_for_listed_urls(tmp_path):
@@ -837,3 +866,38 @@ def test_review_state_changes_from_several_processes_are_all_kept(tmp_path):
     with ProcessPoolExecutor(max_workers=4) as pool:
         list(pool.map(_add_pending_urls, [str(task_dir)] * 4, range(4), [20] * 4))
     assert len(json.loads((task_dir / PENDING_FILE).read_text())) == 80
+
+
+def test_a_url_that_differs_in_letter_case_from_a_stored_page_is_another_page(tmp_path):
+    """The Cache Manager matches URLs in their own letter case, as the crawler does."""
+    news, lower = "https://example.com/News", "https://example.com/news"
+    task_dir = tmp_path / "agent" / "task"
+    cache = CacheFileSys(str(task_dir))
+    cache.put_web(news, "the news page", png_bytes())
+    cache.record_failure("https://example.com/Gone", "HTTP 404")
+
+    with client() as c:
+        c.post("/api/load", json={"path": str(tmp_path / "agent")})
+        assert c.post("/api/urls/task", json={"url": lower}).json()["content_type"] == "pending"
+        assert c.post("/api/urls/task", json={"url": "https://example.com/gone"}).json()["content_type"] == "pending"
+        assert c.get("/api/content/task/screenshot", params={"url": lower}).status_code == 404
+        assert url_states(c)[lower] == ("pending", ["not captured yet"], "definite")
+        # deleting and resetting the pending URL leave the page stored under the other letter case alone
+        assert c.post("/api/reset/task", json={"url": lower}).status_code == 409  # already pending: nothing stored
+        assert c.delete("/api/urls/task", params={"url": lower}).json() == {"ok": True}
+        assert c.delete("/api/urls/task", params={"url": lower}).status_code == 404
+    cache = CacheFileSys(str(task_dir))
+    assert cache.get_web(news, get_screenshot=False)[0] == "the news page"
+    assert cache.failure("https://example.com/Gone", ignore_case=False) is not None
+
+
+def test_a_failure_that_differs_in_letter_case_from_a_stored_page_is_listed(tmp_path):
+    task_dir = tmp_path / "agent" / "task"
+    cache = CacheFileSys(str(task_dir))
+    cache.put_web("https://example.com/page", "page", png_bytes())
+    cache.record_failure("https://example.com/Page", "HTTP 503")
+
+    with client() as c:
+        c.post("/api/load", json={"path": str(tmp_path / "agent")})
+        assert url_states(c)["https://example.com/Page"][0] == "failed"
+        assert c.get("/api/tasks").json()["tasks"][0]["failed_urls"] == 1
