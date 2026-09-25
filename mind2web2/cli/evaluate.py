@@ -44,7 +44,7 @@ from pathlib import Path
 from . import _common
 from ..eval_runner import ScriptsNotFound, evaluate_tasks, resolve_scripts_dir
 from ..eval_toolkit import shared_browser
-from ..llm_client import DEFAULT_JUDGE_MODEL, JudgeConfig, LLMClient
+from ..llm_client import DEFAULT_JUDGE_MODEL, DEFAULT_JUDGE_REASONING_EFFORT, JudgeConfig, LLMClient
 from ..metrics import collect_records, compute_metrics, format_report, save_metrics
 from ..submission import TaskInfo, list_answer_files
 from ..utils.page_info_retrieval import BatchBrowserManager
@@ -83,7 +83,8 @@ def register(subparsers) -> None:
                             "(default: %(default)s).")
     judge.add_argument("--judge-reasoning-effort", default=None,
                        help="reasoning_effort sent with every judge request, for reasoning models "
-                            "(default: the model's own default).")
+                            f"(default: {DEFAULT_JUDGE_REASONING_EFFORT!r} for {DEFAULT_JUDGE_MODEL}, "
+                            "the model's own default for any other model).")
     judge.add_argument("--judge-temperature", type=float, default=None,
                        help="temperature sent with every judge request, for non-reasoning models "
                             "(default: not sent).")

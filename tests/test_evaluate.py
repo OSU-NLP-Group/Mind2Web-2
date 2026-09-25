@@ -195,6 +195,7 @@ def test_evaluate_scores_every_answer_and_saves_the_metrics(tmp_path, run_evalua
 
     assert run_evaluate() == 0  # another judge: evaluated again, the earlier results kept aside
     assert FakeJudge.instances[-1].calls > 0
+    assert FakeJudge.instances[-1].kwargs["judge"].reasoning_effort == "max"
     results_dir = tmp_path / "results" / "agent" / "t1" / "answer_2" / "results"
     assert [json.loads(p.read_text())["judge"]["model"] for p in results_dir.glob("*.json")] == [DEFAULT_JUDGE_MODEL]
     assert [json.loads(p.read_text())["judge"]["model"]

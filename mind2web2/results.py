@@ -32,7 +32,7 @@ SUPERSEDED_DIR = "superseded"
 #: changing an eval script or an :class:`~mind2web2.evaluator.EvaluatorConfig`
 #: default: the prompts and page handling in ``eval_toolkit``, PDF rendering,
 #: what a failed capture means to the judge, or how rubric scores aggregate.
-SCORING_VERSION = 2
+SCORING_VERSION = 3
 
 
 def answer_base(answer_name: str) -> str:
