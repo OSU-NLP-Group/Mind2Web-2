@@ -7,9 +7,9 @@ import io
 import logging
 import random
 import uuid
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
-from typing import Iterator, List, Type, Callable, Awaitable, Optional, Tuple, Union
+from typing import AsyncIterator, Iterator, List, Type, Callable, Awaitable, Optional, Tuple, Union
 
 from PIL import Image
 from pydantic import BaseModel, ValidationError
@@ -19,7 +19,7 @@ from .llm_client.base_client import LLMClient
 from .llm_client.judge import (
     DEFAULT_JUDGE_MODEL, ContextLengthError, JudgeContentError, JudgeError, JudgeUsage,
 )
-from .utils.cache_filesys import CacheFileSys
+from .utils.cache_filesys import CacheFileSys, CacheIndexError
 from .utils.misc import (
     text_dedent, normalize_url_markdown
 )
@@ -59,10 +59,30 @@ TEXT_ENCODING = "o200k_base"
 TRUNCATION_MARKER = "\n… [CONTENT TRUNCATED]"
 
 
+class HarnessError(JudgeError):
+    """The evaluation environment failed while loading a page, so the answer cannot be scored now.
+
+    Raised when the tokenizer that page text is counted in cannot be loaded
+    (``tiktoken`` downloads it on first use), when the browser fails outside a
+    page load, for example because it cannot be launched, or when the task's
+    page cache cannot be read or written (a disk error, an index file that
+    cannot be parsed, or a page file that the index lists but that is
+    missing, as when another process changes the cache during the run).
+    Such a failure says nothing about the answer, so it must not fail the
+    check that loaded the page.  It subclasses :class:`JudgeError` so that every handler that
+    lets a judge failure propagate does the same for it: the answer is
+    reported as not scored and evaluated again on the next run.
+    """
+
+
 @functools.lru_cache(maxsize=1)
 def _text_encoding():
-    import tiktoken  # loads (and on first use downloads) the encoding, so only when a text needs counting
-    return tiktoken.get_encoding(TEXT_ENCODING)
+    """The :data:`TEXT_ENCODING` tokenizer; raises :class:`HarnessError` if it cannot be loaded."""
+    try:
+        import tiktoken  # loads (and on first use downloads) the encoding, so only when a text needs counting
+        return tiktoken.get_encoding(TEXT_ENCODING)
+    except Exception as exc:
+        raise HarnessError(f"The {TEXT_ENCODING} tokenizer cannot be loaded: {exc}") from exc
 
 
 def truncate_to_tokens(text: str, max_tokens: int) -> str:
@@ -146,6 +166,26 @@ def shared_browser(manager: BatchBrowserManager) -> Iterator[BatchBrowserManager
 def _new_browser() -> BatchBrowserManager:
     """The browser an evaluator creates for itself when no browser is given or shared."""
     return BatchBrowserManager(headless=False, max_concurrent_pages=50, max_retries=1)
+
+
+@asynccontextmanager
+async def browser_for_run(max_concurrent_pages: int = 5) -> AsyncIterator[None]:
+    """Share one browser among the evaluators created inside this block, unless one is already shared.
+
+    Outside :func:`shared_browser`, a browser with at most
+    ``max_concurrent_pages`` pages open is shared for the block and stopped at
+    its end; it is launched only if a page has to be captured live.  Inside
+    :func:`shared_browser`, the block uses that browser and stops nothing.
+    """
+    if _shared_browser.get() is not None:
+        yield
+        return
+    manager = BatchBrowserManager(headless=False, max_concurrent_pages=max_concurrent_pages, max_retries=1)
+    try:
+        with shared_browser(manager):
+            yield
+    finally:
+        await manager.stop()
 
 
 class EvaluatorConfig:
@@ -270,10 +310,14 @@ class BaseEvaluator:
             except ContextLengthError:
                 if shrink == self.config.max_text_shrinks:
                     raise
-                budget = min(budget, await asyncio.to_thread(count_tokens, web_text)) // 2
-                self.logger.warning(f"[{op_id}] The request is too long for the judge; "
-                                    f"sending it again with the page text cut to {budget} tokens")
-                web_text = await asyncio.to_thread(truncate_to_tokens, web_text, budget)
+                try:
+                    budget = min(budget, await asyncio.to_thread(count_tokens, web_text)) // 2
+                    self.logger.warning(f"[{op_id}] The request is too long for the judge; "
+                                        f"sending it again with the page text cut to {budget} tokens")
+                    web_text = await asyncio.to_thread(truncate_to_tokens, web_text, budget)
+                except HarnessError as exc:
+                    self._count_harness_failure("Shortening a page text", exc)
+                    raise
 
     def _build_message_content(self, prompt: str, screenshot_b64: List[str], use_screenshot: bool = True):
         """Build message content"""
@@ -307,12 +351,15 @@ class BaseEvaluator:
         webpage_semaphore = getattr(self.semaphore, 'webpage', self.semaphore)
         async with webpage_semaphore:
             await asyncio.sleep(0.2 * random.random())
-            capture = await self.browser_manager.capture(url, self.logger)
+            try:
+                capture = await self.browser_manager.capture(url, self.logger)
+            except Exception as exc:  # a failed page load is returned in the Capture; this is the browser itself
+                raise HarnessError(f"The browser failed while capturing {url}: {exc}") from exc
         if not capture.ok:
             self.logger.warning(f"Could not capture {url}: {capture.error}")
-            await asyncio.to_thread(self.cache.record_failure, url, capture.error, blocked=capture.blocked)
+            await self._cache(self.cache.record_failure, url, capture.error, blocked=capture.blocked)
             return None, None
-        await asyncio.to_thread(self.cache.put_web, url, capture.text, capture.screenshot_b64)
+        await self._cache(self.cache.put_web, url, capture.text, capture.screenshot_b64)
         return capture.screenshot_b64, capture.text
 
     async def _fetch_live(self, url: str) -> Tuple[Optional[Union[str, List[str]]], Optional[str]]:
@@ -331,7 +378,7 @@ class BaseEvaluator:
                 if pdf_bytes is None:
                     self.logger.info(f"{url} did not return a PDF; loading it in the browser")
         if pdf_bytes is not None:
-            await asyncio.to_thread(self.cache.put_pdf, url, pdf_bytes)
+            await self._cache(self.cache.put_pdf, url, pdf_bytes)
             return await self.pdf_parser.extract(pdf_bytes)
         return await self._capture_and_cache(url)
 
@@ -353,21 +400,66 @@ class BaseEvaluator:
         screenshot that cannot be processed this way, such as a corrupt file,
         is left out rather than sent unchecked.  Text longer than
         ``config.max_text_tokens`` tokens is cut off (:func:`truncate_to_tokens`).
-        """
+        A URL that cannot be parsed is unavailable.
 
+        Raises :class:`HarnessError` when the tokenizer, the browser, or the
+        page cache fails, logs it and counts it in ``usage.harness_failures``;
+        once one page load of the answer has failed this way, later ones raise
+        it at once.
+        """
+        if self.usage.harness_failures:
+            raise HarnessError("An earlier page load for this answer failed because of the evaluation "
+                               "environment; no further pages are loaded for it")
+        try:
+            return await self._load_page(url, cancellation_event)
+        except HarnessError as exc:
+            self._count_harness_failure(f"Loading {url}", exc)
+            raise
+
+    def _count_harness_failure(self, action: str, exc: HarnessError) -> None:
+        """Count ``exc`` in ``usage.harness_failures`` and log that ``action`` failed because of the environment."""
+        self.usage.harness_failures += 1
+        self.logger.error(f"{action} failed because of the evaluation environment; "
+                          f"the answer will not be scored: {exc}")
+
+    async def _cache(self, method: Callable, *args, in_thread: bool = True, **kwargs):
+        """Call a method of the task's page cache, in a worker thread unless ``in_thread`` is false.
+
+        A disk error, an index file that cannot be parsed, or a page file that
+        the index lists but that is missing (``OSError``, including
+        ``FileNotFoundError``, and :class:`CacheIndexError`) is raised as
+        :class:`HarnessError`: it says nothing about the page, so it must not
+        fail a check, and evaluating again after the cache is repaired scores
+        the answer.  Other errors,
+        such as ``KeyError`` or ``ValueError``, propagate unchanged.
+        """
+        try:
+            if in_thread:
+                return await asyncio.to_thread(method, *args, **kwargs)
+            return method(*args, **kwargs)
+        except (OSError, CacheIndexError) as exc:
+            raise HarnessError(f"The page cache failed in {method.__name__}: {exc}") from exc
+
+    async def _load_page(self, url: str, cancellation_event: Optional[asyncio.Event]):
+        """The body of :meth:`get_page_info`, without the accounting of :class:`HarnessError`."""
         url = normalize_url_markdown(url)
         self.logger.info(f"🌍Retrieving page info for {url}")
         if cancellation_event and cancellation_event.is_set():
             self.logger.debug(f"Page info retrieval cancelled for {url}")
             return None, None
 
-        content_type = self.cache.has(url)
+        try:
+            content_type = await self._cache(self.cache.has, url, in_thread=False)
+        except ValueError as exc:
+            self.logger.warning(f"{url} is unavailable: it cannot be parsed ({exc})")
+            return None, None
         if content_type == "pdf":
-            screenshot_b64, page_text = await self.pdf_parser.extract(self.cache.get_pdf(url))
+            pdf_bytes = await self._cache(self.cache.get_pdf, url)
+            screenshot_b64, page_text = await self.pdf_parser.extract(pdf_bytes)
         elif content_type == "web":
-            page_text, screenshot_bytes = self.cache.get_web(url)
+            page_text, screenshot_bytes = await self._cache(self.cache.get_web, url)
             screenshot_b64 = base64.b64encode(screenshot_bytes).decode()
-        elif (failure := self.cache.failure(url)) is not None:
+        elif (failure := await self._cache(self.cache.failure, url, in_thread=False)) is not None:
             self.logger.warning(f"{url} is unavailable: its capture failed ({failure['reason']})")
             return None, None
         else:
@@ -814,25 +906,6 @@ class Verifier(BaseEvaluator):
             num_trials=kwargs.get('num_trials') or self.config.default_num_trials,
             use_screenshot=kwargs.get('use_screenshot', self.config.default_use_screenshot),
         )
-
-    async def _execute_verification(
-            self,
-            verification_func: Callable[[], Awaitable[BinaryEvalResult]],
-            majority_vote: bool,
-            num_trials: int,
-            cancellation_event: Optional[asyncio.Event] = None,
-    ) -> bool:
-        """Execute verification logic, support external cancellation"""
-        if majority_vote and num_trials > 1:
-            result = await self._majority_vote(
-                verification_func,
-                cancellation_event,
-                num_trials=num_trials
-            )
-            return result.result
-        else:
-            result = await verification_func()
-            return result.result
 
     def _generate_operation_id(self, node: Optional[VerificationNode] = None) -> str:
         """Generate operation ID"""

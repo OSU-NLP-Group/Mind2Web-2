@@ -114,6 +114,11 @@ class JudgeUsage:
     "reason"}``: the operation that made the request, the page it contained
     (``None`` for a request without one), and the error message.  Rejected
     requests are not in ``requests`` or ``failed_requests``.
+
+    ``harness_failures`` counts the page loads that failed because of the
+    evaluation environment (``mind2web2.eval_toolkit.HarnessError``), not
+    because of the answer; like ``failed_requests``, any of them leaves the
+    answer unscored.
     """
 
     requests: int = 0
@@ -125,6 +130,7 @@ class JudgeUsage:
     reasoning_tokens: int = 0
     served_models: dict[str, int] = field(default_factory=dict)
     rejections: list[dict[str, Any]] = field(default_factory=list)
+    harness_failures: int = 0
 
     def record(self, tokens: dict[str, Any]) -> None:
         """Add one successful request with the token counts and served model returned by the client."""

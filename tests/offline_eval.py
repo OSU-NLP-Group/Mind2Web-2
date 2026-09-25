@@ -199,12 +199,6 @@ class SyntheticCache:
         self.requested.append(url)
         return "web"
 
-    def has_web(self, url: str) -> bool:
-        return True
-
-    def has_pdf(self, url: str) -> bool:
-        return False
-
     def get_web(self, url: str, get_screenshot: bool = True):
         return f"Offline cached page for {url}.", (_TINY_JPEG if get_screenshot else None)
 

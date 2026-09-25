@@ -21,9 +21,10 @@ from local_site import LocalSite, Route
 from mind2web2 import cli, crawl
 from mind2web2.api_tools.tool_pdf import PDFParser
 from mind2web2.cli import cache as cache_command
-from mind2web2.crawl import TaskUrls, discover_task_urls, group_url_variants
+from mind2web2.crawl import LLMUrlExtractor, TaskUrls, discover_task_urls, group_url_variants
 from mind2web2.utils.cache_filesys import CacheFileSys
 from mind2web2.utils.page_info_retrieval import Capture
+from mind2web2.utils.url_tools import URLs
 
 LOGGER = logging.getLogger("test")
 
@@ -80,6 +81,27 @@ def test_a_spelling_with_an_encoded_hash_is_not_grouped_with_the_page_it_decodes
         ["https://example.com/search?q=C%23", "https://example.com/search?q=C%23#top",
          "http://www.example.com/search?q=C%23&utm_source=x"],
     ]
+
+def test_a_spelling_that_cannot_be_parsed_is_a_group_of_its_own():
+    assert group_url_variants(["https://a.com/x", "http://[::1/x", "http://a.com/x/"]) == [
+        ["https://a.com/x", "http://a.com/x/"], ["http://[::1/x"]]
+
+
+class UrlModel:
+    """A URL-extraction client whose models return the given URLs."""
+
+    def __init__(self, urls):
+        self.urls = urls
+
+    async def async_response(self, **kwargs):
+        return URLs(urls=self.urls)
+
+
+def test_urls_a_model_returns_that_cannot_be_parsed_are_dropped(caplog):
+    extractor = LLMUrlExtractor(UrlModel(["https://a.com/x", "http://[::1/x"]), models=["m"])
+    with caplog.at_level(logging.WARNING):
+        assert asyncio.run(extractor.extract("answer", LOGGER)) == (["https://a.com/x"], True)
+    assert "cannot be parsed: ['http://[::1/x']" in caplog.text
 
 
 def test_the_regex_spelling_wins_and_llm_urls_are_added(tmp_path):
@@ -400,6 +422,16 @@ class StubBrowser:
 
     async def stop(self):
         self.stopped += 1
+
+
+def test_cache_command_sends_url_extraction_to_the_given_base_url(tmp_path, monkeypatch, capsys):
+    clients = []
+    monkeypatch.setattr(cache_command, "BatchBrowserManager", StubBrowser)
+    monkeypatch.setattr(cache_command, "LLMClient", lambda **kwargs: clients.append(kwargs))
+    monkeypatch.setattr(cache_command, "LLMUrlExtractor", lambda client, models: FakeExtractor([]))
+    write_answers(tmp_path, ["No links."])
+    assert run_cache(tmp_path, "--llm-base-url", "http://localhost:4000") == 0
+    assert clients == [{"provider": "openai", "is_async": True, "base_url": "http://localhost:4000"}]
 
 
 def run_cache(tmp_path, *options: str) -> int:

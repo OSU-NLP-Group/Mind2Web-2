@@ -23,12 +23,16 @@ import pytest
 
 from offline_eval import POLICIES, render_result
 
+from mind2web2.results import EVAL_DATE_VARIABLE
+
 TESTS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = TESTS_DIR.parent
 OFFLINE_EVAL = TESTS_DIR / "offline_eval.py"
 DEV_SET_DIR = REPO_ROOT / "eval_scripts" / "dev_set"
 DEFAULT_GOLDEN_DIR = TESTS_DIR / "golden" / "offline"
 MAX_DIFF_LINES = 40
+#: The scripts' environment, without a pinned evaluation date, which would change the date-dependent goldens.
+_SCRIPT_ENV = {k: v for k, v in os.environ.items() if k != EVAL_DATE_VARIABLE}
 
 
 def _golden_dir(config, script: Path) -> Path | None:
@@ -49,7 +53,7 @@ def test_eval_script_offline(eval_script: Path, policy: str, request):
         "--answers-dir", str(config.getoption("--answers-dir")),
     ]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=REPO_ROOT)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=REPO_ROOT, env=_SCRIPT_ENV)
     except subprocess.TimeoutExpired:
         pytest.fail(f"{eval_script.name} did not finish within {timeout:.0f}s under policy "
                     f"{policy!r}; the script probably loops forever on this input")

@@ -88,7 +88,9 @@ class LLMUrlExtractor:
 
     A model whose request fails contributes nothing (the failure is logged, and
     :meth:`extract` reports the extraction as incomplete), so one unavailable
-    model lowers recall without stopping the crawl.
+    model lowers recall without stopping the crawl.  A URL that a model
+    returns but that cannot be parsed, such as one with an unclosed IPv6
+    bracket, is logged and dropped.
     """
 
     def __init__(self, client: LLMClient, models: Sequence[str] = DEFAULT_URL_MODELS,
@@ -113,10 +115,15 @@ class LLMUrlExtractor:
                               {"role": "user", "content": answer_text}],
                     response_format=URLs,
                 )
-            return result.urls or []
+            urls = result.urls or []
         except Exception as exc:
             logger.warning(f"URL extraction with {model} failed: {exc}")
             return None
+        unparsable = [url for url in urls if not _parses(url)]
+        if unparsable:
+            logger.warning(f"Dropped {len(unparsable)} URL(s) that {model} returned but that cannot be parsed: "
+                           f"{unparsable}")
+        return [url for url in urls if url not in unparsable]
 
 
 def _page_form(url: str) -> str:
@@ -151,7 +158,8 @@ def group_url_variants(urls: Iterable[str], preferred: Collection[str] = ()) -> 
     since decoding it can give another page's URL (``?q=C``).  Within a group, spellings in ``preferred`` come first, then
     ``https`` spellings, then the shortest, then the alphabetically first.
     Groups are returned in order of their first spelling in ``urls``, and a
-    spelling given several times appears once.
+    spelling given several times appears once.  A spelling that cannot be
+    parsed forms a group of its own.
     """
     groups: Dict[str, List[str]] = {}
     for url in dict.fromkeys(urls):
@@ -338,6 +346,15 @@ async def _store_page(url: str, cache: CacheFileSys, pdf_parser: PDFParser,
         return None
     logger.warning(f"Could not capture {url}: {capture.error}")
     return capture
+
+
+def _parses(url: str) -> bool:
+    """Whether :func:`~mind2web2.utils.url_tools.normalize_url_keep_case` can parse ``url``."""
+    try:
+        normalize_url_keep_case(url)
+        return True
+    except ValueError:
+        return False
 
 
 @dataclass
