@@ -487,27 +487,15 @@ class Evaluator:
             raise ValueError("Evaluator not initialized. Call initialize() first.")
 
         main_op_id = self._generate_verification_op_id(node)
-
-        # Add verification start context log
+        name = f"Check {node.id}" if node else "A check without a node"
         verify_context = {
-            "op_id": main_op_id,  # Add op_id
-            "id": node.id if node else None,
+            "op_id": main_op_id,
+            "node_id": node.id if node else None,
             "node_desc": node.desc if node else None,
-            "claim_preview": claim[:150] + "..." if len(claim) > 150 else claim,
-            "has_sources": sources is not None,
+            "claim": claim,
             "source_count": len(sources) if isinstance(sources, list) else (1 if sources else 0)
         }
-
-        if node:
-            self.verifier.logger.info(  # Changed to info level, more visible
-                f"🚀 [{main_op_id}] Starting verification for node {node.id}",
-                extra=verify_context
-            )
-        else:
-            self.verifier.logger.info(
-                f"🚀 [{main_op_id}] Starting standalone verification",
-                extra=verify_context
-            )
+        self.verifier.logger.debug(f"Verifying {name[:1].lower()}{name[1:]}", extra=verify_context)
 
         try:
 
@@ -521,8 +509,8 @@ class Evaluator:
                     node.score = 0.0
                     node.status = "skipped"
                     self.verifier.logger.info(
-                        f"Node {node.id} skipped due to failed precondition {failed_prereq_id}",
-                        extra={**verify_context, "skipped_due_to": failed_prereq_id}
+                        f"Check {node.id} skipped: check {failed_prereq_id}, which it depends on, did not pass",
+                        extra={**verify_context, "skipped_due_to": failed_prereq_id, "status": "skipped"}
                     )
                     return False
 
@@ -557,18 +545,6 @@ class Evaluator:
                 case _:
                     raise ValueError(f"Unsupported SourceKind: {bundle.kind}")
 
-            # Record verification completion
-            if node:
-                self.verifier.logger.debug(
-                    f"Verification completed for node {node.id}: {'✅' if result else '❌'}",
-                    extra={**verify_context, "result": result, "final_score": node.score}
-                )
-            else:
-                self.verifier.logger.debug(
-                    f"Standalone verification completed: {'✅' if result else '❌'}",
-                    extra={**verify_context, "result": result}
-                )
-
             return result
 
         except JudgeError:
@@ -578,17 +554,8 @@ class Evaluator:
             if node:
                 node.score = 0.0
                 node.status = "failed"
-                error_context = {**verify_context, "error": str(e), "error_type": type(e).__name__}
-                self.verifier.logger.error(
-                    f"❌ [{main_op_id}] Verification failed for node {node.id}: {e}",
-                    extra=error_context
-                )
-            else:
-                error_context = {**verify_context, "error": str(e), "error_type": type(e).__name__}
-                self.verifier.logger.error(
-                    f"❌ [{main_op_id}] Standalone verification failed: {e}",
-                    extra=error_context
-                )
+            self.verifier.logger.error(f"{name} failed with an error, so it counts as failed: {e}",
+                                       extra={**verify_context, "status": "error"}, exc_info=True)
             return False
 
     def _get_auto_preconditions(self, node: VerificationNode,

@@ -1,348 +1,293 @@
-import logging
-import sys
-import os
+"""Logs of an evaluation: one per evaluation of an answer, one per command run, and the console.
+
+Two kinds of log files, each written in two formats:
+
+- **An answer's log** (:func:`create_logger`): everything that happened while
+  one answer was evaluated, in ``<results>/<agent>/<task>/<answer>/logs/``.
+  The eval script and the evaluators write to it through the logger they are
+  given.
+- **A run's log** (:func:`configure_run_logging`): what a command did across
+  tasks, such as each answer's outcome, in ``<results>/<agent>/logs/`` for
+  ``mind2web2 evaluate``.  The command's console output is the same record at
+  INFO and above, except records logged with ``extra={"console": False}``,
+  which go to the files only (for what the command also prints itself).
+
+Each log is a readable ``.log`` file (INFO and above, one line per event, with
+the claim, the judge's reasoning, an extraction's result, or an error's
+traceback indented below it; :class:`ReadableFormatter`) and a ``.jsonl`` file
+(DEBUG and above, one JSON object per event with every field;
+:class:`JsonLinesFormatter`).
+
+The package's own modules (the judge client, the page cache, the browser)
+log through ordinary module loggers under ``mind2web2``.  While a command's
+logging is configured, a record they emit during an answer's evaluation (see
+:func:`logging_to`) goes to that answer's log instead of the run's, so a judge
+request's retries appear next to the check that made it.  Warnings and
+errors of other loggers (the OpenAI SDK, the browser library, an eval
+script's own module logger) are routed the same way.  Without
+:func:`configure_run_logging`, as when the package is used as a library, the
+package's module loggers propagate to the root logger as usual.
+"""
+from __future__ import annotations
+
+import itertools
 import json
-import threading
-from logging import Logger, StreamHandler
-from logging.handlers import TimedRotatingFileHandler
+import logging
+import os
+import sys
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime
-from pythonjsonlogger import jsonlogger
-from typing import Literal, Optional
+from logging import Logger
+from pathlib import Path
+from typing import Iterator, Optional
 
-# Globally shared error handler, used by all answer loggers
-_shared_error_handler = None
-_handler_lock = threading.Lock()
+#: Fields shown below an event's line in the readable format, in this order.
+DETAIL_FIELDS = ("claim", "reasoning", "result", "error")
+#: Longest value of a detail field in the readable format; the JSON Lines file keeps the whole value.
+MAX_DETAIL_CHARS = 2000
+_DETAIL_INDENT = " " * 23
 
+# Attributes every LogRecord has; the others are the fields a call passed in ``extra``.
+_RECORD_ATTRIBUTES = frozenset(vars(logging.LogRecord("", 0, "", 0, "", None, None))) | {"message", "asctime"}
 
-class ColoredStructuredFormatter(logging.Formatter):
-    """Colored structured log formatter."""
-
-    COLORS = {
-        'DEBUG': '\033[36m',  # Cyan
-        'INFO': '\033[32m',  # Green
-        'WARNING': '\033[33m',  # Yellow
-        'ERROR': '\033[31m',  # Red
-        'RESET': '\033[0m'
-    }
-
-    def format(self, record):
-        # Use a special format for verification operations
-        if hasattr(record, 'op_id'):
-            op_id = record.op_id
-            level_color = self.COLORS.get(record.levelname, '')
-            reset = self.COLORS['RESET']
-
-            # Build main message - remove duplicate levelname
-            msg_parts = [
-                f"{level_color}[{op_id}]{reset}"
-            ]
-
-            # Add node info
-            if hasattr(record, 'node_id') and record.node_id:
-                msg_parts.append(f"Node({record.node_id})")
-
-            # Add verification type
-            if hasattr(record, 'verify_type'):
-                msg_parts.append(f"<{record.verify_type}>")
-
-            # Add main message
-            msg_parts.append(record.getMessage())
-
-            # Build detailed info (indented display)
-            details = []
-
-            if hasattr(record, 'node_desc') and record.node_desc:
-                details.append(f"  📋 Description: {record.node_desc}")
-
-            if hasattr(record, 'url') and record.url:
-                details.append(f"  🔗 URL: {record.url}")
-
-            if hasattr(record, 'claim_preview'):
-                details.append(f"  💬 Claim: {record.claim_preview}")
-
-            if hasattr(record, 'reasoning') and record.reasoning:
-                reasoning = record.reasoning
-                # if len(reasoning) > 200:
-                #     reasoning = reasoning[:200] + "..."
-                details.append(f"  💭 Reasoning: {reasoning}")
-
-            if hasattr(record, 'result'):
-                result_str = "✅ PASS" if record.result else "❌ FAIL"
-                details.append(f"  📊 Result: {result_str}")
-
-            # Combine all parts
-            full_msg = " ".join(msg_parts)
-            if details:
-                full_msg += "\n" + "\n".join(details)
-
-            return full_msg
-
-        # For other logs, use standard format - show level only for ERROR/WARNING
-        level_indicator = ""
-        if record.levelname == 'ERROR':
-            level_indicator = f"{self.COLORS['ERROR']}[ERROR]{self.COLORS['RESET']} "
-        elif record.levelname == 'WARNING':
-            level_indicator = f"{self.COLORS['WARNING']}[WARN]{self.COLORS['RESET']} "
-
-        return f"{level_indicator}{record.getMessage()}"
+_answer_logger: ContextVar[Optional[Logger]] = ContextVar("mind2web2_answer_logger", default=None)
 
 
-class ErrorWithContextFormatter(logging.Formatter):
-    """Formatter specialized for errors, adding context information."""
-
-    COLORS = {
-        'ERROR': '\033[31m',  # Red
-        'WARNING': '\033[33m',  # Yellow
-        'RESET': '\033[0m'
-    }
-
-    def format(self, record):
-        level_color = self.COLORS.get(record.levelname, '')
-        reset = self.COLORS['RESET']
-
-        # Build context information
-        context_parts = []
-
-        # Add agent and answer information
-        if hasattr(record, 'agent_name') and record.agent_name:
-            context_parts.append(f"Agent:{record.agent_name}")
-        if hasattr(record, 'answer_name') and record.answer_name:
-            context_parts.append(f"Answer:{record.answer_name}")
-        if hasattr(record, 'node_id') and record.node_id:
-            context_parts.append(f"Node:{record.node_id}")
-        if hasattr(record, 'op_id') and record.op_id:
-            context_parts.append(f"Op:{record.op_id}")
-
-        context_str = " | ".join(context_parts)
-        context_prefix = f"[{context_str}] " if context_str else ""
-
-        return f"{level_color}[{record.levelname}]{reset} {context_prefix}{record.getMessage()}"
+def _extras(record: logging.LogRecord) -> dict:
+    return {k: v for k, v in vars(record).items()
+            if k not in _RECORD_ATTRIBUTES and k != "console" and v is not None}
 
 
-class HumanReadableFormatter(logging.Formatter):
-    """Human-readable file log format, keep emojis."""
+def _detail_text(value) -> str:
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+    return text if len(text) <= MAX_DETAIL_CHARS else text[:MAX_DETAIL_CHARS] + " …"
 
-    def format(self, record):
-        # Timestamp - second precision
-        timestamp = self.formatTime(record, '%Y-%m-%d %H:%M:%S')
 
-        # Basic info - only show level for important levels
-        level_prefix = ""
-        if record.levelname in ['ERROR', 'WARNING']:
-            level_prefix = f"[{record.levelname}] "
+class ReadableFormatter(logging.Formatter):
+    """``HH:MM:SS.mmm LEVEL    message``, then the record's detail fields and traceback, indented.
 
-        base_info = f"[{timestamp}] {level_prefix}{record.getMessage()}"
+    The detail fields are those of :data:`DETAIL_FIELDS` that the call passed
+    in ``extra`` (a long value is cut after :data:`MAX_DETAIL_CHARS`
+    characters); other fields appear only in the JSON Lines file, so the
+    message must say what happened on its own.
+    """
 
-        # Add structured fields
-        extras = []
-        skip_fields = {
-            'name', 'msg', 'args', 'levelname', 'levelno', 'pathname',
-            'filename', 'module', 'lineno', 'funcName', 'created',
-            'msecs', 'relativeCreated', 'thread', 'threadName',
-            'processName', 'process', 'getMessage', 'exc_info',
-            'exc_text', 'stack_info', 'message'
+    def format(self, record: logging.LogRecord) -> str:
+        time = f"{self.formatTime(record, '%H:%M:%S')}.{int(record.msecs):03d}"
+        lines = [f"{time} {record.levelname:<8} {record.getMessage()}"]
+        extras = _extras(record)
+        for name in DETAIL_FIELDS:
+            if name in extras:
+                detail = _detail_text(extras[name]).replace("\n", "\n" + _DETAIL_INDENT + "  ")
+                lines.append(f"{_DETAIL_INDENT}{name}: {detail}")
+        if record.exc_info:
+            lines.append(self.formatException(record.exc_info))
+        return "\n".join(lines)
+
+
+class JsonLinesFormatter(logging.Formatter):
+    """One JSON object per record: ``time`` (ISO 8601 with milliseconds), ``level``, ``logger``, ``message``,
+    every field the call passed in ``extra``, and ``traceback`` when the record carries an exception."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        entry = {
+            "time": datetime.fromtimestamp(record.created).astimezone().isoformat(timespec="milliseconds"),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+            **_extras(record),
         }
-
-        for key, value in record.__dict__.items():
-            if key not in skip_fields and value is not None:
-                # Special handling for some fields
-                if key == 'final_score' and isinstance(value, (int, float)):
-                    extras.append(f"score={value}")
-                elif key == 'agent_name':
-                    extras.append(f"agent={value}")
-                elif key == 'node_id':
-                    extras.append(f"node={value}")
-                elif key == 'op_id':
-                    extras.append(f"op={value}")
-                else:
-                    extras.append(f"{key}={value}")
-
-        if extras:
-            base_info += f" | {' | '.join(extras)}"
-
-        return base_info
+        if record.exc_info:
+            entry["traceback"] = self.formatException(record.exc_info)
+        return json.dumps(entry, ensure_ascii=False, default=str)
 
 
-class CompactJsonFormatter(jsonlogger.JsonFormatter):
-    """Compact JSON formatter that removes redundant fields."""
+class ConsoleFormatter(logging.Formatter):
+    """The message alone, prefixed with a colored ``warning:`` or ``error:`` for those levels.
 
-    def add_fields(self, log_record, record, message_dict):
-        super().add_fields(log_record, record, message_dict)
-
-        # Remove unnecessary fields
-        fields_to_remove = ['name', 'levelname']
-        for field in fields_to_remove:
-            log_record.pop(field, None)
-
-        # Simplify time format to seconds
-        if 'asctime' in log_record:
-            try:
-                asctime = log_record['asctime']
-                if ',' in asctime:
-                    log_record['asctime'] = asctime.split(',')[0]
-            except:
-                pass
-
-
-def _get_shared_error_handler() -> StreamHandler:
-    """Get or create the globally shared error handler."""
-    global _shared_error_handler
-
-    with _handler_lock:
-        if _shared_error_handler is None:
-            _shared_error_handler = StreamHandler(sys.stderr)  # Use stderr for errors
-            _shared_error_handler.setFormatter(ErrorWithContextFormatter())
-            _shared_error_handler.setLevel(logging.ERROR)  # Show only ERROR level
-
-    return _shared_error_handler
-
-
-def create_logger(
-        lgr_nm: str,
-        log_folder: str,
-        enable_console: bool = True,
-        file_format: Literal["jsonl", "readable", "both"] = "both",
-        enable_shared_errors: bool = False  # New parameter
-) -> tuple[Logger, str]:
+    Colors are used only on a terminal and when ``NO_COLOR`` is unset.
     """
-    Create an independent logger instance, supporting multiple file formats.
 
-    Args:
-        lgr_nm: Logger name
-        log_folder: Log folder
-        enable_console: Whether to enable console output
-        file_format: File log format
-        enable_shared_errors: Whether to output ERROR-level logs to the shared terminal
+    _PREFIXES = {logging.WARNING: ("warning: ", "\033[33m"), logging.ERROR: ("error: ", "\033[31m"),
+                 logging.CRITICAL: ("error: ", "\033[31m")}
 
-    Returns:
-        (logger instance, timestamp)
+    def __init__(self, stream=None):
+        super().__init__()
+        stream = stream or sys.stderr
+        self.color = hasattr(stream, "isatty") and stream.isatty() and not os.environ.get("NO_COLOR")
+
+    def format(self, record: logging.LogRecord) -> str:
+        prefix, color = self._PREFIXES.get(record.levelno, ("", ""))
+        if prefix and self.color:
+            prefix = f"{color}{prefix}\033[0m"
+        return prefix + record.getMessage()
+
+
+class TqdmConsoleHandler(logging.Handler):
+    """Writes records to stderr through ``tqdm.write``, so that they print above the progress bars."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            from tqdm import tqdm
+            tqdm.write(self.format(record), file=sys.stderr)
+        except Exception:
+            self.handleError(record)
+
+
+def _file_handlers(stem: Path) -> list[logging.Handler]:
+    """A readable ``<stem>.log`` handler at INFO and a ``<stem>.jsonl`` handler at DEBUG."""
+    stem.parent.mkdir(parents=True, exist_ok=True)
+    readable = logging.FileHandler(f"{stem}.log", encoding="utf-8")
+    readable.setLevel(logging.INFO)
+    readable.setFormatter(ReadableFormatter())
+    json_lines = logging.FileHandler(f"{stem}.jsonl", encoding="utf-8")
+    json_lines.setLevel(logging.DEBUG)
+    json_lines.setFormatter(JsonLinesFormatter())
+    return [readable, json_lines]
+
+
+_LOGGER_PREFIX = "mind2web2-log:"
+_logger_ids = itertools.count(1)
+
+
+def create_logger(lgr_nm: str, log_folder: str, enable_console: bool = True) -> tuple[Logger, str]:
+    """A new logger that writes ``<log_folder>/<timestamp>_<lgr_nm>.log`` and ``.jsonl``, and its timestamp.
+
+    ``timestamp`` is the local time as ``YYYYmmdd_HHMMSS``; an answer's result
+    file carries the same timestamp as the log of the evaluation that made it.
+    The logger does not propagate, so its records go only to its files and,
+    with ``enable_console``, to the console at INFO and above.  Call
+    :func:`cleanup_logger` when it is no longer needed, to close its files.
     """
-    if not os.path.exists(log_folder):
-        os.makedirs(log_folder)
-
-    current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-    # Create a unique logger name to avoid duplication
-    unique_logger_name = f"{lgr_nm}_{current_time}_{id(log_folder)}"
-
-    # If a logger already exists, clean it up first
-    existing_logger = logging.getLogger(unique_logger_name)
-    if existing_logger.handlers:
-        for handler in existing_logger.handlers[:]:
-            existing_logger.removeHandler(handler)
-            handler.close()
-
-    # Create a new logger
-    new_logger = logging.getLogger(unique_logger_name)
-    new_logger.setLevel(logging.DEBUG)
-    new_logger.propagate = False
-
-    # File handlers
-    if file_format in ["jsonl", "both"]:
-        # JSON Lines format
-        jsonl_file = os.path.join(log_folder, f"{current_time}_{lgr_nm}.jsonl")
-        jsonl_handler = TimedRotatingFileHandler(
-            jsonl_file,
-            when="D",
-            backupCount=14,
-            encoding="utf-8"
-        )
-        jsonl_formatter = CompactJsonFormatter('%(asctime)s %(message)s')
-        jsonl_handler.setFormatter(jsonl_formatter)
-        jsonl_handler.setLevel(logging.DEBUG)
-        new_logger.addHandler(jsonl_handler)
-
-    if file_format in ["readable", "both"]:
-        # Human-readable format
-        readable_file = os.path.join(log_folder, f"{current_time}_{lgr_nm}.log")
-        readable_handler = TimedRotatingFileHandler(
-            readable_file,
-            when="D",
-            backupCount=14,
-            encoding="utf-8"
-        )
-        readable_formatter = HumanReadableFormatter()
-        readable_handler.setFormatter(readable_formatter)
-        readable_handler.setLevel(logging.DEBUG)
-        new_logger.addHandler(readable_handler)
-
-    # Console handler - use colored structured format
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # A top-level name (no dots), outside the package's logger hierarchy, and unique in the process:
+    # answers of different tasks share file names and can start in the same second
+    logger = logging.getLogger(f"{_LOGGER_PREFIX}{next(_logger_ids)}:{lgr_nm}".replace(".", "_"))
+    logger.setLevel(logging.DEBUG)
+    logger.propagate = False
+    for handler in _file_handlers(Path(log_folder) / f"{timestamp}_{lgr_nm}"):
+        logger.addHandler(handler)
     if enable_console:
-        console_handler = StreamHandler(sys.stdout)
-        console_handler.setFormatter(ColoredStructuredFormatter())
-        console_handler.setLevel(logging.INFO)
-        new_logger.addHandler(console_handler)
-
-    # Shared error handler - for displaying errors during parallel execution
-    if enable_shared_errors:
-        shared_error_handler = _get_shared_error_handler()
-        new_logger.addHandler(shared_error_handler)
-
-    return new_logger, current_time
-
-
-def create_sub_logger(parent_logger: Logger, sub_name: str) -> Logger:
-    """
-    Create sublogger based on parent logger, inherit parent logger's handlers
-    Used to create hierarchical logs within the same evaluation
-    """
-    parent_name = parent_logger.name
-    sub_logger_name = f"{parent_name}.{sub_name}"
-
-    sub_logger = logging.getLogger(sub_logger_name)
-    sub_logger.setLevel(parent_logger.level)
-    sub_logger.propagate = True  # Allow propagation to parent logger
-
-    return sub_logger
+        console = TqdmConsoleHandler()
+        console.setLevel(logging.INFO)
+        console.setFormatter(ConsoleFormatter())
+        logger.addHandler(console)
+    return logger, timestamp
 
 
 def cleanup_logger(logger: Logger) -> None:
-    """Clean up all handlers of the logger (but not the shared error handler)."""
-    global _shared_error_handler
-
+    """Remove and close every handler of ``logger``; a logger made by :func:`create_logger` is also forgotten."""
     for handler in logger.handlers[:]:
-        # Do not clean up the shared error handler
-        if handler is not _shared_error_handler:
-            logger.removeHandler(handler)
-            handler.close()
-        else:
-            logger.removeHandler(handler)  # Remove only, do not close
+        logger.removeHandler(handler)
+        handler.close()
+    if logger.name.startswith(_LOGGER_PREFIX):
+        logging.Logger.manager.loggerDict.pop(logger.name, None)
 
 
-def cleanup_shared_error_handler():
-    """Clean up the shared error handler at program end."""
-    global _shared_error_handler
+@contextmanager
+def logging_to(logger: Logger) -> Iterator[None]:
+    """Inside this block, the package's module loggers write to ``logger`` instead of the run's log.
 
-    with _handler_lock:
-        if _shared_error_handler is not None:
-            _shared_error_handler.close()
-            _shared_error_handler = None
+    This holds while :func:`configure_run_logging` is in effect, and also in
+    the asyncio tasks created in the block and in the functions it runs with
+    ``asyncio.to_thread``, which inherit the block's context; a thread
+    started with ``threading.Thread`` does not.
+    """
+    token = _answer_logger.set(logger)
+    try:
+        yield
+    finally:
+        _answer_logger.reset(token)
 
 
-# Usage examples and notes
-"""
-How to use in the evaluation runner:
+class _ToAnswerLog(logging.Handler):
+    """Sends a record to the log of the answer being evaluated, if any (see :func:`logging_to`)."""
 
-1. Main logger — normal console output:
-   main_logger, timestamp = create_logger("main_task", log_folder, enable_console=True)
+    def emit(self, record: logging.LogRecord) -> None:
+        target = _answer_logger.get()
+        if target is not None and target.isEnabledFor(record.levelno):
+            target.handle(record)
 
-2. Per-answer loggers — errors are shown in the terminal:
-   logger, timestamp = create_logger(
-       log_tag, 
-       str(log_dir), 
-       enable_console=False,  # Do not enable regular console output
-       enable_shared_errors=True  # Enable shared error output
-   )
 
-This results in:
-- Primary progress information shown in the main terminal
-- Each answer's ERROR-level messages also shown in the terminal (with context)
-- All detailed logs still saved to their respective files
+def _for_console(record: logging.LogRecord) -> bool:
+    return getattr(record, "console", True)
 
-Example terminal output:
-🚀 Starting concurrent evaluation of 10 answers
-👉 Processing human/answer_1.md
-[ERROR] [Agent:human | Answer:answer_1.md | Node:price_check] Failed to verify price claim
-👉 Processing openai_deep_research/answer_1.md
-✅ Successfully evaluated human/answer_1.md
-"""
+
+class _ToPackageHandlers(logging.Handler):
+    """Handles a record of a logger outside the package with the ``mind2web2`` logger's handlers."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        logging.getLogger(_PACKAGE).handle(record)
+
+
+class _OutsideAnswers(logging.Filter):
+    """Passes only the records emitted outside an answer's evaluation; those inside go to its log."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return _answer_logger.get() is None
+
+
+_PACKAGE = "mind2web2"
+_run_handlers: list[logging.Handler] = []
+_root_handler: Optional[logging.Handler] = None
+_saved_package_state: Optional[tuple[int, bool]] = None
+
+
+def configure_run_logging(log_dir: Optional[Path], name: str, console: bool = True) -> Optional[Path]:
+    """Send the package's logging to a run log in ``log_dir`` and, with ``console``, to stderr.
+
+    The run log is ``<log_dir>/<timestamp>_<name>.log`` and ``.jsonl``
+    (no files without ``log_dir``); its path without the suffix is returned.
+    Records of the ``mind2web2`` loggers emitted during an answer's evaluation
+    go to that answer's log instead (:func:`logging_to`).  The ``mind2web2``
+    logger stops propagating to the root logger until
+    :func:`close_run_logging`, which a command calls when it ends, and the
+    root logger gets a handler that routes the WARNING and higher records of
+    every other logger the same way, so that they are neither lost nor
+    printed through the progress bars.
+    """
+    global _saved_package_state, _root_handler
+    close_run_logging()
+    package = logging.getLogger(_PACKAGE)
+    _saved_package_state = (package.level, package.propagate)
+    package.setLevel(logging.DEBUG)
+    package.propagate = False
+
+    outside_answers = _OutsideAnswers()
+    handlers: list[logging.Handler] = [_ToAnswerLog()]
+    stem = None
+    if log_dir is not None:
+        stem = Path(log_dir) / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{name}"
+        handlers += _file_handlers(stem)
+    if console:
+        console_handler = TqdmConsoleHandler()
+        console_handler.setLevel(logging.INFO)
+        console_handler.setFormatter(ConsoleFormatter())
+        console_handler.addFilter(_for_console)
+        handlers.append(console_handler)
+    for handler in handlers[1:]:
+        handler.addFilter(outside_answers)
+    for handler in handlers:
+        package.addHandler(handler)
+    _run_handlers[:] = handlers
+    _root_handler = _ToPackageHandlers(logging.WARNING)
+    logging.getLogger().addHandler(_root_handler)
+    return stem
+
+
+def close_run_logging() -> None:
+    """Undo :func:`configure_run_logging`: close the run log and let the ``mind2web2`` logger propagate again."""
+    global _saved_package_state, _root_handler
+    if _root_handler is not None:
+        logging.getLogger().removeHandler(_root_handler)
+        _root_handler = None
+    package = logging.getLogger(_PACKAGE)
+    for handler in _run_handlers:
+        package.removeHandler(handler)
+        handler.close()
+    _run_handlers.clear()
+    if _saved_package_state is not None:
+        package.setLevel(_saved_package_state[0])
+        package.propagate = _saved_package_state[1]
+        _saved_package_state = None

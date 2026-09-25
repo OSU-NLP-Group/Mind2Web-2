@@ -1,6 +1,10 @@
-import arxiv
 import asyncio
+import logging
 from typing import Optional
+
+import arxiv
+
+log = logging.getLogger(__name__)
 
 class ArxivTool:
     def __init__(self, page_size: int = 100):
@@ -25,7 +29,7 @@ class ArxivTool:
             result_generator = self.client.results(search)
             return vars(next(result_generator))
         except StopIteration:
-            print(f"No results found for arXiv ID: {arxiv_id}")
+            log.info("No arXiv paper has the ID %s", arxiv_id)
             return None
 
     async def search_arxiv_by_title(self, title: str) -> Optional[dict]:
@@ -35,7 +39,7 @@ class ArxivTool:
             result_generator = self.client.results(search)
             return vars(next(result_generator))
         except StopIteration:
-            print(f"No results found for title: {title}")
+            log.info("No arXiv paper matches the title %r", title)
             return None
 
 # Example usage
