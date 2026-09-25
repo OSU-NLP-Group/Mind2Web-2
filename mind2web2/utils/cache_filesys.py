@@ -5,6 +5,7 @@ One :class:`CacheFileSys` holds the pages cached for one task of one agent::
     <task_dir>/
     ├── index.json      # {"<storage key>": "web" | "pdf", ...}
     ├── failures.json   # {"<storage key>": {"reason", "blocked", "attempts", "time"}, ...}
+    ├── redirects.json  # {"<storage key of a final URL>": "<storage key of the page captured there>", ...}
     ├── <stem>.txt      # web page: text (Markdown)
     ├── <stem>.jpg      # web page: screenshot
     └── <stem>.pdf      # PDF document
@@ -15,10 +16,12 @@ surface forms of a stored URL; see :meth:`CacheFileSys.lookup`.
 ``failures.json`` records URLs whose capture failed, so that they are neither
 evaluated against an error page nor silently missing; storing a page for a
 URL clears its failure record, and removing the page deletes any failure
-record for it too.
+record for it too.  ``redirects.json`` records, for a page whose capture was
+redirected, the URL it ended at (its final URL), so that the page is stored
+once and found by either URL.
 
 Every change is written to disk, and fsynced, before the call returns.
-Each content file and each of the two JSON files is replaced atomically (a
+Each content file and each of the three JSON files is replaced atomically (a
 page's text and screenshot are two files, each replaced on its own), and each
 change, from writing the content files to deleting files the change replaced, happens
 under a lock, with each JSON file re-read and merged before it is written.
@@ -58,6 +61,7 @@ FILE_EXTENSIONS: Dict[str, Tuple[str, ...]] = {"web": (".txt", ".jpg"), "pdf": (
 
 INDEX_FILE = "index.json"
 FAILURES_FILE = "failures.json"
+REDIRECTS_FILE = "redirects.json"
 
 logger = logging.getLogger(__name__)
 
@@ -130,9 +134,9 @@ class _UrlIndex:
     """A set of storage keys that finds the key a URL refers to, by the rules of :meth:`CacheFileSys.lookup`.
 
     Keys keep the order they were added in, and where a rule matches several
-    keys, the key added first wins.  Every rule except the last is a
-    dictionary lookup, and the last (surface variants) runs only when the
-    others miss.
+    keys, the key added first wins.  Every rule except surface variants is a
+    dictionary lookup, and surface variants are tried only when the rules
+    before them miss.
     """
 
     def __init__(self, keys: Iterable[str] = ()):
@@ -166,7 +170,7 @@ class _UrlIndex:
         """The key ``url`` refers to, or ``None``; raises ``ValueError`` if ``url`` cannot be parsed.
 
         With ``ignore_case=False``, the rule that disregards letter case
-        (rule 3 of :meth:`CacheFileSys.lookup`) is skipped, so that ``url``
+        (rule 4 of :meth:`CacheFileSys.lookup`) is skipped, so that ``url``
         never finds a key that differs from it in letter case.
         """
         key = storage_key(url)
@@ -177,18 +181,22 @@ class _UrlIndex:
             return raw_keys[0] if raw_keys else None
         if url in self._keys and not _is_raw(url):
             return url
-        rules = [(normalize_url_keep_case, self._by_case)]
-        if ignore_case:
-            rules.append((normalize_url_simple, self._by_match))
-        for normalize, by_form in rules:
-            form = normalize(url)
-            if form in self._keys and not _is_raw(form):
-                return form
-            keys = by_form.get(form)
-            if keys:
-                return keys[0]
-        return next((variant for variant in _surface_variants(url)
-                     if variant in self._keys and not _is_raw(variant)), None)
+        found = self._find_by_form(normalize_url_keep_case, self._by_case, url)
+        if found is None:
+            found = next((variant for variant in _surface_variants(url)
+                          if variant in self._keys and not _is_raw(variant)), None)
+        if found is None and ignore_case:
+            found = self._find_by_form(normalize_url_simple, self._by_match, url)
+        return found
+
+    def _find_by_form(self, normalize: Callable[[str], str], by_form: Dict[str, List[str]],
+                      url: str) -> Optional[str]:
+        """The key that is ``normalize(url)``, or else the first key added with that form in ``by_form``."""
+        form = normalize(url)
+        if form in self._keys and not _is_raw(form):
+            return form
+        keys = by_form.get(form)
+        return keys[0] if keys else None
 
     def _forms(self, key: str) -> List[Tuple[Dict[str, List[str]], str]]:
         """The indexes that find ``key`` by a form of the query, each with that form of ``key``."""
@@ -200,6 +208,14 @@ class _UrlIndex:
         ) if form is not None]
 
 
+def _find_or_none(index: _UrlIndex, url: str) -> Optional[str]:
+    """``index.find(url, ignore_case=False)``, or ``None`` also when ``url`` cannot be parsed."""
+    try:
+        return index.find(url, ignore_case=False)
+    except ValueError:
+        return None
+
+
 def _form_or_none(normalize: Callable[[str], str], key: str) -> Optional[str]:
     try:
         return normalize(key)
@@ -207,14 +223,14 @@ def _form_or_none(normalize: Callable[[str], str], key: str) -> Optional[str]:
         return None
 
 
-class _FailureRecords:
-    """A snapshot of a task's failure records by storage key, with a :class:`_UrlIndex` over their keys.
+class _Records:
+    """A snapshot of a task's failure records or redirect records by storage key, with a :class:`_UrlIndex` over their keys.
 
     Built once and never changed, so that a thread can read it while another
-    records a failure and installs a new snapshot.
+    changes the records and installs a new snapshot.
     """
 
-    def __init__(self, records: Dict[str, Dict[str, Any]]):
+    def __init__(self, records: Dict[str, Any]):
         self.records = records
         self._index = _UrlIndex(records)
 
@@ -231,16 +247,20 @@ class _FailureRecords:
 
 
 class CacheIndexError(RuntimeError):
-    """A task's ``index.json`` or ``failures.json`` exists but cannot be read.
+    """A task's ``index.json``, ``failures.json``, or ``redirects.json`` exists but cannot be read.
 
     ``index.json`` is the only record of which URL each cached file belongs
-    to, and ``failures.json`` of which captures failed, so the cache refuses to
-    load or change the task rather than start over and drop their entries.
+    to, ``failures.json`` of which captures failed, and ``redirects.json`` of
+    which final URLs the pages were captured at, so the cache refuses to load
+    or change the task rather than start over and drop their entries.
     Restore the file, or delete it to have the cache forget what it recorded.
     """
 
+    _FORGOTTEN = {INDEX_FILE: "cached pages", FAILURES_FILE: "failed captures",
+                  REDIRECTS_FILE: "recorded redirects"}
+
     def __init__(self, path: str, reason: str):
-        forgotten = "cached pages" if os.path.basename(path) == INDEX_FILE else "failed captures"
+        forgotten = self._FORGOTTEN.get(os.path.basename(path), "records")
         super().__init__(f"Cannot read {path} ({reason}); restore it, or delete it to have the cache "
                          f"forget the task's {forgotten}")
 
@@ -252,18 +272,24 @@ class CacheFileSys:
     construction; an entry whose files are missing or whose content type is
     unknown is ignored with a warning, and an index that cannot be read raises
     :class:`CacheIndexError`.  Pages that other processes store later become
-    visible to a new instance.  The failure records are read at construction
-    and again whenever this instance records or clears one.
+    visible to a new instance; until then, this instance also does not
+    follow the redirect records pointing to them, so it treats their final
+    URLs as it did before, failure records included.  The failure records are read at construction
+    and again whenever this instance records or clears one, and the redirect
+    records at construction and again whenever this instance stores or
+    removes a page.
     """
 
     def __init__(self, task_dir: str):
         self.task_dir = os.path.abspath(task_dir)
         self.index_file = os.path.join(self.task_dir, INDEX_FILE)
         self.failures_file = os.path.join(self.task_dir, FAILURES_FILE)
+        self.redirects_file = os.path.join(self.task_dir, REDIRECTS_FILE)
         self._types: Dict[str, ContentType] = {}  # storage key -> content type, in the order first stored
         self._pages = _UrlIndex()
         # Replaced as a whole, never changed in place: other threads may be reading it.
-        self._failures = _FailureRecords({})
+        self._failures = _Records({})
+        self._redirects = _Records({})  # final URL's key -> page key; replaced as a whole, like _failures
         self._lock = threading.Lock()
         os.makedirs(self.task_dir, exist_ok=True)
         for key, content_type in self._read_json(self.index_file).items():
@@ -273,11 +299,12 @@ class CacheFileSys:
                 logger.warning("Ignoring index entry for %s: its files are missing", key)
             else:
                 self._add(key, content_type)
-        self._failures = _FailureRecords(self._load_failures())
+        self._failures = _Records(self._load_failures())
+        self._redirects = _Records(self._load_redirects())
 
     # ------------------------------------------------------------------ lookup
 
-    def lookup(self, url: str, ignore_case: bool = True) -> Optional[str]:
+    def lookup(self, url: str, ignore_case: bool = True, follow_redirects: bool = True) -> Optional[str]:
         """The URL of the cached page that ``url`` refers to, or ``None`` if its page is not cached.
 
         Each page is stored under a key, the :func:`storage_key` of the URL it
@@ -289,19 +316,33 @@ class CacheFileSys:
            (:func:`~mind2web2.utils.url_tools.normalize_url_keep_case`) is the
            key, or the key has the same case-preserving normalized form; among
            several such keys, the one stored first wins.
-        3. The same with the lowercased normalized form
-           (:func:`~mind2web2.utils.url_tools.normalize_url_simple`).
-        4. One of its surface variants (:func:`_surface_variants`) is the key.
+        3. One of its surface variants (:func:`_surface_variants`) is the key.
            This finds keys whose normalized form differs from the query's
            because percent-decoding changed their structure, as with an
            encoded ``#`` or ``%``.
+        4. The key has the same lowercased normalized form
+           (:func:`~mind2web2.utils.url_tools.normalize_url_simple`); among
+           several such keys, the one stored first wins.
 
-        Rule 2 comes before rule 3 so that, when pages are stored for URLs
-        that differ only in letter case, which a server may serve as different
-        pages, a URL finds the page stored with its own letter case, and a
-        page stored with another letter case only when there is none.  With
-        ``ignore_case=False``, rule 3 is skipped, so that ``url`` never finds
-        a page stored under a URL that differs from it in letter case.
+        Rules 1-3 respect letter case and rule 4 disregards it, so that, when
+        pages are stored for URLs that differ only in letter case, which a
+        server may serve as different pages, a URL finds the page stored with
+        its own letter case, and a page stored with another letter case only
+        when there is none.  With ``ignore_case=False``, rule 4 is skipped, so
+        that ``url`` never finds a page stored under a URL that differs from it
+        in letter case.
+
+        A page whose capture ended at another URL than it was stored under (a
+        redirect) is also found by that final URL (see :meth:`put_web`): when
+        rules 1-3 find no page, they are applied to the final URLs recorded
+        for stored pages, and a hit finds the page captured there.  Rule 4 is
+        then applied to the pages, and after that to the final URLs.  A
+        redirect recorded in the query's letter case therefore wins over a
+        page stored under another letter case.  With
+        ``follow_redirects=False``, the recorded final URLs are not used, so
+        only a page stored for ``url`` itself is found; a caller about to
+        delete or change what it finds uses this, so that naming a final URL
+        never acts on the page captured there.
 
         A key that :func:`storage_key` would change again (:func:`_is_raw`) is
         found only for a ``url`` whose storage key is that key, or is raw too
@@ -314,16 +355,26 @@ class CacheFileSys:
 
         The URL returned is the key, or for a raw key a re-encoded form whose
         storage key is the key, so that passing it to any method of this class
-        addresses the same page.  All rules but 4 are dictionary lookups, and
-        rule 4 runs only when they miss.  Raises ``ValueError`` if ``url``
-        cannot be parsed.
+        addresses the same page.  All rules but 3 are dictionary lookups, and
+        rule 3 runs only when rules 1 and 2 miss.  Raises ``ValueError`` if
+        ``url`` cannot be parsed.
         """
-        key = self._find_key(url, ignore_case)
+        key = self._find_key(url, ignore_case, follow_redirects)
         return _address(key) if key is not None else None
 
-    def _find_key(self, url: str, ignore_case: bool = True) -> Optional[str]:
+    def _find_key(self, url: str, ignore_case: bool = True, follow_redirects: bool = True) -> Optional[str]:
         """The key of the page ``url`` refers to, by the rules of :meth:`lookup`."""
-        return self._pages.find(url, ignore_case)
+        redirects = self._redirects
+        for ignoring in (False, True) if ignore_case else (False,):
+            key = self._pages.find(url, ignoring)
+            if key is not None:
+                return key
+            if not follow_redirects:
+                continue
+            final = redirects.find(url, ignoring)
+            if final is not None and redirects.records[final] in self._types:
+                return redirects.records[final]
+        return None
 
     def has(self, url: str) -> ContentType | None:
         """The content type cached for ``url`` ("web" or "pdf"), or ``None`` if it is not cached."""
@@ -333,6 +384,16 @@ class CacheFileSys:
     def get_all_urls(self) -> List[str]:
         """The URL of every cached page, as :meth:`lookup` returns it, in the order the pages were first stored."""
         return [_address(key) for key in self._types]
+
+    def redirects(self) -> Dict[str, str]:
+        """Every recorded final URL that :meth:`lookup` resolves through its record, with the URL of its page.
+
+        Both URLs are as :meth:`lookup` returns URLs.  A record whose page
+        is not stored, or whose final URL finds a stored page by the rules
+        that respect letter case, is left out, since lookup does not use it.
+        """
+        return {_address(final): _address(key) for final, key in self._redirects.records.items()
+                if key in self._types and self._stored_page(_address(final)) is None}
 
     def summary(self) -> Dict[str, Any]:
         types = list(self._types.values())
@@ -359,11 +420,16 @@ class CacheFileSys:
             return None
         return dict(failures.records[key])
 
-    def failure_url(self, url: str, ignore_case: bool = True) -> Optional[str]:
+    def failure_url(self, url: str, ignore_case: bool = True, follow_redirects: bool = True) -> Optional[str]:
         """The URL of the record :meth:`failure` returns for ``url`` (with the same ``ignore_case``), as
-        :meth:`failures` lists it, or ``None``."""
+        :meth:`failures` lists it, or ``None``.
+
+        With ``follow_redirects=False``, a record is hidden only by a page
+        stored for its own URL, not by a redirect record that resolves its URL
+        to a page (see :meth:`lookup`), so the record of a final URL is found.
+        """
         key = self._failures.find(url, ignore_case)
-        if key is None or self._is_stored(_address(key), ignore_case):
+        if key is None or self._is_stored(_address(key), ignore_case, follow_redirects):
             return None
         return _address(key)
 
@@ -384,13 +450,13 @@ class CacheFileSys:
         with self._index_lock():
             failures = self._load_failures()
             # A URL that differs in letter case may be another page, so it gets its own record
-            key = _FailureRecords(failures).find(url, ignore_case=False) or storage_key(url)
+            key = _Records(failures).find(url, ignore_case=False) or storage_key(url)
             attempts = failures.get(key, {}).get("attempts", 0) + 1
             record = {"reason": reason, "blocked": blocked, "attempts": attempts,
                       "time": datetime.now(timezone.utc).isoformat(timespec="seconds")}
             self._update_json(self.failures_file, key, record)
             failures[key] = record
-            self._failures = _FailureRecords(failures)
+            self._failures = _Records(failures)
         return _address(key)
 
     def clear_failure(self, url: str) -> bool:
@@ -428,7 +494,7 @@ class CacheFileSys:
 
     # ------------------------------------------------------------------ write
 
-    def put_web(self, url: str, text: str, screenshot: str | bytes) -> str:
+    def put_web(self, url: str, text: str, screenshot: str | bytes, final_url: Optional[str] = None) -> str:
         """Store a web page's text and screenshot; returns its URL, as :meth:`lookup` returns it.
 
         The page is stored under ``storage_key(url)``, so passing a URL that
@@ -436,12 +502,30 @@ class CacheFileSys:
         page already stored under the key is replaced, whatever its content
         type.  ``screenshot`` is image bytes or a base64 string (optionally a
         ``data:image/...`` URL) and is saved as JPEG.
-        """
-        return self._put(url, "web", {".txt": text.encode("utf-8"), ".jpg": _to_jpeg(screenshot)})
 
-    def put_pdf(self, url: str, pdf_bytes: bytes) -> str:
-        """Store a PDF, keyed and replacing like :meth:`put_web`; returns its URL, as :meth:`lookup` returns it."""
-        return self._put(url, "pdf", {".pdf": pdf_bytes})
+        ``final_url`` is the URL the content was served at, after redirects.
+        When it is an http(s) URL of another page than ``url`` (another
+        :func:`page_form`) and no page is stored for it (as :meth:`lookup`
+        finds pages with ``ignore_case=False, follow_redirects=False``), it is
+        recorded as this page's final URL, and :meth:`lookup` finds this page
+        for it too, so a redirected capture is stored once.  A record that
+        another page holds for the same final URL, in any spelling that
+        respects letter case, is replaced: the latest capture that ended at a
+        URL answers for it.  The final URL's failure record, if any, is kept:
+        :meth:`failure` ignores it while the final URL resolves to this page,
+        and it applies again once the page is removed.
+
+        Storing a page also deletes the redirect records that pointed to the
+        page stored under the same key before (they described an earlier
+        capture), and the records whose final URL finds this page by the rules
+        that respect letter case (the page now answers for it).
+        """
+        return self._put(url, "web", {".txt": text.encode("utf-8"), ".jpg": _to_jpeg(screenshot)}, final_url)
+
+    def put_pdf(self, url: str, pdf_bytes: bytes, final_url: Optional[str] = None) -> str:
+        """Store a PDF, keyed, replacing, and recording ``final_url`` like :meth:`put_web`; returns its URL, as
+        :meth:`lookup` returns it."""
+        return self._put(url, "pdf", {".pdf": pdf_bytes}, final_url)
 
     def remove(self, url: str) -> ContentType | None:
         """Delete the cached page ``url`` refers to; returns its content type, or ``None`` if nothing was cached.
@@ -454,19 +538,23 @@ class CacheFileSys:
         ``None`` is returned.
 
         Failure records that storing this page would have deleted (those
-        whose URL finds the page by a rule that respects letter case), and
-        that :meth:`failure` ignores while the page is stored, are deleted
-        with the page, so that they do not reappear.  Other failure records,
+        whose URL finds the page itself by a rule that respects letter case),
+        and that :meth:`failure` ignores while the page is stored, are deleted
+        with the page, so that they do not reappear.  A failure record hidden
+        only because its URL is a final URL recorded for the page is kept,
+        and applies again.  Other failure records,
         including one for a URL that differs from the page's in letter case
-        only and that a server may serve as another page, are kept.
+        only and that a server may serve as another page, are kept.  The
+        redirect records pointing to the page are deleted with it.
         """
         with self._index_lock():
             key = self._find_key(url)
             if key is None:
                 return None
             failures = self._load_failures()
+            redirects = self._load_redirects()  # an unreadable file raises before anything is deleted
             hidden = [failure_key for failure_key in failures
-                      if self._stored_key(_address(failure_key), ignore_case=False) == key]
+                      if self._stored_page(_address(failure_key)) == key]
             on_disk = self._update_json(self.index_file, key, None)
             content_type = on_disk if on_disk in FILE_EXTENSIONS else None
             self._discard(key)
@@ -475,19 +563,28 @@ class CacheFileSys:
             for failure_key in hidden:
                 self._update_json(self.failures_file, failure_key, None)
                 del failures[failure_key]
-            self._failures = _FailureRecords(failures)
+            self._failures = _Records(failures)
+            self._set_redirects(redirects, key)
         return content_type
 
-    def _put(self, url: str, content_type: ContentType, files: Dict[str, bytes]) -> str:
+    def _put(self, url: str, content_type: ContentType, files: Dict[str, bytes],
+             final_url: Optional[str] = None) -> str:
         key = storage_key(url)
+        final_key = _redirect_key(url, final_url)
         with self._index_lock():
-            for path in (self.index_file, self.failures_file):
-                self._read_json(path)  # an unreadable JSON file raises before any file is written
+            # An unreadable JSON file raises before any file is written
+            index = self._read_json(self.index_file)
+            self._read_json(self.failures_file)
+            redirects = self._load_redirects()
             for ext, data in files.items():
                 _write_atomic(self._path(key, ext), data)
             previous = self._update_json(self.index_file, key, content_type) or self._types.get(key)
             self._add(key, content_type)
             self._clear_failure(url)
+            if final_key is not None and (_find_or_none(_UrlIndex(index), final_url) is not None
+                                          or self._stored_page(final_url) is not None):
+                final_key = None  # a page is stored for the final URL, and lookup finds it
+            self._set_redirects(redirects, key, final_key)
             if previous in FILE_EXTENSIONS and previous != content_type:
                 self._delete_files(key, previous)
         return _address(key)
@@ -521,29 +618,59 @@ class CacheFileSys:
         Must be called under :meth:`_index_lock`.
         """
         failures = self._load_failures()
-        key = _FailureRecords(failures).find(url, ignore_case=False)
+        key = _Records(failures).find(url, ignore_case=False)
         if key is not None:
             self._update_json(self.failures_file, key, None)
             del failures[key]
-        self._failures = _FailureRecords(failures)
+        self._failures = _Records(failures)
         return key is not None
 
     def _load_failures(self) -> Dict[str, Dict[str, Any]]:
         return {key: record for key, record in self._read_json(self.failures_file).items()
                 if isinstance(record, dict)}
 
-    def _stored_key(self, url: str, ignore_case: bool = True) -> Optional[str]:
+    def _load_redirects(self) -> Dict[str, str]:
+        return {final: key for final, key in self._read_json(self.redirects_file).items() if isinstance(key, str)}
+
+    def _set_redirects(self, redirects: Dict[str, str], key: str, final_key: Optional[str] = None) -> None:
+        """Install ``redirects`` without the records of page ``key``, plus ``final_key`` -> ``key``.
+
+        The records of page ``key`` are those pointing to it and those whose
+        final URL finds it by the rules that respect letter case.  Adding
+        ``final_key`` also deletes the records of other spellings of it (their
+        final URL finds ``final_key`` by those rules), so one final URL has
+        one record.  ``redirects`` is the file's content, read under
+        :meth:`_index_lock`, which must still be held.  The file is rewritten
+        only when the records change.
+        """
+        page = _UrlIndex([key])
+        kept = {final: target for final, target in redirects.items()
+                if target != key and _find_or_none(page, _address(final)) is None}
+        if final_key is not None:
+            same_final = _UrlIndex([final_key])
+            kept = {final: target for final, target in kept.items()
+                    if _find_or_none(same_final, _address(final)) is None}
+            kept[final_key] = key
+        if kept != redirects:
+            _write_atomic(self.redirects_file, _json_bytes(kept))
+        self._redirects = _Records(kept)
+
+    def _stored_key(self, url: str, ignore_case: bool = True, follow_redirects: bool = True) -> Optional[str]:
         """The key of the page ``url`` refers to, or ``None``, also when ``url`` cannot be parsed.
 
-        ``ignore_case`` is as in :meth:`_UrlIndex.find`.
+        ``ignore_case`` and ``follow_redirects`` are as in :meth:`lookup`.
         """
         try:
-            return self._pages.find(url, ignore_case)
+            return self._find_key(url, ignore_case, follow_redirects)
         except ValueError:
             return None
 
-    def _is_stored(self, url: str, ignore_case: bool = True) -> bool:
-        return self._stored_key(url, ignore_case) is not None
+    def _stored_page(self, url: str) -> Optional[str]:
+        """The key of the page stored for ``url`` by the rules that respect letter case, redirects left out, or ``None``."""
+        return _find_or_none(self._pages, url)
+
+    def _is_stored(self, url: str, ignore_case: bool = True, follow_redirects: bool = True) -> bool:
+        return self._stored_key(url, ignore_case, follow_redirects) is not None
 
     @staticmethod
     def _read_json(path: str) -> Dict[str, Any]:
@@ -575,7 +702,7 @@ class CacheFileSys:
             del data[key]
         else:
             data[key] = value  # a replaced entry keeps its position
-        _write_atomic(path, json.dumps(data, indent=2, ensure_ascii=False).encode('utf-8'))
+        _write_atomic(path, _json_bytes(data))
         return previous
 
     @contextmanager
@@ -610,6 +737,25 @@ class CacheFileSys:
                 yield
             finally:
                 os.close(fd)  # closing the descriptor releases the lock
+
+
+def _redirect_key(url: str, final_url: Optional[str]) -> Optional[str]:
+    """The storage key under which to record ``final_url`` as the final URL of the page stored for ``url``, or ``None``.
+
+    ``None`` when ``final_url`` is missing, is not an http(s) URL (the
+    browser's ``about:blank`` or an error page), or names the same page as
+    ``url`` (the same :func:`page_form`), which :meth:`CacheFileSys.lookup`
+    finds without a record.
+    """
+    if not final_url or not final_url.lower().startswith(("http://", "https://")):
+        return None
+    if page_form(final_url) == page_form(url):
+        return None
+    return storage_key(final_url)
+
+
+def _json_bytes(data: Dict[str, Any]) -> bytes:
+    return json.dumps(data, indent=2, ensure_ascii=False).encode('utf-8')
 
 
 def _write_atomic(path: str, data: bytes) -> None:

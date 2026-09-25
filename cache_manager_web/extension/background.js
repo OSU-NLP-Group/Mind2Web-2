@@ -669,6 +669,10 @@ async function detectPdfInTab(tabId) {
 /**
  * Download PDF bytes from a URL and upload to the backend.
  *
+ * The PDF is downloaded from actualUrl, the tab's URL, when given; the URL it
+ * came from after redirects is sent as actual_url when it differs from url,
+ * and the backend records it as the page's final URL.
+ *
  * With batch, the upload is a batch capture of url, which the backend stores
  * only while the batch waits for url.  Returns 'stored'; 'moved' when the
  * backend refused the upload because the batch no longer waits for url
@@ -685,8 +689,11 @@ async function capturePdfAndUpload(taskId, url, actualUrl, batch) {
         form.append('file', blob, 'page.pdf');
 
         const batchQuery = batch ? '&batch=true' : '';
+        // The URL the PDF came from after redirects is recorded as the page's final URL
+        const finalUrl = res.url || downloadUrl;
+        const redirectQuery = finalUrl !== url ? `&actual_url=${encodeURIComponent(finalUrl)}` : '';
         const uploadRes = await api(
-            `/api/upload-pdf/${encodeURIComponent(taskId)}?url=${encodeURIComponent(url)}${batchQuery}`,
+            `/api/upload-pdf/${encodeURIComponent(taskId)}?url=${encodeURIComponent(url)}${batchQuery}${redirectQuery}`,
             { method: 'POST', body: form }
         );
         if (uploadRes.status === 409 && batch) return 'moved';

@@ -38,6 +38,7 @@ def challenge(handler) -> Route:
 
 ROUTES = {
     "/article": Route(body=ARTICLE),
+    "/moved": Route(302, headers={"Location": "/article"}),
     "/forbidden": Route(403, b"<html><head><title>403 Forbidden</title></head><body>Forbidden</body></html>"),
     "/article-sent-with-403": Route(403, ARTICLE),
     "/challenge": Route(respond=challenge),
@@ -82,6 +83,7 @@ def captures():
 def test_capture_outcomes(captures):
     assert {name: outcome(capture) for name, capture in captures.items()} == {
         "/article": {"ok": True, "blocked": False, "status": 200, "error": None},
+        "/moved": {"ok": True, "blocked": False, "status": 200, "error": None},  # the redirect's target
         "/forbidden": {"ok": False, "blocked": True, "status": 403, "error": "blocked"},
         "/article-sent-with-403": {"ok": True, "blocked": False, "status": 403, "error": None},
         "/challenge": {"ok": True, "blocked": False, "status": 200, "error": None},  # passed while waited for
@@ -101,6 +103,13 @@ def test_a_captured_page_has_its_text_and_a_png_screenshot(captures):
     assert "Agentic search systems are evaluated with rubric trees." in article.text
     assert base64.b64decode(article.screenshot_b64)[:8] == b"\x89PNG\r\n\x1a\n"
     assert "Agentic search systems" in captures["/challenge"].text
+
+
+def test_a_capture_reports_the_url_it_ended_at(captures):
+    article_url = captures["/article"].final_url
+    assert article_url.endswith("/article")
+    assert captures["/moved"].final_url == article_url
+    assert captures["/forbidden"].final_url is None  # set only on success
 
 
 @pytest.mark.parametrize("status, title, text, blocked", [

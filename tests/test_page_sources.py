@@ -67,6 +67,7 @@ PAGES = {
     "/paper": Route(body=pdf_bytes("Findings of the paper"), headers={"Content-Type": "application/pdf"}),
     "/landing.pdf": Route(body=b"<html><body>Log in to read this paper</body></html>"),
 }
+REDIRECTING_PAGES = PAGES | {"/paper-link.pdf": Route(302, headers={"Location": "/paper"})}
 
 
 # ------------------------------------------------------------------ evaluation
@@ -133,6 +134,25 @@ def test_evaluation_stores_live_captures_and_pdf_downloads(tmp_path):
     assert {path: reopened.has(url) for path, url in urls.items()} == {
         "/article": "web", "/paper": "pdf", "/landing.pdf": "web"}
     assert browser.urls == [urls["/article"], urls["/landing.pdf"]]  # the fake PDF was loaded in the browser
+
+
+def test_evaluation_stores_a_redirected_page_once_and_records_its_final_url(tmp_path):
+    cache = CacheFileSys(str(tmp_path))
+    final = "https://example.org/landed"
+    browser = StubBrowser(Capture(screenshot_b64=png_b64(), text="Live page", status=200, final_url=final))
+    with LocalSite(REDIRECTING_PAGES) as site:
+        v = verifier(cache, browser)
+        asyncio.run(v.get_page_info("https://example.com/moved"))
+        _, pdf_text = asyncio.run(v.get_page_info(site.url("/paper-link.pdf")))
+        link, paper = site.url("/paper-link.pdf"), site.url("/paper")
+
+    assert "Findings of the paper" in pdf_text
+    reopened = CacheFileSys(str(tmp_path))
+    assert reopened.get_all_urls() == ["https://example.com/moved", link]
+    assert reopened.redirects() == {final: "https://example.com/moved", paper: link}
+    # Evaluating the final URL uses the stored page without capturing it again
+    assert asyncio.run(verifier(reopened, browser).get_page_info(final))[1] == "Live page"
+    assert browser.urls == ["https://example.com/moved"]
 
 
 def test_evaluation_leaves_out_a_screenshot_that_cannot_be_decoded(tmp_path):
@@ -239,3 +259,18 @@ def test_cache_writes_run_outside_the_event_loop(tmp_path, monkeypatch):
         assert crawl(cache, failing, site.url("/article?crawled")) == "failed"
         assert crawl(cache, capturing, site.url("/article?captured")) == "stored"
     assert on_event_loop == [False] * 5
+
+
+def test_the_crawler_stores_a_redirected_page_once_and_finds_it_by_its_final_url(tmp_path):
+    cache = CacheFileSys(str(tmp_path))
+    final = "https://example.org/landed"
+    browser = StubBrowser(Capture(screenshot_b64=png_b64(), text="Landed", status=200, final_url=final))
+    assert crawl(cache, browser, "https://example.com/moved") == "stored"
+    assert crawl(cache, browser, final) == "cached"  # not captured again
+    with LocalSite(REDIRECTING_PAGES) as site:
+        assert crawl(cache, browser, site.url("/paper-link.pdf")) == "stored"
+        assert crawl(cache, browser, site.url("/paper")) == "cached"
+        link, paper = site.url("/paper-link.pdf"), site.url("/paper")
+
+    assert browser.urls == ["https://example.com/moved"]
+    assert CacheFileSys(str(tmp_path)).redirects() == {final: "https://example.com/moved", paper: link}

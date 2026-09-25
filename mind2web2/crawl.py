@@ -312,19 +312,22 @@ async def _store_page(url: str, cache: CacheFileSys, pdf_parser: PDFParser,
                       browser_manager: BatchBrowserManager, logger: Logger) -> Optional[Capture]:
     """Store the PDF that ``url`` serves, or else its capture in the browser.
 
-    Returns ``None`` when the page was stored, and the failed :class:`Capture` otherwise.
+    The page is stored under ``url``, with the URL it was served at after
+    redirects recorded as its final URL (see :meth:`CacheFileSys.put_web`),
+    so that a lookup of either URL finds it.  Returns ``None`` when the page
+    was stored, and the failed :class:`Capture` otherwise.
     """
     logger.info(f"Crawling {url}")
     if await is_pdf(url):
         await asyncio.sleep(0.2 * random.random())
-        pdf_bytes = await pdf_parser.fetch(url)
+        pdf_bytes, final_url = await pdf_parser.fetch_with_final_url(url)
         if pdf_bytes is not None:
-            await asyncio.to_thread(cache.put_pdf, url, pdf_bytes)
+            await asyncio.to_thread(cache.put_pdf, url, pdf_bytes, final_url)
             return None
         logger.info(f"{url} did not return a PDF; loading it in the browser")
     capture = await browser_manager.capture(url, logger)
     if capture.ok:
-        await asyncio.to_thread(cache.put_web, url, capture.text, capture.screenshot_b64)
+        await asyncio.to_thread(cache.put_web, url, capture.text, capture.screenshot_b64, capture.final_url)
         return None
     logger.warning(f"Could not capture {url}: {capture.error}")
     return capture
@@ -383,7 +386,7 @@ async def cache_answers(
     live, and they would otherwise stay for good.
 
     A task whose URL discovery raises, whose cache cannot be opened (an
-    unreadable ``index.json`` or ``failures.json``), or whose metadata file
+    unreadable ``index.json``, ``failures.json``, or ``redirects.json``), or whose metadata file
     cannot be updated after the crawl gets an ``error`` in its report; the
     other tasks are crawled as usual.
     """
@@ -403,7 +406,7 @@ async def cache_answers(
         if found.urls or (retry_failed and (cache_root / agent / task_id).is_dir()):
             try:
                 caches[task_id] = CacheFileSys(str(cache_root / agent / task_id))
-            except Exception as exc:  # CacheIndexError when index.json or failures.json cannot be read
+            except Exception as exc:  # CacheIndexError when one of the task's JSON files cannot be read
                 logger.error(f"[{agent}/{task_id}] Cannot open the cache", exc_info=True)
                 report.error = f"Cannot open the cache: {exc}"
                 return task_id, {}

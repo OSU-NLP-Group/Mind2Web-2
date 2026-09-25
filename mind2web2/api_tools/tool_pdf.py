@@ -5,6 +5,8 @@
 * :meth:`PDFParser.fetch` downloads a PDF and returns its bytes only if they
   really are a PDF, so that an HTML page behind a PDF-looking URL is loaded in
   a browser instead of being stored as a broken PDF.
+  :meth:`PDFParser.fetch_with_final_url` also returns the URL the PDF was
+  served at, after redirects.
 * :meth:`PDFParser.extract` renders a PDF (URL, local path, or bytes) into page
   screenshots and text, or returns ``(None, None)``.
 
@@ -162,13 +164,23 @@ class PDFParser:
         ``export.arxiv.org``.  A download is abandoned after
         ``DOWNLOAD_TIMEOUT_SECONDS`` or beyond ``MAX_PDF_BYTES``.
         """
-        data = await self._download(url)
+        return (await self.fetch_with_final_url(url))[0]
+
+    async def fetch_with_final_url(self, url: str) -> Tuple[Optional[bytes], Optional[str]]:
+        """Download the PDF at ``url`` as :meth:`fetch` does; returns ``(pdf_bytes, final_url)``.
+
+        ``final_url`` is the URL the PDF was served at, after redirects (the
+        ``export.arxiv.org`` URL when the retry there served it).  Both are
+        ``None`` unless the response body is a PDF.
+        """
+        data, final_url = await self._download(url)
         if not _is_pdf_bytes(data) and "arxiv.org" in url:
-            data = await self._download(url.replace("://arxiv.org", "://export.arxiv.org"))
-        return data if _is_pdf_bytes(data) else None
+            data, final_url = await self._download(url.replace("://arxiv.org", "://export.arxiv.org"))
+        return (data, final_url) if _is_pdf_bytes(data) else (None, None)
 
     # ------------------ Internal Implementation ------------------
-    async def _download(self, url: str) -> Optional[bytes]:
+    async def _download(self, url: str) -> Tuple[Optional[bytes], Optional[str]]:
+        """The response body of ``url`` and the URL that served it, or ``(None, None)`` on any failure."""
         headers = {
             "User-Agent": UA_CHROME,
             "Accept": "application/pdf,application/octet-stream;q=0.9,*/*;q=0.8",
@@ -185,12 +197,12 @@ class PDFParser:
                             size += len(chunk)
                             if size > MAX_PDF_BYTES:
                                 _log.warning(f"Abandoned download of {url}: larger than {MAX_PDF_BYTES} bytes")
-                                return None
+                                return None, None
                             chunks.append(chunk)
-                        return b"".join(chunks)
+                        return b"".join(chunks), str(response.url)
         except Exception as e:  # timeouts, network errors, HTTP error statuses
             _log.info(f"Download failed for {url}: {type(e).__name__}: {e}")
-            return None
+            return None, None
 
     def _extract_from_bytes(self, data: bytes) -> Tuple[Optional[List[str]], Optional[str]]:
         try:

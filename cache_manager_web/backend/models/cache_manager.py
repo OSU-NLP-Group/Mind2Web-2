@@ -1,15 +1,19 @@
 """The Cache Manager's view of an agent's page caches, and the edits a reviewer makes to them.
 
 Each task directory is a :class:`CacheFileSys`.  Evaluation reads only what
-it stores: the pages (``index.json`` and their files) and the failure records
-of automated captures (``failures.json``).  The Cache Manager keeps its own
+it stores: the pages (``index.json`` and their files), the URLs their
+captures were redirected to (``redirects.json``), and the failure records of
+automated captures (``failures.json``).  The Cache Manager keeps its own
 review state next to them, which evaluation never reads:
 
 - ``pending.json``: URLs to capture that have neither a stored page nor a
   failure record: URLs the reviewer added, and URLs whose page or failure
   record was reset.  A URL stops being pending once a page is stored for it,
   and loading a task drops the pending URLs for which another process, such
-  as an evaluation run, stored a page or recorded a failure.
+  as an evaluation run, stored a page or recorded a failure.  A pending URL
+  that is only a final URL recorded for a stored page (a capture of another
+  URL was redirected to it) stays in the file but is not listed, since it
+  resolves to that page, and is listed again if that page is removed.
 - ``flags.json``: URLs whose stored page looks wrong and needs a recapture.
   A capture or upload clears the flag.  A flag on a URL that has neither a
   stored page nor a failure record has no effect.
@@ -275,7 +279,7 @@ class CacheManager:
                       for url in self._pending_urls(task_id, cache)]
         return url_infos
 
-    def canonical_url(self, task_id: str, url: str) -> str:
+    def canonical_url(self, task_id: str, url: str, follow_redirects: bool = True) -> str:
         """The URL under which the task lists the page that ``url`` names, or ``url`` if the task does not have it.
 
         That is the URL of the stored page that ``url`` refers to (see
@@ -285,20 +289,45 @@ class CacheManager:
         this URL.  Letter case is never disregarded, as the crawler never
         disregards it: a server may serve different pages for URLs that
         differ in letter case, so a page stored under one is not the page of
-        the other.
+        the other.  With ``follow_redirects=False``, a URL that only resolves
+        to a page as the final URL of its capture (see
+        :meth:`resolves_through_redirect`) is not taken for that page: its own
+        failure record or pending entry, which the redirect hides from the
+        listing, is found instead.
         """
         cache = self.get_task_cache(task_id)
         if not cache:
             return url
         try:
-            listed = cache.lookup(url, ignore_case=False) or cache.failure_url(url, ignore_case=False)
+            listed = (cache.lookup(url, ignore_case=False, follow_redirects=follow_redirects)
+                      or cache.failure_url(url, ignore_case=False, follow_redirects=follow_redirects))
         except ValueError:  # cannot be parsed, so the cache has nothing for it
             listed = None
         if listed is not None:
             return listed
         form = page_form(url)
+        if follow_redirects:
+            return next((pending for pending in sorted(self._pending.get(task_id, ()))
+                         if page_form(pending) == form and _stored_state(cache, pending) is None), url)
         return next((pending for pending in sorted(self._pending.get(task_id, ()))
-                     if page_form(pending) == form and _stored_state(cache, pending) is None), url)
+                     if page_form(pending) == form and not _has_own_entry(cache, pending)), url)
+
+    def resolves_through_redirect(self, task_id: str, url: str) -> bool:
+        """Whether ``url`` is not listed itself but is a final URL recorded for a stored page (see
+        :meth:`CacheFileSys.put_web`), so that it resolves to that page.
+
+        Such a URL names the page for viewing, but an edit that deletes or
+        changes an entry must not take it for the page: the reviewer never
+        selected that page.
+        """
+        cache = self.get_task_cache(task_id)
+        if not cache:
+            return False
+        try:
+            return (cache.lookup(url, ignore_case=False) is not None
+                    and cache.lookup(url, ignore_case=False, follow_redirects=False) is None)
+        except ValueError:
+            return False
 
     def url_state(self, task_id: str, url: str) -> Optional[str]:
         """``"web"`` or ``"pdf"`` for a stored page, ``"failed"``, ``"pending"``, or ``None`` if the task does not have ``url``."""
@@ -335,8 +364,16 @@ class CacheManager:
         return None, None
 
     def store_page(self, task_id: str, url: str, *, text: Optional[str] = None, screenshot: Optional[bytes] = None,
-                   pdf_bytes: Optional[bytes] = None) -> Optional[str]:
+                   pdf_bytes: Optional[bytes] = None, final_url: Optional[str] = None) -> Optional[str]:
         """Store a page for ``url``: the PDF if ``pdf_bytes`` is given, else the text and screenshot.
+
+        ``final_url`` is the URL the capture ended at after a redirect; it is
+        recorded as the page's final URL (see :meth:`CacheFileSys.put_web`),
+        so the page is stored once and the final URL refers to it, unless a
+        page is stored under the final URL.  A capture named by a URL that is
+        itself only a final URL recorded for another page is stored as that
+        URL's own page, which takes the place of the redirect record; it never
+        replaces the page captured there.
 
         The page is stored under the URL the task lists for ``url`` (see
         :meth:`canonical_url`): it replaces the stored page that ``url``
@@ -355,11 +392,11 @@ class CacheManager:
         if not cache or (not pdf_bytes and (text is None or screenshot is None)):
             return None
         try:
-            listed = self.canonical_url(task_id, url)
+            listed = self.canonical_url(task_id, url, follow_redirects=False)
             if pdf_bytes:
-                stored = cache.put_pdf(listed, pdf_bytes)
+                stored = cache.put_pdf(listed, pdf_bytes, final_url)
             else:
-                stored = cache.put_web(listed, text, screenshot)
+                stored = cache.put_web(listed, text, screenshot, final_url)
         except Exception as e:
             logger.error(f"Failed to store a page for {url} in task {task_id}: {e}")
             return None
@@ -395,11 +432,13 @@ class CacheManager:
 
         The pending entries deleted are every spelling of the URL's page that
         ``pending.json`` lists (the URLs with the same :func:`page_form`).
-        Returns ``False`` if the task had none of these.  Raises
+        Returns ``False`` if the task had none of these, and for a URL that
+        only resolves to a page through a redirect record (see
+        :meth:`resolves_through_redirect`), which is left alone.  Raises
         :class:`ReviewStateError` if a review-state file cannot be read.
         """
         cache = self.get_task_cache(task_id)
-        if not cache:
+        if not cache or self.resolves_through_redirect(task_id, url):
             return False
 
         try:
@@ -430,12 +469,13 @@ class CacheManager:
         ``pending.json`` lists (the URLs with the same :func:`page_form`)
         are dropped.  Returns ``"web"`` or ``"pdf"`` if a page was deleted,
         ``"failed"`` if only a failure record was, or ``None`` if the task had
-        neither (then nothing changes).  Raises :class:`ReviewStateError` if a
+        neither or ``url`` only resolves to a page through a redirect record
+        (then nothing changes).  Raises :class:`ReviewStateError` if a
         review-state file cannot be read.  Evaluation treats a pending URL
         like any URL that is not cached: it captures the page live.
         """
         cache = self.get_task_cache(task_id)
-        if not cache:
+        if not cache or self.resolves_through_redirect(task_id, url):
             return None
 
         try:
@@ -635,8 +675,26 @@ def _write_review_file(path: Path, value: list | dict) -> None:
 
 
 def _still_pending(cache: CacheFileSys, urls: Set[str]) -> Set[str]:
-    """The URLs of ``urls`` for which ``cache`` has neither a stored page nor a failure record."""
-    return {url for url in urls if _stored_state(cache, url) is None}
+    """The URLs of ``urls`` for which ``cache`` has neither a stored page nor a failure record.
+
+    A redirect record does not count: a pending URL that resolves to a page
+    only as the final URL of its capture is kept, so that it is listed again
+    if that page is removed.
+    """
+    return {url for url in urls if not _has_own_entry(cache, url)}
+
+
+def _has_own_entry(cache: CacheFileSys, url: str) -> bool:
+    """Whether ``cache`` stores a page or a failure record for ``url`` itself, in its own letter case.
+
+    Redirect records do not count, neither to find a page nor to hide a
+    failure record; a URL that cannot be parsed has neither.
+    """
+    try:
+        return (cache.lookup(url, ignore_case=False, follow_redirects=False) is not None
+                or cache.failure_url(url, ignore_case=False, follow_redirects=False) is not None)
+    except ValueError:
+        return False
 
 
 def _other_pages(urls: Set[str], url: str) -> Set[str]:
