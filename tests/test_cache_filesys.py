@@ -36,7 +36,7 @@ def test_pages_are_readable_from_a_new_instance(tmp_path):
     reopened = CacheFileSys(str(tmp_path))  # no save step: every put is already on disk
     assert reopened.get_all_urls() == ["https://example.com/a", "https://example.com/b",
                                        "https://example.com/c", "https://example.com/doc.pdf"]
-    assert reopened.summary() == {"total_urls": 4, "web_pages": 3, "pdf_pages": 1}
+    assert reopened.summary() == {"total_urls": 4, "web_pages": 3, "pdf_pages": 1, "failed_urls": 0}
     text, screenshot = reopened.get_web("http://www.example.com/a")
     assert text == "text A"
     assert Image.open(io.BytesIO(screenshot)).format == "JPEG"
@@ -295,3 +295,100 @@ def test_index_entries_without_their_files_are_ignored(tmp_path, caplog):
     assert reopened.get_all_urls() == ["https://example.com/b.pdf"]
     assert f"Ignoring index entry for {key}: its files are missing" in caplog.text
     assert "unknown content type 'mhtml'" in caplog.text
+
+
+def test_failures_are_recorded_matched_and_cleared_by_storing_the_page(tmp_path):
+    cache = CacheFileSys(str(tmp_path))
+    assert cache.record_failure("https://example.com/a/", "HTTP 503") == "https://example.com/a"
+    cache.record_failure("http://www.example.com/a", "blocked: HTTP 403", blocked=True)
+
+    record = CacheFileSys(str(tmp_path)).failure("https://example.com/a#section")
+    assert (record["reason"], record["blocked"], record["attempts"]) == ("blocked: HTTP 403", True, 2)
+    assert cache.summary()["failed_urls"] == 1
+    assert cache.has("https://example.com/a") is None
+
+    cache.put_web("https://example.com/a", "captured", png_bytes())
+    assert cache.failure("https://example.com/a") is None
+    assert json.loads((tmp_path / "failures.json").read_text()) == {}
+
+
+def test_failure_records_stay_consistent_between_processes(tmp_path):
+    crawler, manager = CacheFileSys(str(tmp_path)), CacheFileSys(str(tmp_path))
+
+    # A page stored by one process clears the failure another process recorded after it started.
+    crawler.record_failure("https://example.com/a", "timed out after 90s")
+    manager.put_web("https://example.com/a", "captured by hand", png_bytes())
+    assert json.loads((tmp_path / "failures.json").read_text()) == {}
+
+    # A failure recorded for a page that another process has stored is ignored.
+    manager.put_web("https://example.com/b", "stored", png_bytes())
+    crawler.record_failure("https://example.com/b", "timed out after 90s")
+    reopened = CacheFileSys(str(tmp_path))
+    assert reopened.failure("https://example.com/b") is None
+    assert reopened.failures() == {}
+    assert reopened.summary()["failed_urls"] == 0
+
+    # Removing the page deletes that failure too, instead of letting it reappear.
+    assert reopened.remove("http://www.example.com/b/") == "web"
+    assert reopened.failure("https://example.com/b") is None
+    assert json.loads((tmp_path / "failures.json").read_text()) == {}
+
+
+def test_removing_a_page_keeps_failures_of_other_urls(tmp_path):
+    cache = CacheFileSys(str(tmp_path))
+    cache.put_web("https://example.com/a", "a", png_bytes())
+    cache.record_failure("https://example.com/c", "HTTP 503")
+    assert cache.remove("https://example.com/a") == "web"
+    assert cache.remove("https://example.com/c") is None
+    assert list(cache.failures()) == ["https://example.com/c"]
+
+
+def test_removing_a_page_keeps_the_failure_of_a_url_differing_in_letter_case(tmp_path):
+    cache = CacheFileSys(str(tmp_path))
+    cache.put_web("https://example.com/docs/Page", "page", png_bytes())
+    cache.record_failure("https://example.com/docs/page", "HTTP 503")  # its own record: maybe another page
+    cache.record_failure("https://example.com/docs/Page/", "timed out")  # this page's URL: hidden
+    assert cache.failures() == {}
+    assert cache.remove("https://example.com/docs/Page") == "web"
+    assert list(cache.failures()) == ["https://example.com/docs/page"]
+
+
+def test_failure_records_are_matched_by_the_page_rules(tmp_path):
+    cache = CacheFileSys(str(tmp_path))
+    cache.record_failure("https://example.com/Docs/Page", "HTTP 503")
+    cache.record_failure("https://example.com/DOCS/page", "timed out")
+    assert cache.failure("http://www.example.com/DOCS/page/")["reason"] == "timed out"
+    assert cache.failure("https://example.com/docs/PAGE")["reason"] == "HTTP 503"  # recorded first
+    assert cache.record_failure("https://example.com/Docs/Page#x", "HTTP 502") == "https://example.com/Docs/Page"
+    assert cache.failure("https://example.com/Docs/Page")["attempts"] == 2
+    assert cache.failure("not a url [") is None
+
+
+def test_failure_records_being_read_are_never_changed(tmp_path, monkeypatch):
+    """Evaluation reads failure records on the event loop while worker threads store pages.
+
+    Every change therefore installs new records instead of changing the ones
+    a reader may be iterating, and :meth:`CacheFileSys.failure` reads them once.
+    """
+    installed = []  # (records as installed, a copy taken then)
+
+    class Cache(CacheFileSys):
+        def __setattr__(self, name, value):
+            if name == "_failures":
+                installed.append((value.records, dict(value.records)))
+            super().__setattr__(name, value)
+
+    cache = Cache(str(tmp_path))
+    cache.put_web("https://example.com/stored", "stored", png_bytes())
+    cache.record_failure("https://example.com/a", "HTTP 503")
+    CacheFileSys(str(tmp_path)).record_failure("https://example.com/stored", "timed out")  # hidden by the page
+    cache.record_failure("https://example.com/b", "HTTP 503")
+    cache.put_web("https://example.com/a", "captured", png_bytes())  # clears a's record
+    cache.remove("https://example.com/stored")  # deletes the hidden record
+    assert len(installed) >= 5  # at construction, and at each of the four changes to the records
+    assert all(records == copy for records, copy in installed)
+
+    # A change after failure() found the record does not make it lose the record.
+    monkeypatch.setattr(cache, "_is_stored", lambda url: cache.clear_failure(url) and False)
+    assert cache.failure("https://example.com/b")["reason"] == "HTTP 503"
+    assert CacheFileSys(str(tmp_path)).failures() == {}

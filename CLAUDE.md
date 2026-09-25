@@ -40,7 +40,7 @@ cache_manager/               # [DEPRECATED] PySide6 GUI for managing webpage cac
 
 ### Evaluation Pipeline
 1. **Agent produces answers** as markdown files with URL citations in `answers/<agent>/<task>/answer_*.md`
-2. **Webpages are cached** (text + screenshots) via `batch_answer_cache.py` to ensure reproducibility
+2. **Webpages are cached** (text + screenshots) via `batch_answer_cache.py` to ensure reproducibility. URLs whose capture fails are recorded in the task's `failures.json`; evaluation treats them as unavailable and does not capture them again. `batch_answer_cache.py --retry_failed` crawls them again (every failure record, including those evaluation wrote for URLs it captured live), and the Cache Manager lists each one as an issue for a person to capture
 3. **Evaluation scripts** (one per task) define `async def evaluate_answer(...)` that builds a verification tree
 4. **The judge agent** extracts claims from answers, then verifies each claim against source URLs using LLM calls
 5. **Metrics** (`mind2web2 metrics`) aggregate the per-answer scores into the leaderboard metrics

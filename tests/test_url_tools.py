@@ -1,7 +1,59 @@
-"""The URL normalization that decides when two URLs are the same page."""
+"""URL extraction from answers and the normalization that decides when two URLs are the same page."""
 from __future__ import annotations
 
-from mind2web2.utils.url_tools import normalize_url_keep_case, normalize_url_simple
+import pytest
+
+from mind2web2.utils.url_tools import normalize_url_keep_case, normalize_url_simple, regex_find_urls
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("[Python](https://en.wikipedia.org/wiki/Python_(programming_language))",
+     ["https://en.wikipedia.org/wiki/Python_(programming_language)"]),
+    ("See https://en.wikipedia.org/wiki/Python_(programming_language).",
+     ["https://en.wikipedia.org/wiki/Python_(programming_language)"]),
+    ("(source: https://example.com/page)", ["https://example.com/page"]),
+    (r"https://example.com/some\_page\_name", ["https://example.com/some_page_name"]),
+    ("Visit https://example.com:8080/path?q=1.", ["https://example.com:8080/path?q=1"]),
+    ("https://en.wikipedia.org/wiki/Ender's_Game", ["https://en.wikipedia.org/wiki/Ender's_Game"]),
+    ("参见https://example.com/a，以及 https://example.com/b。", ["https://example.com/a", "https://example.com/b"]),
+    ("**https://example.com/bold**", ["https://example.com/bold"]),
+    ("<https://example.com/auto>", ["https://example.com/auto"]),
+    ("www.example.com/page and http://www.example.com/x",
+     ["https://www.example.com/page", "http://www.example.com/x"]),
+    ("[https://a.com/x](https://a.com/x)", ["https://a.com/x"]),
+    ("“https://example.com/q”", ["https://example.com/q"]),
+    ("https://www.google.com/maps/place/X/@1.2,3.4,15z?entry=ttu",
+     ["https://www.google.com/maps/place/X/@1.2,3.4,15z?entry=ttu"]),
+    ("| https://example.com/t | x |", ["https://example.com/t"]),
+    ("https://example.com/a?b=c&d=e#frag, then https://example.com/a?b=c&d=e#frag",
+     ["https://example.com/a?b=c&d=e#frag"]),
+    ("https://example.com/dir/ and 'https://y.com/b'", ["https://example.com/dir/", "https://y.com/b"]),
+    ('[t](https://x.com/a "Title")', ["https://x.com/a"]),
+    ("no links here, just www and https://", []),
+    ("[filter](https://www.example.com/search?filters[type]=book)",
+     ["https://www.example.com/search?filters[type]=book"]),
+    ("[fonts](https://fonts.googleapis.com/css?family=Roboto|Open+Sans)",
+     ["https://fonts.googleapis.com/css?family=Roboto|Open+Sans"]),
+    ("|https://a.com/x|https://b.com/y|", ["https://a.com/x", "https://b.com/y"]),
+    # "[" and "|" are valid only in the query; elsewhere the URL ends before them.
+    ("according to https://example.com/page[1] and more", ["https://example.com/page"]),
+    ("https://example.com/page[^1].", ["https://example.com/page"]),
+    ("see https://example.com/page([1]) and more", ["https://example.com/page"]),
+    ("https://example.com/page#section[2]", ["https://example.com/page#section"]),
+    ("https://example.com/s?filters[type]=book#results[2]", ["https://example.com/s?filters[type]=book#results"]),
+    ("|https://a.com/x|some text|", ["https://a.com/x"]),
+    ("|https://a.com|some text|", ["https://a.com"]),
+    (r"| https://example.com/a\|b |", ["https://example.com/a"]),
+    ("|https://a.com/x|[link](https://b.com/y)|", ["https://a.com/x", "https://b.com/y"]),
+    ("http://[::1]/x[1]", ["http://[::1]/x"]),
+    ("[https://a.com/x](https://b.com/y)", ["https://a.com/x", "https://b.com/y"]),
+    ("[t](https://a.com/x)(see https://b.com/y)", ["https://a.com/x", "https://b.com/y"]),
+    (r"[w](https://en.wikipedia.org/wiki/Foo_\(bar\))", ["https://en.wikipedia.org/wiki/Foo_(bar)"]),
+    ("_https://example.com/ital_, ~~https://example.com/strike~~ and https://example.com/a_",
+     ["https://example.com/ital", "https://example.com/strike", "https://example.com/a_"]),
+])
+def test_regex_find_urls(text, expected):
+    assert regex_find_urls(text) == expected
 
 
 def test_normalized_form_ignores_surface_differences():

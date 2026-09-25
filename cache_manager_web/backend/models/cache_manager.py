@@ -3,7 +3,7 @@
 from __future__ import annotations
 import json
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Set
+from typing import Any, Dict, List, Optional, Tuple, Set
 from dataclasses import dataclass
 import logging
 
@@ -16,11 +16,12 @@ logger = logging.getLogger(__name__)
 class TaskSummary:
     """Task cache summary information."""
     task_id: str
-    total_urls: int
+    total_urls: int  # stored pages plus failed URLs
     web_urls: int
     pdf_urls: int
     issue_urls: int
     cache_path: str
+    failed_urls: int = 0
 
 
 @dataclass
@@ -28,9 +29,10 @@ class URLInfo:
     """URL information with metadata."""
     url: str
     task_id: str
-    content_type: str  # "web" or "pdf"
+    content_type: str  # "web", "pdf", or "failed" (the capture failed and nothing is stored)
     has_issues: bool = False
     issues: List[str] = None
+    failure: Optional[Dict[str, Any]] = None  # the failure record, for "failed" URLs
     
     def __post_init__(self):
         if self.issues is None:
@@ -94,50 +96,35 @@ class CacheManager:
         return successful_tasks, len(task_dirs)
     
     def _has_content(self, cache: CacheFileSys) -> bool:
-        """Check if cache has any content."""
+        """Whether the task has any stored page or failed URL."""
         try:
-            urls = cache.get_all_urls()
-            return len(urls) > 0
+            return bool(cache.get_all_urls() or cache.failures())
         except Exception:
             return False
     
     def _create_task_summary(self, task_id: str, cache: CacheFileSys) -> TaskSummary:
         """Create summary information for a task."""
-        urls = cache.get_all_urls()
-        web_count = 0
-        pdf_count = 0
-        
-        for url in urls:
-            content_type = cache.has(url)
-            if content_type == "web":
-                web_count += 1
-            elif content_type == "pdf":
-                pdf_count += 1
-        
+        counts = cache.summary()
         return TaskSummary(
             task_id=task_id,
-            total_urls=len(urls),
-            web_urls=web_count,
-            pdf_urls=pdf_count,
+            total_urls=counts["total_urls"] + counts["failed_urls"],
+            web_urls=counts["web_pages"],
+            pdf_urls=counts["pdf_pages"],
             issue_urls=0,  # Will be calculated by keyword detector
-            cache_path=str(cache.task_dir)
+            cache_path=str(cache.task_dir),
+            failed_urls=counts["failed_urls"],
         )
+
+    def _refresh_summary(self, task_id: str):
+        """Recompute a task's summary after its cache changed."""
+        cache = self.get_task_cache(task_id)
+        if cache:
+            self.task_summaries[task_id] = self._create_task_summary(task_id, cache)
     
     def _index_task_urls(self, task_id: str, cache: CacheFileSys):
         """Index all URLs in a task for efficient lookup."""
-        urls = cache.get_all_urls()
-        
-        for url in urls:
-            content_type = cache.has(url)
-            url_info = URLInfo(
-                url=url,
-                task_id=task_id,
-                content_type=content_type
-            )
-            
-            if url not in self._url_index:
-                self._url_index[url] = []
-            self._url_index[url].append(url_info)
+        for url_info in self.get_task_urls(task_id, cache):
+            self._url_index.setdefault(url_info.url, []).append(url_info)
     
     def get_task_ids(self) -> List[str]:
         """Get sorted list of task IDs."""
@@ -151,24 +138,17 @@ class CacheManager:
         """Get summary for specific task."""
         return self.task_summaries.get(task_id)
     
-    def get_task_urls(self, task_id: str) -> List[URLInfo]:
-        """Get all URLs for a specific task."""
-        cache = self.get_task_cache(task_id)
+    def get_task_urls(self, task_id: str, cache: Optional[CacheFileSys] = None) -> List[URLInfo]:
+        """Every URL of a task: its stored pages, then the URLs whose capture failed."""
+        cache = cache or self.get_task_cache(task_id)
         if not cache:
             return []
-        
-        urls = cache.get_all_urls()
-        url_infos = []
-        
-        for url in urls:
-            content_type = cache.has(url)
-            url_info = URLInfo(
-                url=url,
-                task_id=task_id,
-                content_type=content_type
-            )
-            url_infos.append(url_info)
-        
+        url_infos = [URLInfo(url=url, task_id=task_id, content_type=cache.has(url))
+                     for url in cache.get_all_urls()]
+        url_infos += [URLInfo(url=url, task_id=task_id, content_type="failed", has_issues=True,
+                              issues=[f"capture failed: {record.get('reason', 'unknown reason')}"],
+                              failure=record)
+                      for url, record in cache.failures().items()]
         return url_infos
     
     def find_url_across_tasks(self, url: str) -> List[URLInfo]:
@@ -208,19 +188,10 @@ class CacheManager:
         try:
             # Prefer updating the canonical stored URL if it exists
             target_url = cache.lookup(url) or url
-            old_type = cache.has(target_url)
-
-            if old_type == "pdf":
-                summary = self.task_summaries.get(task_id)
-                if summary:
-                    summary.pdf_urls -= 1
-                    summary.web_urls += 1
-
-            cache.put_web(target_url, text, screenshot)  # also removes the files of a replaced PDF
-
-            # Update index if it's a new URL
-            if target_url not in [info.url for info in self.get_task_urls(task_id)]:
-                self._index_single_url(task_id, target_url, "web")
+            # Replaces a PDF's files, and clears the URL's failure record
+            cache.put_web(target_url, text, screenshot)
+            self._index_single_url(task_id, target_url, "web")
+            self._refresh_summary(task_id)
             
             logger.info(f"Updated content for {target_url} in task {task_id}")
             return True
@@ -246,14 +217,7 @@ class CacheManager:
                 return False
 
             self._index_single_url(task_id, url, content_type)
-            
-            # Update task summary
-            summary = self.task_summaries[task_id]
-            summary.total_urls += 1
-            if content_type == "web":
-                summary.web_urls += 1
-            else:
-                summary.pdf_urls += 1
+            self._refresh_summary(task_id)
             
             logger.info(f"Added {url} to task {task_id}")
             return True
@@ -262,30 +226,24 @@ class CacheManager:
             return False
     
     def _index_single_url(self, task_id: str, url: str, content_type: str):
-        """Index a single URL."""
-        url_info = URLInfo(
-            url=url,
-            task_id=task_id,
-            content_type=content_type
-        )
-        
-        if url not in self._url_index:
-            self._url_index[url] = []
-        
-        # Check if this task already has this URL
-        existing = [info for info in self._url_index[url] if info.task_id == task_id]
-        if not existing:
-            self._url_index[url].append(url_info)
+        """Index a single URL, or update the content type it is indexed with."""
+        infos = self._url_index.setdefault(url, [])
+        existing = next((info for info in infos if info.task_id == task_id), None)
+        if existing is not None:
+            existing.content_type = content_type
+            existing.failure = None
+        else:
+            infos.append(URLInfo(url=url, task_id=task_id, content_type=content_type))
     
     def delete_url(self, task_id: str, url: str) -> bool:
-        """Delete URL from task."""
+        """Delete a URL from a task: its stored page and its failure record."""
         cache = self.get_task_cache(task_id)
         if not cache:
             return False
-        
+
         try:
-            content_type = cache.remove(url)
-            if content_type is None:
+            removed = cache.remove(url)
+            if not cache.clear_failure(url) and removed is None:
                 logger.warning(f"Cannot delete {url} from task {task_id}: it is not cached")
                 return False
 
@@ -298,14 +256,7 @@ class CacheManager:
                 if not self._url_index[url]:
                     del self._url_index[url]
             
-            # Update summary
-            summary = self.task_summaries[task_id]
-            summary.total_urls -= 1
-            if content_type == "web":
-                summary.web_urls -= 1
-            else:
-                summary.pdf_urls -= 1
-            
+            self._refresh_summary(task_id)
             logger.info(f"Deleted {url} from task {task_id}")
             return True
         except Exception as e:
@@ -370,12 +321,15 @@ class CacheManager:
                        for info in infos if info.content_type == "web")
         total_pdf = sum(1 for infos in self._url_index.values()
                        for info in infos if info.content_type == "pdf")
+        total_failed = sum(1 for infos in self._url_index.values()
+                           for info in infos if info.content_type == "failed")
 
         return {
             "total_tasks": total_tasks,
             "total_urls": total_urls,
             "web_urls": total_web,
-            "pdf_urls": total_pdf
+            "pdf_urls": total_pdf,
+            "failed_urls": total_failed,
         }
 
     # --- Flags persistence (for manually flagged URLs, especially PDFs) ---
@@ -441,16 +395,10 @@ class CacheManager:
 
         try:
             target_url = cache.lookup(url) or url
-            old_type = cache.has(target_url)
-
-            cache.put_pdf(target_url, pdf_bytes)  # also removes the files of a replaced web page
-
-            # Update summary counts
-            if old_type and old_type != "pdf":
-                summary = self.task_summaries.get(task_id)
-                if summary:
-                    summary.web_urls -= 1
-                    summary.pdf_urls += 1
+            # Replaces a web page's files, and clears the URL's failure record
+            cache.put_pdf(target_url, pdf_bytes)
+            self._index_single_url(task_id, target_url, "pdf")
+            self._refresh_summary(task_id)
 
             # Remove flag if it was flagged
             self.unflag_url(task_id, target_url)
