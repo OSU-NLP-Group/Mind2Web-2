@@ -47,8 +47,8 @@ export async function selectUrl(taskId, url) {
 
     if (isPdf) {
         setState({ currentText: '', currentIssues: { has_issues: false } });
-        // Auto-mark unflagged PDF as reviewed when viewed
-        if (urlData && !['ok', 'fixed', 'skip'].includes(urlData.reviewed)) {
+        // Auto-mark unflagged PDF as reviewed when viewed (a batch-recaptured one waits for `r`)
+        if (urlData && !['ok', 'fixed', 'skip', 'recaptured'].includes(urlData.reviewed)) {
             // Only auto-review if no definite issues (i.e., not flagged)
             if (urlData.severity !== 'definite') {
                 api.setReview(taskId, url, 'ok').catch(() => {});
@@ -75,10 +75,11 @@ export async function selectUrl(taskId, url) {
         // - Clean URLs (no issues) — no progress impact
         // - Possible-issue URLs (yellow) — viewing confirms they're OK
         // - Definite-issue URLs (red) — require manual recapture/mark
+        // - Batch-recaptured URLs (blue) — the reviewer confirms each with `r`
         if (!data.issues?.has_issues || data.issues?.severity !== 'definite') {
             const fresh = getState();
             const ud = fresh.urls.find(u => u.url === url);
-            if (ud && !['ok', 'fixed', 'skip'].includes(ud.reviewed)) {
+            if (ud && !['ok', 'fixed', 'skip', 'recaptured'].includes(ud.reviewed)) {
                 api.setReview(taskId, url, 'ok').catch(() => {});
                 const urls = fresh.urls.map(u => u.url === url ? { ...u, reviewed: 'ok' } : u);
                 setState({ urls });

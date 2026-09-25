@@ -13,7 +13,7 @@ const state = {
     stats: {},
 
     // Tasks
-    tasks: [],            // [{task_id, total_urls, web_urls, pdf_urls, issue_urls, reviewed_count}]
+    tasks: [],            // [{task_id, total_urls, web_urls, pdf_urls, failed_urls, pending_urls, reviewed_count, issue_count, issue_reviewed_count}]
     taskIssues: {},       // {task_id: {count, severity}}
     selectedTaskId: null,
 

@@ -25,10 +25,13 @@
             </button>
             <span id="issue-counter" class="toolbar-info"></span>
             <div class="toolbar-sep"></div>
-            <button id="btn-batch" class="toolbar-btn" title="Batch recapture all red URLs" disabled>
+            <button id="btn-batch" class="toolbar-btn" title="Queue every unreviewed red URL that is not a stored PDF for the extension's batch capture" disabled>
                 Batch Recapture
             </button>
             <span id="batch-status" class="toolbar-info"></span>
+            <button id="btn-batch-stop" class="toolbar-btn" title="Stop the queued batch; the URLs it has not captured stay red" style="display:none">
+                Stop batch
+            </button>
             <div class="toolbar-sep"></div>
             <button id="btn-shortcuts-help" class="toolbar-btn" title="Keyboard shortcuts (?)">
                 ?
@@ -184,6 +187,7 @@
                             <li>Open <code>chrome://extensions</code>, enable Developer mode.</li>
                             <li>Click "Load unpacked" and select the <code>cache_manager_web/extension/</code> folder.</li>
                             <li>Pin the extension icon for easy access.</li>
+                            <li>If the Cache Manager does not run at <code>http://127.0.0.1:8000</code> (for example, with another <code>--port</code>), open the extension popup, expand <strong>Settings</strong>, and enter the address of this page.</li>
                         </ol>
 
                         <h4 class="guide-section-title">Fixing a Single URL</h4>
@@ -191,17 +195,19 @@
                             <li>Select the red URL in the list.</li>
                             <li>Click <strong>Recapture Live</strong> (or <kbd>Ctrl+U</kbd>) &mdash; the page opens in a new tab.</li>
                             <li>If there's a CAPTCHA or login, solve it manually in the browser.</li>
-                            <li>Click the extension icon &rarr; <strong>Capture This Page</strong>.</li>
-                            <li>The UI updates automatically via SSE. The URL turns green.</li>
+                            <li>Click the extension icon &rarr; <strong>Capture This Page</strong> (or press <kbd>Alt+Shift+C</kbd> in that tab).</li>
+                            <li>The UI updates automatically via SSE. The URL turns green, unless the captured page has no text.</li>
                         </ol>
+                        <ul class="guide-list"><li>The capture is stored for the URL selected here, so keep that URL selected until you capture. A tab of another site than the selected URL is refused (the popup offers <strong>Capture anyway</strong> for a site that redirected elsewhere), and so is this page itself.</li></ul>
 
                         <h4 class="guide-section-title">Batch Recapture</h4>
                         <ol class="guide-steps">
-                            <li>Click <strong>Batch Recapture</strong> in the toolbar (queues all red URLs).</li>
-                            <li>Click the extension icon &rarr; <strong>Start Auto-Capture</strong>.</li>
+                            <li>Click <strong>Batch Recapture</strong> in the toolbar (queues every unreviewed red URL that is not a stored PDF).</li>
+                            <li>Click the extension icon &rarr; <strong>Start Batch (auto)</strong> or <strong>Start Batch (pause on CAPTCHA)</strong>.</li>
                             <li>The extension opens each URL, waits for load, captures, and advances automatically.</li>
-                            <li>If a CAPTCHA is detected, solve it in the browser tab &mdash; the extension waits.</li>
-                            <li>After batch completes, recaptured URLs show as blue (needs human review).</li>
+                            <li>If a CAPTCHA is detected, the auto mode captures the page anyway and moves on; the pause mode waits until you solve it in the batch tab (or press <kbd>Alt+Shift+C</kbd> there once it is solved), then captures and continues.</li>
+                            <li>After batch completes, recaptured URLs show as blue (needs human review); press <kbd>r</kbd> to confirm each.</li>
+                            <li><strong>Stop batch</strong> in the toolbar ends a queued batch, whether or not the extension is running it.</li>
                         </ol>
 
                         <h4 class="guide-section-title">URL Management</h4>

@@ -52,13 +52,13 @@ The most powerful feature — fix all broken pages at once:
 1. Click **Batch Recapture** in the toolbar (queues every unreviewed red URL that is not a stored PDF)
 2. Click the Chrome Extension icon → **Start Batch (auto)** or **Start Batch (pause on CAPTCHA)**
 3. The extension automatically opens each URL, waits for it to load, captures the page, and advances to the next one
-4. If a CAPTCHA is detected (Cloudflare, reCAPTCHA, hCaptcha, etc.), the auto mode captures the page anyway and moves on; the pause mode waits for you to solve it, then continues
+4. If a CAPTCHA is detected (Cloudflare, reCAPTCHA, hCaptcha, etc.), the auto mode captures the page anyway and moves on; the pause mode waits for you to solve it in the batch tab, then captures the page and continues. If the extension does not notice that the CAPTCHA is solved, press `Alt+Shift+C` in the batch tab: while the batch waits on a CAPTCHA, the shortcut captures the page for the URL the batch waits for, not for the URL selected in the Cache Manager
 5. Pages with very short content are auto-retried (up to 2 times)
-6. After batch completes, review the recaptured URLs (shown in blue) and press `r` to confirm each
+6. After batch completes, review the recaptured URLs (shown in blue) and press `r` to confirm each; selecting a blue URL does not mark it as reviewed
 
 The batch captures only URLs that still need a capture: a queued URL that you capture or upload by hand, mark as reviewed, rename, or delete is left out when the batch reaches it, so the batch does not replace your fix. If it is the URL the batch is waiting for, the batch moves on to the next URL without storing what its tab loaded for that URL. If the batch tab is closed or the extension is reloaded, the batch stays queued, and starting it again from the popup resumes it at that URL.
 
-Opening the Cache Manager page again, in the same tab or another one, and clicking **Refresh** keep a running batch; opening another cache folder stops it.
+Opening the Cache Manager page again, in the same tab or another one, and clicking **Refresh** keep a running batch; opening another cache folder stops it. **Stop batch** in the toolbar, shown while a batch is queued, ends it whether or not the extension is running it; until then, **Batch Recapture** stays disabled.
 
 ## Single-Page Recapture
 
@@ -66,8 +66,12 @@ For pages that need manual intervention (login walls, complex anti-bot):
 
 1. Select the URL and click **Recapture Live** (or press `u`)
 2. The page opens in a new browser tab — solve any CAPTCHA or login
-3. Click the extension icon → **Capture This Page**
+3. Click the extension icon → **Capture This Page** (or press `Alt+Shift+C` in that tab)
 4. The UI updates instantly via SSE
+
+The capture is stored for the URL selected in the Cache Manager, so keep that URL selected until you capture. To prevent storing a page under the wrong URL, the extension refuses to capture a tab of another site than the selected URL (the same host, ignoring `www.`, or a subdomain of it, counts as the same site) and the Cache Manager page itself. If the page legitimately redirected to another site, the popup shows the refusal and offers **Capture anyway**.
+
+A capture whose page has no text (for example, because the page had not rendered yet) is stored, but the URL is not marked fixed: it keeps its flag and stays red, the Cache Manager shows a warning, and the extension leaves the tab open so that you can capture it again.
 
 ## URL Management
 
