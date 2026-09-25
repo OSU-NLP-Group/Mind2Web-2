@@ -211,9 +211,12 @@ async def _evaluate(args: argparse.Namespace, client: LLMClient, scripts: dict[s
 
 
 def _write_report(args: argparse.Namespace) -> None:
-    """Write the HTML page of the agent's results (``mind2web2 report``), over every task with results."""
+    """Write the HTML page of the agent's results (``mind2web2 report``), over every task with results.
+
+    Failed checks show thumbnails of the pages in the run's cache (``args.cache_dir``).
+    """
     try:
-        path = write_report(args.results_dir, args.agent)
+        path = write_report(args.results_dir, args.agent, cache_root=args.cache_dir)
     except FileNotFoundError as exc:  # no answer has been evaluated
         print(f"Report not written: {exc}", file=sys.stderr)
         return

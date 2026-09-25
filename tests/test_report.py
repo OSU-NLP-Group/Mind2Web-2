@@ -11,7 +11,8 @@ import re
 
 from mind2web2 import Evaluator, cli
 from mind2web2.eval_toolkit import shared_browser
-from mind2web2.report import AnswerEntry, render_report
+from mind2web2.report import AnswerEntry, Thumbnails, render_report
+from mind2web2.utils.cache_filesys import CacheFileSys
 
 from offline_eval import FakeLLMClient, SyntheticCache
 from test_evaluate import RecordingBrowser, run_evaluate  # noqa: F401  (run_evaluate is a fixture)
@@ -134,10 +135,10 @@ def test_a_report_that_fails_to_render_does_not_stop_evaluate(tmp_path, monkeypa
     import argparse
     from mind2web2.cli import evaluate as evaluate_command
 
-    def broken(results_root, agent):
+    def broken(results_root, agent, cache_root=None):
         raise KeyError("final_score")
     monkeypatch.setattr(evaluate_command, "write_report", broken)
-    evaluate_command._write_report(argparse.Namespace(results_dir=tmp_path, agent="agent"))
+    evaluate_command._write_report(argparse.Namespace(results_dir=tmp_path, agent="agent", cache_dir=None))
     assert "Report not written: KeyError: 'final_score'" in capsys.readouterr().err
 
 
@@ -195,7 +196,92 @@ def test_the_mean_of_a_task_counts_runs_without_a_result_as_0():
     other_task = AnswerEntry("t2", "answer_1.md", 1, {"final_score": 0.5}, None, "c")
     perfect_once = AnswerEntry("t3", "answer_1.md", 1, {"final_score": 1.0}, None, "d")
     page = render_report("agent", [scored, unscored, other_task, perfect_once])
-    means = re.findall(r"<td class=num>([0-9.]+)</td></tr>", page)
+    means = re.findall(r'<td class=num>([0-9.]+)</td><td class="meanbar">', page)
     assert means == ["0.500", "0.250", "0.500"]  # t2 and t3 have no answer in run 2
     # A run without an answer puts the task below 1.0 for the filter, as its mean says
-    assert '<tr data-task="t3" data-below="1">' in page
+    assert '<tr data-task="t3" data-below="1"' in page
+
+
+def leaf(node_id: str, status: str, score: float, evidence: dict) -> dict:
+    return {"id": node_id, "desc": f"{node_id} holds", "status": status, "score": score, "strategy": "parallel",
+            "critical": True, "children": [], "evidence": evidence}
+
+
+def lineage(page_passes: bool = False, url: str = "https://a.example/page") -> dict:
+    """A tree whose first check passes, whose page check fails (unless ``page_passes``), and whose third is skipped."""
+    children = [
+        leaf("named", "passed", 1.0, {"claim": "The answer names X.", "sources": [],
+                                      "checks": [{"url": None, "passed": True, "votes": [True], "reasoning": "yes"}]}),
+        leaf("supported", "passed" if page_passes else "failed", 1.0 if page_passes else 0.0,
+             {"claim": "The page says X.", "sources": [url],
+              "checks": [{"url": url, "passed": page_passes, "votes": [page_passes, page_passes],
+                          "reasoning": "The page does not mention X."}]}),
+        leaf("dated", "skipped", 0.0, {"claim": "X is from 2020.", "sources": [], "checks": [],
+                                       "skipped_because": "supported"}),
+    ]
+    return {"id": "root", "desc": "root", "status": "partial", "score": 1 / 3, "strategy": "sequential",
+            "critical": False, "children": children}
+
+
+def scored(task_id: str, run: int, tree: dict, score: float) -> AnswerEntry:
+    return AnswerEntry(task_id, f"answer_{run}.md", run,
+                       {"final_score": score, "eval_breakdown": [{"verification_tree": tree}]}, None, "answer")
+
+
+def test_an_answer_card_leads_with_the_checks_that_lost_points():
+    page = render_report("agent", [scored("t1", 1, lineage(), 1 / 3)])
+    summary = page[page.index('<details class="answer-card'):page.index('<div class="card-body">')]
+    assert summary.count('<i class="sq ') == 3 and '<i class="sq failed" title="supported: failed">' in summary
+    assert "1 passed · 1 failed · 1 skipped" in summary and "lost at <code>supported</code>" in summary
+    assert 'aria-label="checks: named passed, supported failed, dated skipped"' in summary
+    lost = page[page.index('<section class="lost">'):page.index("</section>", page.index('<section class="lost">'))]
+    assert "Where points were lost (1 failed check)" in lost
+    assert "The page says X." in lost and "The page does not mention X." in lost and "named" not in lost
+    assert 'skipped: depends on <code>supported</code>' in page  # a skipped check takes one line in the tree
+    assert "most frequent failure: <code>supported</code> failed in 1 of 1 scored run" in page
+
+
+def test_the_charts_count_answers_by_score_and_checks_by_status():
+    page = render_report("agent", [scored("t1", 1, lineage(), 1 / 3), scored("t1", 2, lineage(True), 1.0),
+                                   AnswerEntry("t2", "answer_1.md", 1, None, None, None)])
+    answers = page[page.index("Answers by score"):page.index("Checks of the scored answers")]
+    assert "1.0 <b>1</b>" in answers and "between 0 and 1 <b>1</b>" in answers
+    assert "no result or changed <b>1</b>" in answers and "<title>0:" not in answers
+    checks = page[page.index("Checks of the scored answers"):page.index('id="scores"')]
+    assert "passed <b>3</b>" in checks and "failed <b>1</b>" in checks and "skipped <b>2</b>" in checks
+
+
+def test_a_failed_page_check_shows_a_thumbnail_of_its_cached_screenshot_embedded_once(tmp_path):
+    from PIL import Image
+    import io
+    image = io.BytesIO()
+    Image.new("RGB", (1100, 3000), "white").save(image, format="PNG")
+    CacheFileSys(str(tmp_path / "agent" / "t1")).put_web("https://a.example/page", "text", image.getvalue())
+    thumbnails = Thumbnails(tmp_path / "agent")
+    entries = [scored("t1", 1, lineage(), 1 / 3), scored("t1", 2, lineage(), 1 / 3),
+               scored("t1", 3, lineage(url="https://a.example/not-cached"), 1 / 3),
+               scored("t9", 1, lineage(), 1 / 3)]
+    page = render_report("agent", entries, thumbnails=thumbnails)
+    assert page.count("<symbol ") == 1 and page.count("data:image/jpeg;base64,") == 1
+    assert page.count('<use href="#th0"/>') == 2  # runs 1 and 2 cite the page; run 3's page is not cached
+    assert '<symbol id="th0" viewBox="0 0 480 720">' in page  # scaled to 480 wide, the top 720 pixels
+    assert not (tmp_path / "agent" / "t9").exists()  # a task without a cache gets no thumbnail and no cache
+
+
+def test_thumbnails_stop_at_their_budget_and_the_page_says_so(tmp_path):
+    from PIL import Image
+    import io
+    cache = CacheFileSys(str(tmp_path / "agent" / "t1"))
+    for n in range(2):
+        image = io.BytesIO()
+        Image.effect_noise((1100, 800), 60 + n).convert("RGB").save(image, format="PNG")
+        cache.put_web(f"https://a.example/{n}", "text", image.getvalue())
+    first = Thumbnails(tmp_path / "agent")
+    first.get("t1", "https://a.example/0")
+    thumbnails = Thumbnails(tmp_path / "agent", budget=first.used + 100)  # room for the first page only
+    entries = [scored("t1", 1, lineage(url="https://a.example/0"), 1 / 3),
+               scored("t1", 2, lineage(url="https://a.example/0"), 1 / 3),
+               scored("t1", 3, lineage(url="https://a.example/1"), 1 / 3)]
+    page = render_report("agent", entries, thumbnails=thumbnails)
+    assert page.count("<symbol ") == 1 and page.count('<use href="#th0"/>') == 2 and thumbnails.over_budget
+    assert "Page thumbnails stop after" in page
