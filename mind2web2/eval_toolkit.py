@@ -7,7 +7,9 @@ import logging
 import random
 import textwrap
 import uuid
-from typing import List, Type, Callable, Awaitable, Optional, Tuple, Union
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Iterator, List, Type, Callable, Awaitable, Optional, Tuple, Union
 
 from PIL import Image
 from pydantic import BaseModel, ValidationError
@@ -46,6 +48,34 @@ def empty_extraction(template_class: Type[BaseModel]) -> BaseModel:
 class BinaryEvalResult(BaseModel):
     reasoning: str
     result: bool
+
+
+_shared_browser: ContextVar[Optional[BatchBrowserManager]] = ContextVar("mind2web2_shared_browser", default=None)
+
+
+@contextmanager
+def shared_browser(manager: BatchBrowserManager) -> Iterator[BatchBrowserManager]:
+    """Make every evaluator created inside the ``with`` block capture live pages with ``manager``.
+
+    Eval scripts create their evaluators themselves and pass no browser.  A
+    runner that evaluates many answers wraps them in this block so that all of
+    them share one browser, which opens at most ``manager.max_concurrent_pages``
+    pages in total; the runner stops it at the end.  An evaluator created
+    outside such a block creates its own browser, which starts at its first live
+    capture and is stopped by :meth:`mind2web2.evaluator.Evaluator.close`.  The
+    setting is a context variable, so it also reaches asyncio tasks created
+    inside the block.
+    """
+    token = _shared_browser.set(manager)
+    try:
+        yield manager
+    finally:
+        _shared_browser.reset(token)
+
+
+def _new_browser() -> BatchBrowserManager:
+    """The browser an evaluator creates for itself when no browser is given or shared."""
+    return BatchBrowserManager(headless=False, max_concurrent_pages=50, max_retries=1)
 
 
 class EvaluatorConfig:
@@ -91,9 +121,10 @@ class BaseEvaluator:
         self.MODEL_NAME = model
         self.usage = usage if usage is not None else JudgeUsage()
         self.config = config or EvaluatorConfig()
-        self.browser_manager = browser_manager or BatchBrowserManager(
-            headless=False, max_concurrent_pages=50, max_retries=1
-        )
+        browser_manager = browser_manager or _shared_browser.get()
+        #: Whether this evaluator created its browser, and so is the one to stop it.
+        self.owns_browser = browser_manager is None
+        self.browser_manager = browser_manager or _new_browser()
 
     async def call_llm_with_semaphore(self, **kwargs):
         """Send one judge request under the LLM semaphore and record it in ``self.usage``.
@@ -1050,11 +1081,11 @@ def create_evaluator(
     extract_model = extract_model or default_model
     verify_model = verify_model or default_model
 
-    # Share a single browser manager between Extractor and Verifier
-    # to avoid creating duplicate Chromium processes
-    shared_browser = browser_manager or BatchBrowserManager(
-        headless=False, max_concurrent_pages=50, max_retries=1
-    )
+    # Extractor and Verifier share one browser: the given one, the one shared
+    # through shared_browser(), or a new one that the Extractor owns.
+    manager = browser_manager or _shared_browser.get()
+    owns_browser = manager is None
+    manager = manager or _new_browser()
 
     common_kwargs = {
         "client": client,
@@ -1064,11 +1095,12 @@ def create_evaluator(
         "global_semaphore": global_semaphore,
         "logger": logger,
         "config": config,
-        "browser_manager": shared_browser,
+        "browser_manager": manager,
         "usage": JudgeUsage(),  # one answer's judge requests, shared by Extractor and Verifier
     }
 
     extractor = Extractor(**common_kwargs, model=extract_model)
     verifier = Verifier(**common_kwargs, model=verify_model)
+    extractor.owns_browser = owns_browser
 
     return extractor, verifier

@@ -4,9 +4,10 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import shutil
 from pathlib import Path
-from typing import Dict, List, Union, Optional
+from typing import Dict, List, Mapping, Union, Optional
 
 from tqdm import tqdm
 
@@ -39,6 +40,50 @@ class DualSemaphore:
 
 
 # --------------------------------------------------------------------------- #
+# Eval-script versions                                                        #
+# --------------------------------------------------------------------------- #
+
+_DATED_VERSION = re.compile(r"\d{4}_\d{2}_\d{2}")
+
+
+class ScriptsNotFound(Exception):
+    """No directory of eval scripts matches the requested version; the message lists the available ones."""
+
+
+def resolve_scripts_dir(root: Union[str, Path], version: Optional[str] = None) -> Path:
+    """Return the directory of eval scripts to run, ``<root>/<version>``.
+
+    Eval scripts are released in version directories named by date
+    (``YYYY_MM_DD``, as under ``evaluation_scripts/`` in the Hugging Face
+    dataset), and the repository ships the public dev set as
+    ``eval_scripts/dev_set``.  A version directory is a subdirectory of ``root``
+    that holds ``.py`` files.  Without ``version``, the newest dated version is
+    used; if no version is dated, the only version; and if ``root`` has no
+    version directories but holds scripts itself, ``root``.
+
+    Raises :class:`ScriptsNotFound` when ``root`` does not exist, the requested
+    version does not exist, or several undated versions leave the choice open.
+    """
+    root = Path(root)
+    if not root.is_dir():
+        raise ScriptsNotFound(f"Eval scripts directory not found: {root}")
+    versions = sorted(d.name for d in root.iterdir() if d.is_dir() and any(d.glob("*.py")))
+    available = ", ".join(versions) or "none"
+    if version is not None:
+        if version in versions:
+            return root / version
+        raise ScriptsNotFound(f"No eval scripts for version {version!r} in {root} (available: {available})")
+    dated = [v for v in versions if _DATED_VERSION.fullmatch(v)]
+    if dated:
+        return root / dated[-1]
+    if len(versions) == 1:
+        return root / versions[0]
+    if not versions and any(root.glob("*.py")):
+        return root
+    raise ScriptsNotFound(f"Choose an eval-script version in {root} (available: {available})")
+
+
+# --------------------------------------------------------------------------- #
 # Single‑answer evaluation                                                    #
 # --------------------------------------------------------------------------- #
 
@@ -53,7 +98,6 @@ async def _eval_one_answer(
         webpage_semaphore: asyncio.Semaphore,
         llm_semaphore: asyncio.Semaphore,
         output_dir: Path,
-        is_self_debug: bool = False,
         script_sha256: Optional[str] = None,
 ):
     """Evaluate a single answer file and write its result JSON / logs.
@@ -75,8 +119,6 @@ async def _eval_one_answer(
 
     # Use a more specific logger name to ensure uniqueness
     log_tag = f"{task_id}_{agent_name}_{answer_name}"
-    if is_self_debug:
-        log_tag += "_debug"
 
     # Important: Disable console output in concurrent environments to avoid log confusion
     logger, timestamp = create_logger(
@@ -93,7 +135,6 @@ async def _eval_one_answer(
             "agent_name": agent_name,
             "answer_name": answer_name,
             "answer_base": answer_base,
-            "is_debug": is_self_debug,
             "operation": "eval_start"
         }
     )
@@ -165,7 +206,7 @@ async def _eval_one_answer(
     # ---------- Save result ----------
     try:
         if result is not None:
-            _save_result_json(result, output_dir / agent_name / task_id, timestamp, is_self_debug)
+            _save_result_json(result, output_dir / agent_name / task_id, timestamp)
     except Exception as e:
         logging.getLogger(__name__).error(f"Failed to save result for {agent_name}/{answer_name}: {e}")
         return e
@@ -213,14 +254,14 @@ def _reusable_result(result_file: Path, answer_path: Path, client,
     return result, ""
 
 
-def _save_result_json(result: Dict, agent_task_out_dir: Path, ts: str, is_debug: bool):
+def _save_result_json(result: Dict, agent_task_out_dir: Path, ts: str):
     """Write per‑answer result JSON to disk."""
 
     answer = result["answer_name"]
     save_dir = agent_task_out_dir / results.answer_base(answer) / "results"
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    with (save_dir / results.result_file_name(ts, answer, debug=is_debug)).open("w", encoding="utf-8") as fp:
+    with (save_dir / results.result_file_name(ts, answer)).open("w", encoding="utf-8") as fp:
         json.dump(result, fp, ensure_ascii=False, indent=4)
 
 
@@ -237,8 +278,6 @@ async def evaluate_task(
         cache_dir: Union[str, Path],
         output_dir: Union[str, Path],
         script_path: Union[str, Path],
-        dump_cache: bool = True,
-        is_self_debug: bool = False,
         overwrite: bool = False,
         max_concurrent_answers: int = 3,
         webpage_semaphore: Optional[asyncio.Semaphore] = None,
@@ -262,10 +301,6 @@ async def evaluate_task(
         Directory for output results
     script_path : Union[str, Path]
         Path to the evaluation script
-    dump_cache : bool, default True
-        Whether to persist cache to disk
-    is_self_debug : bool, default False
-        Whether to add debug suffix to logs/results
     overwrite : bool, default False
         Evaluate every answer again, even one whose latest result could be
         reused.  Without it, an answer's latest result is reused, with no judge
@@ -440,7 +475,6 @@ async def evaluate_task(
                         webpage_semaphore,
                         llm_semaphore,
                         output_root,
-                        is_self_debug,
                         script_sha256,
                     )
 
@@ -550,6 +584,53 @@ async def evaluate_task(
             cleanup_logger(main_logger)
         except Exception:
             pass
+
+
+async def evaluate_tasks(
+        client,
+        agent_name: str,
+        scripts: Mapping[str, Union[str, Path]],
+        *,
+        answer_dir: Union[str, Path],
+        cache_dir: Union[str, Path],
+        output_dir: Union[str, Path],
+        overwrite: bool = False,
+        max_concurrent_tasks: int = 3,
+        max_concurrent_answers: int = 3,
+        webpage_semaphore: Optional[asyncio.Semaphore] = None,
+        llm_semaphore: Optional[asyncio.Semaphore] = None,
+) -> Dict[str, List[Dict]]:
+    """Evaluate the answers of several tasks with :func:`evaluate_task`, ``max_concurrent_tasks`` at a time.
+
+    ``scripts`` maps each task ID to its eval script.  The semaphores are shared
+    by all tasks.  Returns, in the order of ``scripts``, each task's results as
+    :func:`evaluate_task` returns them; a task whose evaluation raised is logged
+    and maps to an empty list.
+    """
+    task_semaphore = asyncio.Semaphore(max_concurrent_tasks)
+    webpage_semaphore = webpage_semaphore or asyncio.Semaphore(5)
+    llm_semaphore = llm_semaphore or asyncio.Semaphore(30)
+
+    async def evaluate_one(task_id: str):
+        async with task_semaphore:
+            try:
+                return task_id, await evaluate_task(
+                    client=client, task_id=task_id, agent_name=agent_name, answer_dir=answer_dir,
+                    cache_dir=cache_dir, output_dir=output_dir, script_path=scripts[task_id],
+                    overwrite=overwrite, max_concurrent_answers=max_concurrent_answers,
+                    webpage_semaphore=webpage_semaphore, llm_semaphore=llm_semaphore,
+                )
+            except Exception:
+                logging.getLogger(__name__).exception(f"Evaluation of task {task_id} failed")
+                return task_id, []
+
+    results: Dict[str, List[Dict]] = {}
+    with tqdm(total=len(scripts), desc="Evaluating tasks", unit="task") as bar:
+        for coro in asyncio.as_completed([evaluate_one(task_id) for task_id in scripts]):
+            task_id, task_results = await coro
+            results[task_id] = task_results
+            bar.update(1)
+    return {task_id: results[task_id] for task_id in scripts}
 
 
 # --------------------------------------------------------------------------- #

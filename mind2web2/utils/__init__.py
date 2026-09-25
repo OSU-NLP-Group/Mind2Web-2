@@ -1,6 +1,5 @@
 from .cache_filesys import CacheFileSys
 from .logging_setup import create_logger, cleanup_logger, create_sub_logger
-from .path_config import PathConfig
 from .page_info_retrieval import BatchBrowserManager, Capture
 from .load_eval_script import load_eval_script
 from .misc import (
@@ -18,7 +17,6 @@ __all__ = [
     "create_logger",
     "cleanup_logger", 
     "create_sub_logger",
-    "PathConfig",
     "BatchBrowserManager",
     "Capture",
     "load_eval_script",

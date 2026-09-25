@@ -35,6 +35,8 @@ Two classes that do the actual LLM-based work:
 
 **`create_evaluator()`**: Factory function to create paired Extractor + Verifier instances
 
+**`shared_browser(manager)`**: A context manager that makes every evaluator created inside it (also in asyncio tasks started inside it) use `manager` for live captures. Without it, an evaluator creates its own browser and `Evaluator.close()` stops it; a shared or passed-in browser is stopped by whoever created it.
+
 ### verification_tree.py — Rubric Tree Data Structure
 `VerificationNode` (Pydantic model) with:
 - Binary leaf scores (0.0 or 1.0)
@@ -43,9 +45,16 @@ Two classes that do the actual LLM-based work:
 - `compute_score(mutate=True)`: Recursive score computation with write-back
 
 ### eval_runner.py — Async Execution Engine
+- `resolve_scripts_dir(root, version)`: The eval-script version directory to run: `version` if given, else the newest dated (`YYYY_MM_DD`) subdirectory, else the only one; raises `ScriptsNotFound` listing the available versions
+- `evaluate_tasks()`: Evaluates several tasks, a few at a time, with shared semaphores
 - `evaluate_task()`: Evaluates the `answer_<k>.md` files of one task (loads eval script, manages cache, runs answers concurrently) and keeps a copy of each answer and its `.meta.json` next to its results. It reuses an answer's latest result only when the result records the same answer (SHA-256 of the file), the same judge configuration, the same eval script (SHA-256), the same default `EvaluatorConfig` settings, and the same `results.SCORING_VERSION`; raise `SCORING_VERSION` in any framework change that can change scores without changing a script or an `EvaluatorConfig` default; changes to cached pages are not detected; before evaluating an answer again it moves the earlier results to `results/superseded/`
 - `_eval_one_answer()`: Evaluates a single answer file
 - `DualSemaphore`: Wrapper holding both webpage and LLM semaphores
+
+### crawl.py — Caching the Pages Answers Cite
+- URL discovery: regex plus `LLMUrlExtractor` (the union over several models); the spellings of one page across a task's answers are grouped (`group_url_variants`, by `normalize_url_keep_case`, so spellings that differ in letter case stay apart; a spelling whose storage key would change again, such as `?q=C%23`, by the cache's raw-key form instead, so it stays apart from `?q=C`) and listed once, under the spelling the regex found, else `https`, else the shortest, in `<cache>/<agent>/<task_id>.json` with the other spellings in `url_variants`; the list is reused while the answers and the URL models are unchanged and no extraction request failed
+- `crawl_one_page()`: Downloads a PDF or captures the page in the browser, trying the page's other spellings in turn when a capture fails; records a failure in the cache's `failures.json` only when every spelling failed. It skips a page that the cache holds, or has a failure record for, looked up with `ignore_case=False`, so a page stored under another letter case does not count
+- `cache_answers()`: Discovers and captures the URLs of many tasks through one browser, `max_concurrent_urls` URLs at a time (which bounds the PDF checks and downloads outside the browser), retries this crawl's non-refusal failures once (with `retry_failed`, also every failure record of the task that is not in its URL list, such as those evaluation wrote for URLs it captured live), and returns a `TaskCrawl` report per task (URL count, outcomes, whether URL extraction was complete, and an error when the task's URLs, cache, or URL list could not be read or updated, which fails only that task)
 
 ### submission.py, results.py, metrics.py — Submissions, Results, Leaderboard Metrics
 - `submission.py`: the answers layout (`<agent>/<task_id>/answer_<k>.md` with k = 1, 2, 3, ..., optional `answer_<k>.meta.json`), task lists (CSV with a `task_id` column, text file, or eval-script directory), and `validate_submission()`
@@ -53,19 +62,21 @@ Two classes that do the actual LLM-based work:
 - `metrics.py`: Partial Completion, Success Rate, Pass@k, Time, and Answer Length over a task list; a missing answer or result counts as 0 in the first three and is listed
 
 ### cli/ — The `mind2web2` Command
-One module per subcommand (`validate`, `metrics`); each defines `register(subparsers)` and `run(args) -> int`. Shared options live in `cli/_common.py`.
+One module per subcommand (`validate`, `cache`, `evaluate`, `metrics`); each defines `register(subparsers)` and `run(args) -> int`. Shared options live in `cli/_common.py`.
 
 ## Data Flow
 
 ```
-run_eval.py
-  → eval_runner.evaluate_task()
-    → load_eval_script() → dynamically load per-task evaluate_answer()
-    → _eval_one_answer()
-      → eval_fn(client, answer, cache, semaphore, logger, model)
-        → Evaluator.initialize() + extract() + verify()
-        → Evaluator.get_summary() → result dict
-    → save results JSON + summary
+mind2web2 evaluate (cli/evaluate.py)
+  → eval_runner.resolve_scripts_dir() → the eval-script version directory
+  → eval_runner.evaluate_tasks(), inside eval_toolkit.shared_browser()
+    → eval_runner.evaluate_task(), per task
+      → load_eval_script() → dynamically load per-task evaluate_answer()
+      → _eval_one_answer(), per answer
+        → eval_fn(client, answer, cache, semaphore, logger, model)
+          → Evaluator.initialize() + extract() + verify()
+          → Evaluator.get_summary() → result dict
+      → save results JSON + summary
 ```
 
 ## Eval Script Contract

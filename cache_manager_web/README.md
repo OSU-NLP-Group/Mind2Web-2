@@ -88,7 +88,7 @@ For pages that need manual intervention (login walls, complex anti-bot):
 
 ## Recommended Workflow
 
-1. Run `./cache_all_answers.sh <agent>` to pre-cache all URLs
+1. Run `uv run mind2web2 cache <agent>` to pre-cache all URLs
 2. Start the Cache Manager and review the issue count per task
 3. Use `n` to jump through flagged issues — quick-check screenshot vs text
 4. Click **Batch Recapture** to auto-fix all red URLs at once

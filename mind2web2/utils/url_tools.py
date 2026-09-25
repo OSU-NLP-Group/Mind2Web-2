@@ -91,7 +91,7 @@ def normalize_url_keep_case(url: str) -> str:
 
 
 def normalize_url_simple(url: str) -> str:
-    """The form under which two URLs count as the same page for cache lookups and crawl deduplication.
+    """The form under which two URLs count as the same page for cache lookups that disregard letter case.
 
     It is :func:`normalize_url_keep_case` lowercased.
     """

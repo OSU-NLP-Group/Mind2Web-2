@@ -24,7 +24,7 @@ TWO_SOURCES = ["https://a.example/1", "https://b.example/2"]
 
 
 class JudgedClient(FakeLLMClient):
-    """A fake client with a judge configuration, like the one run_eval.py builds."""
+    """A fake client with a judge configuration, like the one `mind2web2 evaluate` builds."""
 
     def __init__(self) -> None:
         super().__init__("all_true")
