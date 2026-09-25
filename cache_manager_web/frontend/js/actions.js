@@ -10,20 +10,16 @@ import * as api from './api.js';
 
 export async function selectTask(taskId) {
     setState({ selectedTaskId: taskId, selectedUrl: null, urls: [], currentText: null, currentIssues: null, answers: [] });
+    const number = ++urlsRequested;
     try {
-        const data = await api.getUrls(taskId);
-        setState({
-            urls: data.urls || [],
-            urlTotal: data.total || 0,
-            urlReviewedCount: data.reviewed_count || 0,
-        });
+        showUrls(number, taskId, await api.getUrls(taskId));
     } catch (err) {
         console.error('Failed to load URLs:', err);
     }
-    // Load answers
+    // Load answers, unless another task was selected meanwhile
     try {
         const data = await api.getAnswers(taskId);
-        setState({ answers: data.files || [] });
+        if (getState().selectedTaskId === taskId) setState({ answers: data.files || [] });
     } catch {}
 }
 
@@ -40,10 +36,10 @@ export async function selectUrl(taskId, url) {
     const urlData = s.urls.find(u => u.url === url);
     const isPdf = urlData?.content_type === 'pdf';
 
-    if (urlData?.content_type === 'failed') {
-        // Nothing is stored for a failed capture: show why instead of fetching text
+    if (urlData?.content_type === 'failed' || urlData?.content_type === 'pending') {
+        // Nothing is stored: say why instead of fetching text
         setState({
-            currentText: failureText(urlData.failure),
+            currentText: urlData.content_type === 'failed' ? failureText(urlData.failure) : PENDING_TEXT,
             currentIssues: { has_issues: true, severity: 'definite', keywords: urlData.issues || [], patterns: [] },
         });
         return;
@@ -67,9 +63,12 @@ export async function selectUrl(taskId, url) {
         return;
     }
 
-    // Load text content for web URLs
+    // Load text content for web URLs.  Another URL can be selected before the text
+    // arrives: then the text is not shown and the URL is not marked as reviewed.
+    const stillSelected = () => getState().selectedTaskId === taskId && getState().selectedUrl === url;
     try {
         const data = await api.getText(taskId, url);
+        if (!stillSelected()) return;
         setState({ currentText: data.text, currentIssues: data.issues });
 
         // Auto-mark as reviewed when viewed:
@@ -91,9 +90,16 @@ export async function selectUrl(taskId, url) {
             }
         }
     } catch {
-        setState({ currentText: null, currentIssues: null });
+        if (stillSelected()) setState({ currentText: null, currentIssues: null });
     }
 }
+
+const PENDING_TEXT = [
+    'This URL is not captured yet: it was added in the Cache Manager, or its stored page was reset.',
+    'Until it is captured, evaluation treats it as not cached and captures it live.',
+    '',
+    'Open it in your browser and capture it with the extension, or upload a PDF or MHTML file.',
+].join('\n');
 
 function failureText(failure) {
     const f = failure || {};
@@ -106,20 +112,59 @@ function failureText(failure) {
 
 // ---- Reload current task ----
 
+// Captures can trigger reloads faster than they complete, and another task can be
+// selected while one is under way.  Each request for a task's URL list is numbered,
+// and its answer is shown only if no answer to a later request has been shown and
+// its task is still selected; so an earlier answer never replaces a later one, and
+// when the latest request fails, the latest answer received stays.
+let urlsRequested = 0;
+let urlsShown = 0;
+
+function showUrls(number, taskId, data) {
+    if (number < urlsShown || getState().selectedTaskId !== taskId) return false;
+    urlsShown = number;
+    setState({
+        urls: data.urls || [],
+        urlTotal: data.total || 0,
+        urlReviewedCount: data.reviewed_count || 0,
+    });
+    return true;
+}
+
 export async function reloadCurrentTask() {
+    const number = ++urlsRequested;
     const s = getState();
+    refreshIssues();
     if (!s.selectedTaskId) return;
     try {
         const data = await api.getUrls(s.selectedTaskId);
-        setState({
-            urls: data.urls || [],
-            urlTotal: data.total || 0,
-            urlReviewedCount: data.reviewed_count || 0,
-        });
+        if (!showUrls(number, s.selectedTaskId, data)) return;
         // Re-select current URL if still exists
-        if (s.selectedUrl && data.urls?.some(u => u.url === s.selectedUrl)) {
+        if (s.selectedUrl && getState().selectedUrl === s.selectedUrl && data.urls?.some(u => u.url === s.selectedUrl)) {
             selectUrl(s.selectedTaskId, s.selectedUrl);
         }
+    } catch {}
+}
+
+// ---- Issue index and task list, after an edit or capture changed them ----
+
+// Numbered like the requests for a task's URL list: an earlier answer never replaces a later one.
+let issuesRequested = 0;
+let issuesShown = 0;
+
+export async function refreshIssues() {
+    const number = ++issuesRequested;
+    try {
+        const [issues, taskData] = await Promise.all([api.getIssues(), api.getTasks()]);
+        if (number < issuesShown) return;
+        issuesShown = number;
+        const issueIndex = issues.issue_index || [];
+        setState({
+            issueIndex,
+            taskIssues: issues.task_issues || {},
+            tasks: taskData.tasks || [],
+            issueCursor: Math.min(getState().issueCursor, issueIndex.length - 1),
+        });
     } catch {}
 }
 

@@ -176,6 +176,15 @@ async function refreshAfterLoad(result) {
     } catch (err) {
         console.error('Failed to load tasks:', err);
     }
+    // A batch capture keeps running when the loaded folder is loaded again (page open, Refresh)
+    try {
+        const batch = await api.getBatchStatus();
+        setState(batch.active
+            ? { batchActive: true, batchTotal: batch.total, batchCompleted: batch.completed }
+            : { batchActive: false, batchTotal: 0, batchCompleted: 0 });
+    } catch (err) {
+        console.error('Failed to get the batch status:', err);
+    }
     await updateReviewProgress();
     showStatus('Ready');
 }
@@ -206,19 +215,9 @@ async function onFlagAsIssue() {
     if (!s.selectedTaskId || !s.selectedUrl) return;
     try {
         await api.flagUrl(s.selectedTaskId, s.selectedUrl);
-        const urlData = s.urls.find(u => u.url === s.selectedUrl);
-        const isPdf = urlData?.content_type === 'pdf';
-        // Update local state: mark URL as having issues, clear review
-        const urls = s.urls.map(u => u.url === s.selectedUrl
-            ? { ...u, issues: ['flagged'], severity: 'definite', reviewed: '' }
-            : u);
-        const updates = { urls };
-        if (!isPdf) {
-            updates.currentText = 'access denied';
-            updates.currentIssues = { has_issues: true, severity: 'definite', keywords: ['flagged'], patterns: [] };
-        }
-        setState(updates);
-        toast('Flagged as issue (red)');
+        await reloadCurrentTask();
+        await updateReviewProgress();
+        toast('Flagged for recapture; the stored page is kept');
     } catch (err) {
         toast('Flag failed: ' + err.message, 'error');
     }
@@ -226,15 +225,39 @@ async function onFlagAsIssue() {
 
 async function onOpenInBrowser() {
     const s = getState();
-    if (!s.selectedUrl) return;
+    if (!s.selectedUrl || !isOpenable(s.selectedUrl)) return;
     await api.setCaptureTarget(s.selectedTaskId, s.selectedUrl).catch(() => {});
-    window.open(s.selectedUrl, '_blank');
+    window.open(s.selectedUrl, '_blank', 'noopener');  // without window.opener, the page cannot navigate this tab
     toast('Opened in browser. Use the extension to capture.');
+}
+
+/**
+ * Whether `url` may be opened in a browser tab, which only http(s) URLs may.
+ *
+ * Listed URLs come from the answers under review, and a `javascript:` URL
+ * would run in the Cache Manager's origin.  Shows an error toast for any
+ * other URL.
+ */
+function isOpenable(url) {
+    let protocol = '';
+    try { protocol = new URL(url).protocol; } catch {}
+    if (protocol === 'http:' || protocol === 'https:') return true;
+    toast(`Not opened: only http(s) URLs can be opened (${url.substring(0, 60)})`, 'error');
+    return false;
+}
+
+/** What the cache holds for the selected URL: "the stored page", "the failure record", or null (a pending URL). */
+function storedRecord(s) {
+    const type = s.urls.find(u => u.url === s.selectedUrl)?.content_type;
+    if (type === 'web' || type === 'pdf') return 'the stored page';
+    return type === 'failed' ? 'the failure record' : null;
 }
 
 async function onDeleteUrl() {
     const s = getState();
     if (!s.selectedTaskId || !s.selectedUrl) return;
+    const record = storedRecord(s);
+    if (record && !confirm(`Delete ${s.selectedUrl} and ${record}? This cannot be undone.`)) return;
     try {
         await api.deleteUrl(s.selectedTaskId, s.selectedUrl);
         setState({ selectedUrl: null, currentText: null, currentIssues: null });
@@ -248,10 +271,13 @@ async function onDeleteUrl() {
 async function onResetUrl() {
     const s = getState();
     if (!s.selectedTaskId || !s.selectedUrl) return;
+    const record = storedRecord(s);
+    if (record && !confirm(`Delete ${record} of ${s.selectedUrl}? The URL stays listed as `
+            + 'not captured yet, and evaluation captures it live until it is captured again.')) return;
     try {
         showStatus('Resetting URL...', 'warning');
         await api.resetUrl(s.selectedTaskId, s.selectedUrl);
-        toast('URL cache reset and flagged for recapture', 'success');
+        toast('Reset: the URL is listed as not captured yet', 'success');
         setState({ contentVersion: s.contentVersion + 1 });
         await reloadCurrentTask();
         await updateReviewProgress();
@@ -267,9 +293,9 @@ async function onEditUrl() {
     if (!newUrl || newUrl === s.selectedUrl) return;
     try {
         showStatus('Renaming URL...', 'warning');
-        await api.renameUrl(s.selectedTaskId, s.selectedUrl, newUrl.trim());
+        const result = await api.renameUrl(s.selectedTaskId, s.selectedUrl, newUrl.trim());
         toast('URL renamed successfully', 'success');
-        setState({ selectedUrl: newUrl.trim(), contentVersion: s.contentVersion + 1 });
+        setState({ selectedUrl: result.url, contentVersion: s.contentVersion + 1 });
         await reloadCurrentTask();
     } catch (err) {
         toast('Rename failed: ' + err.message, 'error');
@@ -284,7 +310,7 @@ async function onAddUrl() {
     try {
         showStatus('Adding URL...', 'warning');
         await api.addUrl(s.selectedTaskId, url.trim());
-        toast('URL added and flagged for capture', 'success');
+        toast('URL added as not captured yet', 'success');
         setState({ contentVersion: s.contentVersion + 1 });
         await reloadCurrentTask();
         await updateReviewProgress();
@@ -300,9 +326,9 @@ function onUploadMhtml() {
 
 async function onRecapture() {
     const s = getState();
-    if (!s.selectedUrl) return;
+    if (!s.selectedUrl || !isOpenable(s.selectedUrl)) return;
     await api.setCaptureTarget(s.selectedTaskId, s.selectedUrl).catch(() => {});
-    window.open(s.selectedUrl, '_blank');
+    window.open(s.selectedUrl, '_blank', 'noopener');
     toast('Page opened. Pass any verification, then use the extension to capture.', 'success');
 }
 
@@ -481,7 +507,7 @@ function initSSE() {
             updateReviewProgress();
         }
         if (data.type === 'batch_progress') {
-            setState({ batchCompleted: data.completed });
+            setState({ batchActive: true, batchTotal: data.total, batchCompleted: data.completed });
         }
         if (data.type === 'batch_complete') {
             setState({ batchActive: false, batchCompleted: 0, batchTotal: 0 });

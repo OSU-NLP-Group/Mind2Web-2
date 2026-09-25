@@ -7,6 +7,12 @@ import * as api from '../api.js';
 let currentImgEl = null;  // current screenshot <img> element
 let currentImgSrc = '';   // track current image source to avoid reloads
 
+// DOMPurify settings for rendered answers, on top of its defaults (which drop scripts and event handlers)
+const ANSWER_SANITIZER = {
+    FORBID_TAGS: ['style', 'form', 'input', 'button', 'select', 'option', 'optgroup', 'textarea'],
+    FORBID_ATTR: ['style'],
+};
+
 export function initPreview() {
     // Mode tabs
     document.querySelectorAll('.mode-btn').forEach(btn => {
@@ -105,10 +111,12 @@ function renderScreenshot(s) {
         currentImgSrc = '';
         return;
     }
-    if (urlData?.content_type === 'failed') {
+    if (urlData?.content_type === 'failed' || urlData?.content_type === 'pending') {
         const note = document.createElement('div');
         note.className = 'placeholder';
-        note.textContent = `No page stored: capturing it failed (${urlData.failure?.reason || 'unknown reason'}).`;
+        note.textContent = urlData.content_type === 'failed'
+            ? `No page stored: capturing it failed (${urlData.failure?.reason || 'unknown reason'}).`
+            : 'No page stored: not captured yet.';
         container.replaceChildren(note);
         currentImgEl = null;
         currentImgSrc = '';
@@ -210,7 +218,16 @@ function renderAnswer(s) {
         if (s.selectedUrl && text.includes(s.selectedUrl)) {
             text = text.replaceAll(s.selectedUrl, `**>>> ${s.selectedUrl} <<<**`);
         }
-        el.innerHTML = typeof marked !== 'undefined' ? marked.parse(text) : `<pre>${text}</pre>`;
+        if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
+            // Answers come from the agents under review: keep their Markdown, drop scripts and event handlers,
+            // styles that could lay content over the UI, and forms and their controls, which could send
+            // requests to this server from its own origin
+            el.innerHTML = DOMPurify.sanitize(marked.parse(text), ANSWER_SANITIZER);
+        } else {
+            const pre = document.createElement('pre');
+            pre.textContent = text;
+            el.replaceChildren(pre);
+        }
     } else {
         el.textContent = s.answers.length === 0
             ? (s.selectedTaskId ? 'No answer files found for this task.' : 'Select a task to view answers.')
