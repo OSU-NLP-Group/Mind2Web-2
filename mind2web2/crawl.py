@@ -67,7 +67,7 @@ from .api_tools.tool_pdf import PDFParser, is_pdf
 from .llm_client import DEFAULT_JUDGE_MODEL, LLMClient
 from .prompts.cache_prompts import llm_extraction_prompts
 from .submission import list_answer_files
-from .utils.cache_filesys import CacheFileSys, _raw_form, storage_key
+from .utils.cache_filesys import CacheFileSys, page_form
 from .utils.page_info_retrieval import BatchBrowserManager, Capture
 from .utils.url_tools import URLs, normalize_url_keep_case, regex_find_urls, remove_utm_parameters
 
@@ -126,24 +126,6 @@ class LLMUrlExtractor:
         return [url for url in urls if url not in unparsable]
 
 
-def _page_form(url: str) -> str:
-    """The form by which spellings of one page are told apart from other pages' (see :func:`group_url_variants`).
-
-    It is ``url`` under :func:`~mind2web2.utils.url_tools.normalize_url_keep_case`,
-    except for a URL whose storage key
-    :func:`~mind2web2.utils.cache_filesys.storage_key` would change again (an
-    encoded ``#`` or ``%``, as in ``?q=C%23``): its form is that storage key
-    with UTM parameters removed, ``http`` made ``https``, and ``www.`` dropped,
-    the form by which the cache matches such keys, since normalizing the URL
-    can give another page's URL (``?q=C``).  A URL that cannot be parsed is its own form.
-    """
-    try:
-        key = storage_key(url)
-        return _raw_form(key) if storage_key(key) != key else normalize_url_keep_case(url)
-    except ValueError:
-        return url
-
-
 def group_url_variants(urls: Iterable[str], preferred: Collection[str] = ()) -> List[List[str]]:
     """Group the spellings in ``urls`` that name one page, each group in order of preference.
 
@@ -163,7 +145,7 @@ def group_url_variants(urls: Iterable[str], preferred: Collection[str] = ()) -> 
     """
     groups: Dict[str, List[str]] = {}
     for url in dict.fromkeys(urls):
-        groups.setdefault(_page_form(url), []).append(url)
+        groups.setdefault(page_form(url), []).append(url)
     return [sorted(group, key=lambda u: (u not in preferred, not u.startswith("https://"), len(u), u.lower()))
             for group in groups.values()]
 
@@ -449,8 +431,8 @@ async def cache_answers(
         for task_id, urls in task_urls.items():
             if task_id not in caches:
                 continue
-            listed = {_page_form(url) for url in urls}
-            unlisted = [url for url in caches[task_id].failures() if _page_form(url) not in listed]
+            listed = {page_form(url) for url in urls}
+            unlisted = [url for url in caches[task_id].failures(ignore_case=False) if page_form(url) not in listed]
             if unlisted:
                 logger.info(f"[{agent}/{task_id}] Also retrying {len(unlisted)} failed URLs "
                             f"that are not in the task's URL list")
