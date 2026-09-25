@@ -16,6 +16,7 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 from mind2web2.utils.cache_filesys import storage_key
+from mind2web2.utils.page_info_retrieval import html_to_markdown
 from mind2web2.utils.url_tools import normalize_url_simple
 
 from ..models import CacheManager, KeywordDetector
@@ -37,11 +38,10 @@ _capture_target: dict = {}  # {"task_id": ..., "url": ..., "ts": ...}
 # Per-URL issue cache: {task_id: {url: {"issues": [...], "severity": "..."}}}, see _issue_entry()
 _url_issue_cache: dict = {}
 
-# Batch capture state
-_batch_queue: list[dict] = []   # [{task_id, url}, ...]
+# Batch capture state; the batch has done _batch_total - len(_batch_queue) of its URLs
+_batch_queue: list[dict] = []   # [{task_id, url}, ...], the head is the URL the batch waits for
 _batch_active: bool = False
 _batch_total: int = 0
-_batch_completed: int = 0
 
 # SSE subscribers — each is an asyncio.Queue
 _sse_queues: list[asyncio.Queue] = []
@@ -83,9 +83,12 @@ class LoadRequest(BaseModel):
 class CaptureRequest(BaseModel):
     task_id: str
     url: str
-    text: str
-    screenshot_base64: str  # JPEG base64
+    screenshot_base64: str  # PNG or JPEG, base64; stored as JPEG
+    html: Optional[str] = None  # the page's HTML, converted to text as the crawler converts it
+    text: str = ""  # the page's text, stored when no HTML is sent
     actual_url: Optional[str] = None  # URL after redirects (may differ from url)
+    visible_part_only: bool = False  # the full-page screenshot failed; this one shows the visible part of the tab
+    batch: bool = False  # sent by a batch capture, which is stored only while the batch waits for url
 
 class ReviewRequest(BaseModel):
     url: str
@@ -111,6 +114,10 @@ class BatchItem(BaseModel):
 
 class BatchStartRequest(BaseModel):
     items: list[BatchItem]
+
+class BatchSkipRequest(BaseModel):
+    task_id: str
+    url: str
 
 
 # ---------------------------------------------------------------------------
@@ -378,9 +385,26 @@ async def get_capture_target():
 async def receive_capture(req: CaptureRequest):
     """Store a page captured by the Chrome extension, for ``url`` and, after a redirect, for ``actual_url`` too.
 
-    Each stored page's flag is cleared and its review status set to
-    "recaptured" during a batch capture (a person still has to look at it)
-    and "fixed" otherwise.  Returns the URL the task lists the page under.
+    With ``html``, the stored text is ``html_to_markdown(html)``, the text the
+    crawler stores for the pages it captures, so a page's text has the same
+    form whichever of the two captured it; ``text`` is stored only when no
+    HTML is sent.  Each stored page's flag is cleared and its review status
+    set to "recaptured" for a batch capture (a person still has to look at
+    it) and "fixed" otherwise.  A reviewed URL no longer qualifies for the
+    batch, so a URL captured by hand while it is queued is left out when the
+    batch reaches it (see :func:`_skip_urls_that_no_longer_qualify`).
+
+    A batch capture, sent with ``batch``, is stored only while ``url`` is
+    the URL the batch waits for, the head of its queue, and then advances
+    the batch.  Otherwise, for example because the reviewer captured or
+    uploaded that URL by hand while the batch's tab loaded it, the capture
+    is refused with status 409 and nothing is stored.
+
+    With ``visible_part_only``, the full-page screenshot failed: each stored
+    page is flagged instead, and its review status cleared, so that it
+    stays a definite issue until a full-page capture, and the
+    capture_complete event carries a warning.  Returns the URL the task
+    lists the page under.
     """
     _require_loaded()
     cache = _cm.get_task_cache(req.task_id)
@@ -392,7 +416,9 @@ async def receive_capture(req: CaptureRequest):
     except Exception:
         raise HTTPException(400, "Invalid base64 screenshot data")
 
-    text = req.text or ""
+    text = await asyncio.to_thread(html_to_markdown, req.html) if req.html else (req.text or "")
+    if req.batch:
+        _refuse_a_stale_batch_capture(req.task_id, req.url)
     stored = _cm.store_page(req.task_id, req.url, text=text, screenshot=screenshot_bytes)
     if stored is None:
         raise HTTPException(500, "Failed to save capture")
@@ -402,15 +428,20 @@ async def receive_capture(req: CaptureRequest):
         if redirected is not None and redirected != stored:
             stored_urls.append(redirected)
 
-    review_status = "recaptured" if _batch_active else "fixed"
     for url in stored_urls:
-        _cm.unflag_url(req.task_id, url)
-        _cm.mark_url_reviewed(req.task_id, url, review_status)
+        if req.visible_part_only:
+            _cm.flag_url(req.task_id, url)
+            _cm.mark_url_reviewed(req.task_id, url, "")
+        else:
+            _cm.unflag_url(req.task_id, url)
+            _cm.mark_url_reviewed(req.task_id, url, "recaptured" if req.batch else "fixed")
     _refresh_issues(req.task_id, *stored_urls)
 
-    await _push_event("capture_complete", {"task_id": req.task_id, "url": stored})
-    if _batch_active:
-        await _advance_batch()
+    event = {"task_id": req.task_id, "url": stored}
+    if req.visible_part_only:
+        event["warning"] = "the full-page screenshot failed, so the screenshot shows only the visible part of the page"
+    await _push_event("capture_complete", event)
+    await _advance_batch(done_head=req.batch)
 
     return {"ok": True, "task_id": req.task_id, "url": stored}
 
@@ -430,6 +461,7 @@ async def get_review(task_id: str):
 async def set_review(task_id: str, req: ReviewRequest):
     _require_loaded()
     _cm.mark_url_reviewed(task_id, req.url, req.status)
+    await _advance_batch()
     return {"ok": True}
 
 
@@ -500,68 +532,93 @@ async def review_progress():
 # Batch Capture
 # ---------------------------------------------------------------------------
 
-async def _advance_batch():
-    """Pop the completed item and advance to the next URL in the batch queue."""
-    global _batch_queue, _batch_active, _batch_completed, _batch_total, _capture_target
+def _qualifies(task_id: str, url: str) -> bool:
+    """Whether a batch capture captures ``url`` of ``task_id``: listed, not a PDF, a definite issue, and not reviewed.
 
-    # Pop the completed item
-    if _batch_queue:
+    ``url`` is as the task lists it.  A URL stops qualifying when it is
+    deleted or renamed, gets a review status (a capture or upload stores
+    one), or its page is stored as a PDF.
+    """
+    if _cm is None or _cm.url_state(task_id, url) in (None, "pdf"):
+        return False
+    issue = _url_issue_cache.get(task_id, {}).get(url)
+    return bool(issue) and issue.get("severity") == "definite" and url not in _cm.load_reviewed(task_id)
+
+
+def _skip_urls_that_no_longer_qualify() -> None:
+    """Pop queue heads that no longer qualify (see :func:`_qualifies`), so that the head is a URL still to capture.
+
+    Only the head is checked, when it becomes the head: a URL deep in the
+    queue that stops and then starts qualifying again, for example when a
+    reviewer clears its review status, stays queued.
+    """
+    while _batch_queue and not _qualifies(_batch_queue[0]["task_id"], _batch_queue[0]["url"]):
         _batch_queue.pop(0)
-    _batch_completed += 1
 
+
+def _refuse_a_stale_batch_capture(task_id: str, url: str) -> None:
+    """Refuse with status 409 a batch capture or upload of a URL that the batch does not wait for.
+
+    The batch waits for the head of its queue.  It moves on without the URL
+    its tab loaded when the reviewer captures, uploads, reviews, renames, or
+    deletes that URL, when the URL is skipped, and when the batch finishes,
+    is stopped, or is replaced by a new batch.
+    """
+    if not (_batch_active and _batch_queue and _batch_queue[0] == {"task_id": task_id, "url": url}):
+        raise HTTPException(409, f"The batch capture does not wait for {url}; nothing was stored")
+
+
+def _batch_counts() -> dict:
+    """The batch's ``total``, ``completed`` (captured, skipped, or left out because it no longer qualified), and ``remaining``."""
+    return {"total": _batch_total, "completed": _batch_total - len(_batch_queue), "remaining": len(_batch_queue)}
+
+
+async def _advance_batch(done_head: bool = False) -> None:
+    """Bring a running batch up to date after a change, and report its counts when they changed.
+
+    With ``done_head``, the head was just captured or skipped and is popped.
+    Heads that no longer qualify are then popped as well.  When URLs were
+    popped, a batch_progress event reports the counts and the next URL, or,
+    when the queue is empty, the batch ends with a batch_complete event.
+    """
+    global _batch_active
+    if not _batch_active:
+        return
+    before = len(_batch_queue)
+    if done_head and _batch_queue:
+        _batch_queue.pop(0)
+    _skip_urls_that_no_longer_qualify()
+    if len(_batch_queue) == before:
+        return
     if _batch_queue:
-        # Set next item as capture target
-        nxt = _batch_queue[0]
-        _capture_target = {"task_id": nxt["task_id"], "url": nxt["url"], "ts": time.time()}
-        await _push_event("batch_progress", {
-            "completed": _batch_completed,
-            "total": _batch_total,
-            "remaining": len(_batch_queue),
-            "next": nxt,
-        })
+        await _push_event("batch_progress", {**_batch_counts(), "next": _batch_queue[0]})
     else:
-        # Batch complete
         _batch_active = False
-        await _push_event("batch_complete", {
-            "completed": _batch_completed,
-            "total": _batch_total,
-        })
+        await _push_event("batch_complete", {"completed": _batch_total, "total": _batch_total})
 
 
 @router.post("/capture/batch/start")
 async def batch_start(req: BatchStartRequest):
-    """Start a batch capture session with a queue of URLs.
+    """Start a batch capture of the given URLs that qualify (see :func:`_qualifies`), replacing any running batch.
 
-    Filters to only definite-issue unreviewed URLs.
+    Returns the number of URLs queued.  The batch waits for each URL in
+    turn, until the extension captures it or skips it, or it no longer
+    qualifies.
     """
     _require_loaded()
-    global _batch_queue, _batch_active, _batch_total, _batch_completed, _capture_target
+    global _batch_queue, _batch_active, _batch_total
 
-    # Filter: only definite-severity, unreviewed, web-only URLs (extension can't capture PDFs)
     queue = []
     for item in req.items:
         url = _cm.canonical_url(item.task_id, item.url)
-        if _cm.url_state(item.task_id, url) == "pdf":
-            continue
-        issue_info = _url_issue_cache.get(item.task_id, {}).get(url)
-        if not issue_info or issue_info.get("severity") != "definite":
-            continue
-        if url in _cm.load_reviewed(item.task_id):
-            continue
-        queue.append({"task_id": item.task_id, "url": url})
+        entry = {"task_id": item.task_id, "url": url}
+        if entry not in queue and _qualifies(item.task_id, url):
+            queue.append(entry)
 
     if not queue:
         return {"ok": True, "total": 0, "message": "No qualifying URLs to capture"}
 
-    _batch_queue = queue
-    _batch_active = True
-    _batch_total = len(queue)
-    _batch_completed = 0
-
-    # Set first item as capture target
-    first = _batch_queue[0]
-    _capture_target = {"task_id": first["task_id"], "url": first["url"], "ts": time.time()}
-
+    _batch_queue, _batch_active, _batch_total = queue, True, len(queue)
     await _push_event("batch_started", {"total": _batch_total})
     return {"ok": True, "total": _batch_total}
 
@@ -572,14 +629,7 @@ async def batch_status():
     if not _batch_active:
         return {"active": False}
 
-    current = _batch_queue[0] if _batch_queue else None
-    return {
-        "active": True,
-        "total": _batch_total,
-        "completed": _batch_completed,
-        "remaining": len(_batch_queue),
-        "current": current,
-    }
+    return {"active": True, **_batch_counts(), "current": _batch_queue[0] if _batch_queue else None}
 
 
 class CaptchaNotify(BaseModel):
@@ -593,23 +643,22 @@ async def batch_captcha_notify(req: CaptchaNotify):
 
 
 @router.post("/capture/batch/skip")
-async def batch_skip():
-    """Skip the current batch URL (e.g., capture failed, page unreachable)."""
-    global _batch_active
-    if not _batch_active:
-        return {"ok": False, "message": "No active batch"}
-    await _advance_batch()
+async def batch_skip(req: BatchSkipRequest):
+    """Skip the URL the batch waits for, for example because its page cannot be loaded; nothing is stored for it.
+
+    The request names the URL; if the batch no longer waits for it, the
+    request is refused with status 409 and the batch is unchanged.
+    """
+    _refuse_a_stale_batch_capture(req.task_id, req.url)
+    await _advance_batch(done_head=True)
     return {"ok": True, "remaining": len(_batch_queue)}
 
 
 @router.post("/capture/batch/stop")
 async def batch_stop():
     """Stop the current batch capture."""
-    global _batch_queue, _batch_active, _batch_total, _batch_completed
-    _batch_queue = []
-    _batch_active = False
-    _batch_total = 0
-    _batch_completed = 0
+    global _batch_queue, _batch_active, _batch_total
+    _batch_queue, _batch_active, _batch_total = [], False, 0
     await _push_event("batch_stopped", {})
     return {"ok": True}
 
@@ -661,6 +710,7 @@ async def delete_url(task_id: str, url: str = Query(...)):
     if not _cm.delete_url(task_id, url):
         raise HTTPException(500, "Failed to delete URL")
     _refresh_issues(task_id, url)
+    await _advance_batch()
     return {"ok": True}
 
 
@@ -698,6 +748,7 @@ async def rename_url(task_id: str, req: RenameUrlRequest):
     _cm.mark_url_reviewed(task_id, old_url, "")
     _cm.delete_url(task_id, old_url)
     _refresh_issues(task_id, listed, old_url)
+    await _advance_batch()
     return {"ok": True, "url": listed, "content_type": _cm.url_state(task_id, listed)}
 
 
@@ -729,7 +780,9 @@ async def upload_mhtml(task_id: str, url: str = Query(...), file: UploadFile = F
 
     The text comes from the first HTML part (else the first plain-text part)
     of the MIME archive.  A file with no text is refused with status 422, so
-    that nothing is stored that was not captured.
+    that nothing is stored that was not captured.  The URL's flag is cleared
+    and its review status set to "fixed", so a queued URL leaves a running
+    batch capture.
     """
     _require_loaded()
     if not _cm.get_task_cache(task_id):
@@ -744,12 +797,11 @@ async def upload_mhtml(task_id: str, url: str = Query(...), file: UploadFile = F
         raise HTTPException(500, "Failed to save MHTML content")
 
     _cm.unflag_url(task_id, stored)
-    _cm.mark_url_reviewed(task_id, stored, "recaptured" if _batch_active else "fixed")
+    _cm.mark_url_reviewed(task_id, stored, "fixed")
     _refresh_issues(task_id, stored)
 
     await _push_event("capture_complete", {"task_id": task_id, "url": stored})
-    if _batch_active:
-        await _advance_batch()
+    await _advance_batch()
 
     return {"ok": True, "url": stored}
 
@@ -759,13 +811,18 @@ async def upload_mhtml(task_id: str, url: str = Query(...), file: UploadFile = F
 # ---------------------------------------------------------------------------
 
 @router.post("/upload-pdf/{task_id}")
-async def upload_pdf(task_id: str, url: str = Query(...), file: UploadFile = File(...)):
+async def upload_pdf(task_id: str, url: str = Query(...), file: UploadFile = File(...),
+                     batch: bool = Query(False)):
     """Store an uploaded PDF for a URL, replacing its stored page of either type.
 
     A file without the PDF signature (``%PDF-`` in its first 1024 bytes),
     such as a login page saved in place of a paper, is refused with status
     422.  The URL's flag is cleared and its review status set to
-    "recaptured" during a batch capture and "fixed" otherwise.
+    "recaptured" for an upload made by a batch capture and "fixed"
+    otherwise.  The extension uploads the PDFs its batch finds with
+    ``batch``; such an upload is stored only while ``url`` is the URL the
+    batch waits for, and then advances the batch, and is otherwise refused
+    with status 409, with nothing stored.
     """
     _require_loaded()
     if not _cm.get_task_cache(task_id):
@@ -774,17 +831,18 @@ async def upload_pdf(task_id: str, url: str = Query(...), file: UploadFile = Fil
     pdf_bytes = await file.read()
     if b"%PDF-" not in pdf_bytes[:1024]:
         raise HTTPException(422, "Not a PDF file: it does not start with the PDF signature %PDF-")
+    if batch:
+        _refuse_a_stale_batch_capture(task_id, url)
     stored = _cm.store_page(task_id, url, pdf_bytes=pdf_bytes)
     if stored is None:
         raise HTTPException(500, "Failed to save PDF")
 
     _cm.unflag_url(task_id, stored)
-    _cm.mark_url_reviewed(task_id, stored, "recaptured" if _batch_active else "fixed")
+    _cm.mark_url_reviewed(task_id, stored, "recaptured" if batch else "fixed")
     _refresh_issues(task_id, stored)
 
     await _push_event("capture_complete", {"task_id": task_id, "url": stored})
-    if _batch_active:
-        await _advance_batch()
+    await _advance_batch(done_head=batch)
 
     return {"ok": True, "url": stored, "content_type": "pdf"}
 

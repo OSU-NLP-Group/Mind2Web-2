@@ -91,6 +91,30 @@
         .section { display: none; }
         .section.active { display: block; }
 
+        /* Settings */
+        .settings { margin-top: 10px; font-size: 11px; color: #64748b; }
+        .settings summary { cursor: pointer; text-align: center; }
+        .settings label { display: block; margin: 8px 0 4px; }
+        .settings-row { display: flex; gap: 6px; }
+        .settings-row input {
+            flex: 1;
+            padding: 5px 8px;
+            border: 1px solid #cbd5e1;
+            border-radius: 4px;
+            font-size: 12px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        }
+        .settings-row button {
+            padding: 5px 10px;
+            border: none;
+            border-radius: 4px;
+            background: #2563eb;
+            color: white;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        .settings-error { color: #dc2626; margin-top: 4px; }
+
         /* Batch running - rich display */
         .batch-progress {
             margin-bottom: 10px;
@@ -231,6 +255,17 @@
 
     <div class="hint">Shortcut: Alt+Shift+C</div>
 
+    <details class="settings">
+        <summary>Settings</summary>
+        <label for="backend-input">Cache Manager URL (the address of the Cache Manager page)</label>
+        <div class="settings-row">
+            <input id="backend-input" type="url" spellcheck="false" placeholder="http://127.0.0.1:8000">
+            <button id="backend-save">Save</button>
+        </div>
+        <div id="backend-error" class="settings-error"></div>
+    </details>
+
+    <script src="settings.js"></script>
     <script src="popup.js"></script>
 </body>
 </html>
