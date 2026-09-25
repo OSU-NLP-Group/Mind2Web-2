@@ -6,12 +6,14 @@ report's end-to-end tests run ``mind2web2 evaluate`` as in ``test_evaluate``.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 import re
 
 from mind2web2 import Evaluator, cli
 from mind2web2.eval_toolkit import shared_browser
-from mind2web2.report import AnswerEntry, Thumbnails, render_report
+from mind2web2.report import AnswerEntry, Thumbnails, collect_answers, render_report, write_report
 from mind2web2.utils.cache_filesys import CacheFileSys
 
 from offline_eval import FakeLLMClient, SyntheticCache
@@ -284,4 +286,141 @@ def test_thumbnails_stop_at_their_budget_and_the_page_says_so(tmp_path):
                scored("t1", 3, lineage(url="https://a.example/1"), 1 / 3)]
     page = render_report("agent", entries, thumbnails=thumbnails)
     assert page.count("<symbol ") == 1 and page.count('<use href="#th0"/>') == 2 and thumbnails.over_budget
-    assert "Page thumbnails stop after" in page
+    # The page names where thumbnails stop, and the check left without one says why
+    assert 'from <a href="#a-t1-3">this answer</a> on' in page
+    assert "No thumbnail: the report's 8 MB of thumbnails is used up." in page
+
+
+def save_result(results_root, task_id: str, run: int, result) -> None:
+    folder = results_root / "agent" / task_id / f"answer_{run}"
+    (folder / "results").mkdir(parents=True)
+    (folder / f"answer_{run}.md").write_text("answer", encoding="utf-8")
+    (folder / "results" / f"20260101_000000_answer_{run}.md.json").write_text(json.dumps(result), encoding="utf-8")
+
+
+def flat(score: float) -> dict:
+    tree = {"id": "root", "desc": "d", "status": "passed" if score else "failed", "score": score,
+            "strategy": "parallel", "critical": False, "children": []}
+    return {"final_score": score, "eval_breakdown": [{"verification_tree": tree}]}
+
+
+def test_an_answer_scored_again_after_the_metrics_is_not_shown_as_changed(tmp_path):
+    save_result(tmp_path, "t1", 1, flat(1.0))
+    metrics_path = tmp_path / "agent" / "metrics.json"
+    metrics_path.write_text(json.dumps({"num_runs": 1, "stale_results": [{"task_id": "t1", "run": 1}]}))
+    result_file = next((tmp_path / "agent" / "t1" / "answer_1" / "results").iterdir())
+    os.utime(metrics_path, (1_000_000, 1_000_000))  # the metrics are older than the result
+    page = write_report(tmp_path, "agent").read_text(encoding="utf-8")
+    assert ">1.00</a>" in page and "The answer file changed" not in page
+    os.utime(result_file, (500_000, 500_000))  # now the result is older: the metrics' finding holds
+    page = write_report(tmp_path, "agent").read_text(encoding="utf-8")
+    assert ">changed</a>" in page and "The answer file changed" in page
+
+
+def test_a_task_mean_does_not_depend_on_which_tasks_the_report_includes(tmp_path):
+    for run in (1, 2, 3):
+        save_result(tmp_path, "full", run, flat(1.0))
+    for run in (1, 2):
+        save_result(tmp_path, "short", run, flat(1.0))
+    for task_ids in (None, ["short"]):
+        page = write_report(tmp_path, "agent", task_ids=task_ids).read_text(encoding="utf-8")
+        assert '<tr data-task="short" data-below="1" data-mean="0.666667">' in page
+
+
+def test_a_malformed_url_or_a_result_of_an_unexpected_shape_does_not_stop_the_report(tmp_path):
+    save_result(tmp_path, "t1", 1, [1, 2])
+    (unreadable,) = collect_answers(tmp_path, "agent")
+    assert unreadable.result is None and "not a JSON object" in unreadable.problem
+    bad_url = "http://[bad.example/page"
+    tree = lineage(url=bad_url)
+    odd = lineage()
+    odd["children"][0]["evidence"] = ["not", "a", "dict"]
+    page = render_report("agent", [unreadable, scored("t2", 1, tree, 1 / 3), scored("t3", 1, odd, 1 / 3)])
+    assert "not a JSON object" in page
+    assert f"<code>{bad_url}</code>" in page and f'href="{bad_url}"' not in page
+    assert "This result cannot be shown: AttributeError" in page
+
+
+def test_checks_inside_a_skipped_step_count_as_skipped():
+    inner = leaf("inner", "passed", 1.0, {"claim": "Y holds.", "sources": [],
+                                          "checks": [{"url": None, "passed": True, "votes": [True],
+                                                      "reasoning": "yes"}]})
+    group = {"id": "group", "desc": "group", "status": "skipped", "score": 0.0, "strategy": "parallel",
+             "critical": True, "children": [inner]}
+    first = leaf("first", "failed", 0.0, {"claim": "X holds.", "sources": [],
+                                          "checks": [{"url": None, "passed": False, "votes": [False],
+                                                      "reasoning": "no"}]})
+    tree = {"id": "root", "desc": "root", "status": "failed", "score": 0.0, "strategy": "sequential",
+            "critical": False, "children": [first, group]}
+    page = render_report("agent", [scored("t1", 1, tree, 0.0)])
+    assert 'aria-label="checks: first failed, inner skipped"' in page and "1 failed · 1 skipped" in page
+    assert "skipped: inside <code>group</code>, which was skipped" in page
+    assert '<i class="key pass"></i>passed' not in page and '<i class="key none"></i>skipped <b>1</b>' in page
+
+
+def test_task_ids_that_differ_in_replaced_characters_get_different_anchors_and_ties_resolve_in_tree_order():
+    both_fail = lineage()
+    both_fail["children"][0].update(status="failed", score=0.0)  # "named" and "supported" both fail
+    page = render_report("agent", [scored("a.b", 1, both_fail, 0.0), scored("a-b", 1, lineage(), 1 / 3)])
+    task_ids = re.findall(r'<section class="task" id="([^"]+)"', page)
+    assert len(set(task_ids)) == 2 and "t-a-b" in task_ids
+    assert "most frequent failure: <code>named</code> failed in 1 of 1" in page
+
+
+def test_a_zero_scored_group_that_no_sequential_node_cut_off_keeps_the_status_of_its_checks():
+    from mind2web2.verification_tree import AggregationStrategy, VerificationNode
+    root = VerificationNode(id="root", desc="root")
+    steps = VerificationNode(id="steps", desc="steps", strategy=AggregationStrategy.SEQUENTIAL)
+    first = VerificationNode(id="first", desc="first step")
+    first.add_node(VerificationNode(id="a1", desc="a1", score=1.0, status="passed", evidence={"claim": "a1"}))
+    check = {"url": None, "passed": False, "votes": [False], "reasoning": "no"}
+    first.add_node(VerificationNode(id="a2", desc="a2", score=0.0, status="failed",
+                                    evidence={"claim": "a2 holds.", "checks": [check]}))
+    steps.add_node(first)
+    steps.add_node(VerificationNode(id="k", desc="k", critical=True, score=1.0, status="passed",
+                                    evidence={"claim": "k"}))
+    root.add_node(steps)
+    score = root.compute_score(mutate=True)
+    tree = json.loads(root.model_dump_json())
+    assert score == 0.0 and tree["status"] == "skipped"  # a zero score without a failed child
+    page = render_report("agent", [scored("t1", 1, tree, score)])
+    # a2 caused the 0 and stays failed; only k, cut off after the partial first step, is skipped
+    assert 'aria-label="checks: a1 passed, a2 failed, k skipped"' in page
+    assert "Where points were lost (1 failed check)" in page and "skipped: inside" not in page
+
+
+def test_trees_of_an_unexpected_shape_do_not_stop_the_report():
+    odd = [{"eval_breakdown": {"x": 1}}, {"eval_breakdown": 5},
+           {"eval_breakdown": [{"verification_tree": {"id": "r", "status": "failed", "children": ["x"]}}]},
+           {"eval_breakdown": [{"verification_tree": {"id": "r", "status": "failed", "children": 3}}]}]
+    entries = [AnswerEntry("t1", f"answer_{run}.md", run, {"final_score": 0.0, **result}, None, "a")
+               for run, result in enumerate(odd, start=1)]
+    page = render_report("agent", entries)
+    assert all(f'id="a-t1-{run}"' in page for run in range(1, 5))
+
+
+def test_a_tie_for_the_most_frequent_failure_goes_to_the_earliest_check_in_the_tree():
+    def failing(check_id: str) -> dict:
+        tree = lineage(page_passes=True)
+        for node in tree["children"]:
+            if node["id"] == check_id:
+                node.update(status="failed", score=0.0)
+        return tree
+    # run 1 fails only "supported", run 2 only "named", which comes first in the tree
+    entries = [scored("t1", 1, failing("supported"), 0.0), scored("t1", 2, failing("named"), 0.0)]
+    page = render_report("agent", entries)
+    assert "most frequent failure: <code>named</code> failed in 1 of 2" in page
+
+
+def test_a_cut_off_step_without_evidence_names_the_step_it_came_after():
+    from mind2web2.verification_tree import AggregationStrategy, VerificationNode
+    root = VerificationNode(id="root", desc="root", strategy=AggregationStrategy.SEQUENTIAL)
+    root.add_node(VerificationNode(id="first", desc="first", score=0.0, status="failed", evidence={"claim": "x"}))
+    group = VerificationNode(id="group", desc="group")
+    group.add_node(VerificationNode(id="inner", desc="inner", score=1.0, status="passed"))
+    root.add_node(group)
+    root.add_node(VerificationNode(id="custom", desc="custom", score=1.0, status="passed"))  # no evidence
+    assert root.compute_score(mutate=True) == 0.0
+    page = render_report("agent", [scored("t1", 1, json.loads(root.model_dump_json()), 0.0)])
+    assert page.count("skipped: comes after <code>first</code>, which scored below 1.0") == 2  # group and custom
+    assert "skipped: inside <code>group</code>, which was skipped" in page

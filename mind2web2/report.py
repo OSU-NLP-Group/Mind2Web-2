@@ -11,9 +11,10 @@ every task with its mean score and a dot per run) and a main column with:
   no result) and how many checks passed, failed, or were skipped;
 - a table of every task's score in every run, each cell linking to its
   answer, and each task's mean, which counts a run without a result as 0, as
-  the metrics do; it can be sorted by task or by mean;
-- a section per task, naming the check that failed in most of its runs, with
-  a card per answer.  A collapsed card shows the score, a square per check
+  the metrics do (over runs 1 to the highest run of any task, or the metrics'
+  ``num_runs`` if higher); it can be sorted by task or by mean;
+- a section per task, naming the check that failed most often among its
+  scored runs, with a card per answer.  A collapsed card shows the score, a square per check
   marked by its status (filled, slashed, or hollow), and the checks that
   lost points.  An open card
   starts with those failed checks and their evidence (the claim, the page and
@@ -22,10 +23,16 @@ every task with its mean score and a dot per run) and a main column with:
   requests and the extracted information.
 
 The latest result of each answer is shown, badged "changed" when the metrics
-found that the answer changed after it.  Thumbnails come from the page cache
+found that the answer changed after it and the result is not newer than the
+metrics.  A check inside a step that a sequential node cut off (a step after
+its first step below 1.0) counts as skipped, since its outcome did not reach
+the score.  Thumbnails come from the page cache
 (``<cache_root>/<agent>/<task_id>/``) when ``cache_root`` is given; they cover
-the top of the page, and the page stops adding them past
-:data:`THUMBNAIL_BUDGET_BYTES`.
+the top of the page, and past :data:`THUMBNAIL_BUDGET_BYTES` the page adds no
+new ones: each check left without one says so, and a note above the tasks
+links to the first.  A
+result of an unexpected shape shows as much as it can: its card says why
+the rest cannot be shown, and the rest of the page is unaffected.
 
 Every text taken from results and answers is HTML-escaped and only ``http(s)``
 URLs become links; the page's Content Security Policy allows no external
@@ -42,6 +49,7 @@ import html
 import io
 import json
 import logging
+import hashlib
 import secrets
 from collections import Counter
 from dataclasses import dataclass
@@ -84,7 +92,8 @@ def collect_answers(results_root: Path, agent: str, task_ids: Optional[Iterable[
     With ``task_ids``, only those tasks.  An answer folder is one named
     ``answer_<k>``; its result is the newest file in its ``results/`` folder
     (:func:`mind2web2.results.latest_result_file`), and its text the copy of
-    ``answer_<k>.md`` that evaluation keeps next to it.
+    ``answer_<k>.md`` that evaluation keeps next to it.  A result that cannot
+    be read or is not a JSON object is ``None``, with the reason in ``problem``.
     """
     agent_dir = Path(results_root) / agent
     wanted = set(task_ids) if task_ids is not None else None
@@ -110,6 +119,8 @@ def collect_answers(results_root: Path, agent: str, task_ids: Optional[Iterable[
                     result = json.loads(result_file.read_text(encoding="utf-8"))
                 except (OSError, ValueError) as exc:
                     problem = f"{result_file.name} cannot be read: {exc}"
+                if result is not None and not isinstance(result, dict):
+                    result, problem = None, f"{result_file.name} cannot be read: not a JSON object"
             entries.append(AnswerEntry(task_dir.name, answer_name, run, result, result_file, answer_text, problem))
     return sorted(entries, key=lambda e: (e.task_id, e.run))
 
@@ -120,24 +131,39 @@ def write_report(results_root: Path, agent: str, output: Optional[Path] = None,
 
     With ``cache_root``, failed checks show a thumbnail of the page they were
     checked against, read from ``<cache_root>/<agent>/<task_id>/``; the cache
-    is only read.  Returns the path written.  Raises ``FileNotFoundError``
-    when the agent has no answer folder in the results.
+    is only read.  With ``task_ids``, the task means still count runs up to
+    the highest run of any of the agent's tasks, so a task's mean does not
+    depend on which tasks the report includes.  Returns the path written.
+    Raises ``FileNotFoundError`` when the agent has no answer folder in the
+    results.
     """
     entries = collect_answers(results_root, agent, task_ids)
     if not entries:
         raise FileNotFoundError(f"no evaluated answers of {agent!r} under {Path(results_root) / agent}")
-    metrics = None
+    metrics, metrics_time = None, None
     metrics_path = Path(results_root) / agent / "metrics.json"
     if metrics_path.is_file():
         try:
             metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+            metrics_time = metrics_path.stat().st_mtime
         except (OSError, ValueError):
             metrics = None
+        if not isinstance(metrics, dict):
+            metrics, metrics_time = None, None
     thumbnails = Thumbnails(Path(cache_root) / agent) if cache_root is not None else None
     output = Path(output) if output is not None else Path(results_root) / agent / REPORT_FILE
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(render_report(agent, entries, metrics, thumbnails=thumbnails), encoding="utf-8")
+    num_runs = _highest_run(Path(results_root) / agent) if task_ids is not None else None
+    output.write_text(render_report(agent, entries, metrics, thumbnails=thumbnails, metrics_time=metrics_time,
+                                    num_runs=num_runs), encoding="utf-8")
     return output
+
+
+def _highest_run(agent_dir: Path) -> int:
+    """The highest run of any answer folder under ``agent_dir``, from the folder names alone."""
+    runs = [answer_run(f"{folder.name}.md") for task_dir in agent_dir.iterdir() if task_dir.is_dir()
+            for folder in task_dir.iterdir() if folder.is_dir()]
+    return max((r for r in runs if r is not None), default=0)
 
 
 class Thumbnails:
@@ -150,8 +176,10 @@ class Thumbnails:
     a thumbnail refers to that one symbol, so a page cited by many answers is
     embedded once.  It returns ``None`` for a URL without a cached screenshot
     (including PDFs), for a task without a cache directory (none is created),
-    for an image that cannot be read, and once the thumbnails so far reach
-    :data:`THUMBNAIL_BUDGET_BYTES`, which sets :attr:`over_budget`.
+    for an image that cannot be read, and, once the thumbnails so far reach
+    :data:`THUMBNAIL_BUDGET_BYTES`, for every cached page not already
+    embedded; that sets :attr:`over_budget`, and :meth:`dropped` tells such a
+    page apart from one without a screenshot.
     """
 
     def __init__(self, agent_cache: Path, budget: int = THUMBNAIL_BUDGET_BYTES):
@@ -159,6 +187,8 @@ class Thumbnails:
         self.budget = budget
         self.used = 0
         self.over_budget = False
+        self.first_dropped: Optional[str] = None  # anchor of the answer where the first thumbnail was left out
+        self._dropped: set[tuple[str, str]] = set()
         self._caches: dict[str, object] = {}
         self._done: dict[tuple[str, str], Optional[tuple[str, int]]] = {}
         self._images: list[tuple[str, int, str]] = []  # symbol ID, height, base64 JPEG
@@ -168,6 +198,10 @@ class Thumbnails:
         if key not in self._done:
             self._done[key] = self._make(task_id, url)
         return self._done[key]
+
+    def dropped(self, task_id: str, url: str) -> bool:
+        """Whether :meth:`get` returned ``None`` for this page only because the budget was used up."""
+        return (task_id, url) in self._dropped
 
     def _cache(self, task_id: str):
         if task_id not in self._caches:
@@ -190,13 +224,14 @@ class Thumbnails:
         return f'<svg class="defs" aria-hidden="true" width="0" height="0">{symbols}</svg>' if symbols else ""
 
     def _make(self, task_id: str, url: str) -> Optional[tuple[str, int]]:
-        if self.over_budget:
-            return None
         cache = self._cache(task_id)
         if cache is None:
             return None
         try:
             if cache.has(url) != "web":
+                return None
+            if self.over_budget:
+                self._dropped.add((task_id, url))
                 return None
             _, screenshot = cache.get_web(url, get_screenshot=True)
             if not screenshot:
@@ -216,6 +251,7 @@ class Thumbnails:
         data = base64.b64encode(buffer.getvalue()).decode()
         if self.used + len(data) > self.budget:
             self.over_budget = True
+            self._dropped.add((task_id, url))
             return None
         self.used += len(data)
         symbol = (f"th{len(self._images)}", thumb_height)
@@ -226,6 +262,9 @@ class Thumbnails:
 # --------------------------------------------------------------------------- data
 
 _EPS = 1e-6
+
+#: The largest ``num_runs`` from ``metrics.json`` the report accepts; a larger value is taken as a damaged file.
+_MAX_RECORDED_RUNS = 100
 
 
 def _score(entry: AnswerEntry) -> Optional[float]:
@@ -241,23 +280,66 @@ def _shown_score(entry: AnswerEntry, stale: set[tuple[str, int]]) -> Optional[fl
 
 
 def _tree(entry: AnswerEntry) -> Optional[dict]:
-    if entry.result is None:
+    """The answer's rubric tree, with the checks inside cut-off steps marked (see :func:`_skip_within`), or
+    ``None`` when the result has no tree of the expected shape."""
+    breakdown = entry.result.get("eval_breakdown") if entry.result is not None else None
+    if not isinstance(breakdown, list) or not breakdown or not isinstance(breakdown[0], dict):
         return None
-    breakdown = (entry.result.get("eval_breakdown") or [{}])[0]
-    tree = breakdown.get("verification_tree") if isinstance(breakdown, dict) else None
-    return tree if isinstance(tree, dict) else None
+    tree = breakdown[0].get("verification_tree")
+    if not isinstance(tree, dict):
+        return None
+    _skip_within(tree)
+    return tree
+
+
+def _kids(node: dict) -> list[dict]:
+    """``node``'s children that are nodes; a result of another shape has none."""
+    children = node.get("children")
+    return [c for c in children if isinstance(c, dict)] if isinstance(children, list) else []
+
+
+def _below_one(node: dict) -> bool:
+    try:
+        return float(node.get("score")) < 1.0
+    except (TypeError, ValueError):
+        return True
+
+
+def _skip_within(node: dict, within: Optional[str] = None) -> None:
+    """Mark the nodes inside the steps a sequential node cut off as skipped, naming the step in ``_within``.
+
+    A sequential node scores every step after its first step below 1.0 as 0
+    and marks those steps skipped; the checks verified inside such a step keep
+    their own status, which did not reach the score.  Each cut-off step
+    records the step it came after in ``_after``.  Other skipped nodes (an
+    aggregate that scored 0 without a failed child) are not cut-off steps, so
+    the checks inside them keep their status.  Marking is idempotent.
+    """
+    if within is not None and node.get("status") != "skipped":
+        node["status"], node["_within"] = "skipped", within
+    kids = _kids(node)
+    cut = None
+    if within is None and node.get("strategy") == "sequential":
+        cut = next((i for i, child in enumerate(kids) if _below_one(child)), None)
+    for i, child in enumerate(kids):
+        if cut is not None and i > cut:
+            child["_after"] = str(kids[cut].get("id"))
+            for grandchild in _kids(child):
+                _skip_within(grandchild, str(child.get("id")))
+        else:
+            _skip_within(child, within)
 
 
 def _leaves(node: dict) -> list[dict]:
     """The leaves of ``node``'s tree in reading order; ``node`` itself when it has no children."""
-    children = node.get("children") or []
-    if not children:
+    kids = _kids(node)
+    if not kids:
         return [node]
-    return [leaf for child in children for leaf in _leaves(child)]
+    return [leaf for child in kids for leaf in _leaves(child)]
 
 
 def _has_evidence(node: dict) -> bool:
-    return bool(node.get("evidence")) or any(_has_evidence(c) for c in node.get("children") or [])
+    return bool(node.get("evidence")) or any(_has_evidence(c) for c in _kids(node))
 
 
 def _score_class(score: Optional[float]) -> str:
@@ -279,15 +361,17 @@ def _link(url) -> str:
     text = "" if url is None else str(url)
     if not text.lower().startswith(("http://", "https://")):
         return f"<code>{_e(text)}</code>"
-    parts = urlsplit(text)
-    host = parts.netloc
+    try:
+        host = urlsplit(text).netloc
+    except ValueError:  # e.g. an unbalanced "[" in the host
+        return f"<code>{_e(text)}</code>"
     rest = text[text.find(host) + len(host):] if host and host in text else ""
     shown = f"<b>{_e(host)}</b>{_e(rest)}" if host else _e(text)
     return f'<a class="url" href="{_e(text)}" target="_blank" rel="noreferrer noopener">{shown}</a>'
 
 
 def _anchor(entry: AnswerEntry) -> str:
-    return "a-" + _slug(f"{entry.task_id}-{entry.run}")
+    return f"a-{_slug(entry.task_id)}-{entry.run}"
 
 
 def _task_anchor(task_id: str) -> str:
@@ -295,7 +379,10 @@ def _task_anchor(task_id: str) -> str:
 
 
 def _slug(text: str) -> str:
-    return "".join(c if c.isalnum() or c in "-_" else "-" for c in text)
+    """``text`` with every character but letters, digits, ``-`` and ``_`` replaced by ``-``; a replacement adds a
+    short hash of ``text``, so that two task IDs never share a slug."""
+    slug = "".join(c if c.isascii() and (c.isalnum() or c in "-_") else "-" for c in text)
+    return slug if slug == text else f"{slug}-{hashlib.sha1(text.encode()).hexdigest()[:8]}"
 
 
 def _bar(score: Optional[float]) -> str:
@@ -441,14 +528,14 @@ def _task_summary(cells: dict[int, AnswerEntry], runs: list[int],
     return mean, below, shown
 
 
-def _matrix_html(entries: list[AnswerEntry], stale: set[tuple[str, int]]) -> str:
+def _matrix_html(entries: list[AnswerEntry], stale: set[tuple[str, int]], runs: list[int]) -> str:
     """The table of every task's score in every run, and the task's mean over the runs.
 
     A pair in ``stale`` (the metrics' ``stale_results``) shows "changed"
     instead of its score.  As in the metrics, a changed answer, an answer
-    without a result, and a run without an answer count as 0 in the mean.
+    without a result, and a run without an answer count as 0 in the mean,
+    over ``runs``.
     """
-    runs = sorted({e.run for e in entries})
     head = "".join(f"<th class=num>run {r}</th>" for r in runs)
     rows = []
     for task_id, cells in _by_task(entries).items():
@@ -473,8 +560,7 @@ def _matrix_html(entries: list[AnswerEntry], stale: set[tuple[str, int]]) -> str
             f'<tbody>{"".join(rows)}</tbody></table></div></section>')
 
 
-def _nav_html(entries: list[AnswerEntry], stale: set[tuple[str, int]]) -> str:
-    runs = sorted({e.run for e in entries})
+def _nav_html(entries: list[AnswerEntry], stale: set[tuple[str, int]], runs: list[int]) -> str:
     items = []
     for task_id, cells in _by_task(entries).items():
         mean, below, shown = _task_summary(cells, runs, stale)
@@ -494,7 +580,9 @@ def _votes_html(votes: list) -> str:
             f'<span class="muted">{sum(bool(v) for v in votes)}/{len(votes)}</span></span>')
 
 
-def _check_html(check: dict, thumbnail: Optional[tuple[str, int]] = None) -> str:
+def _check_html(check: dict, thumbnail=None) -> str:
+    """One judgment of a check; ``thumbnail`` is a symbol from :meth:`Thumbnails.get`, or ``"dropped"`` when the
+    thumbnail budget left this page out."""
     passed = check.get("passed")
     verdict = "passed" if passed else "failed"
     source = _link(check["url"]) if check.get("url") else '<span class="muted">no source: judged from the answer</span>'
@@ -505,6 +593,10 @@ def _check_html(check: dict, thumbnail: Optional[tuple[str, int]] = None) -> str
         body.append(f'<div class="note">{_e(check["note"])}</div>')
     if check.get("reasoning"):
         body.append(f'<div class="reasoning">{_e(check["reasoning"])}</div>')
+    if thumbnail == "dropped":
+        body.append(f'<div class="muted small">No thumbnail: the report\'s {THUMBNAIL_BUDGET_BYTES // 1_000_000} MB '
+                    "of thumbnails is used up.</div>")
+        thumbnail = None
     if thumbnail:
         parts.append(f'<div class="check-body with-thumb"><div>{"".join(body)}</div>'
                      f'<figure class="thumb"><svg viewBox="0 0 {THUMBNAIL_WIDTH} {thumbnail[1]}" role="img" '
@@ -538,7 +630,7 @@ def _evidence_rows(evidence: dict, thumbnail_of=None) -> list[str]:
 def _node_html(node: dict) -> str:
     status = str(node.get("status", ""))
     score = node.get("score")
-    children = node.get("children") or []
+    children = _kids(node)
     tags = [str(node.get("strategy", ""))] + (["critical"] if node.get("critical") else [])
     score_text = f"{float(score):.2f}" if isinstance(score, (int, float)) else ""
     head = (f'<div class="node-head"><span class="chip {_e(status)}">{_e(status)}</span>'
@@ -547,9 +639,21 @@ def _node_html(node: dict) -> str:
             f'<span class="desc">{_e(node.get("desc"))}</span></div>')
     evidence = ""
     found = node.get("evidence")
-    if found and status == "skipped" and found.get("skipped_because"):
+    if node.get("_within"):
+        evidence = (f'<div class="skipnote">skipped: inside <code>{_e(node["_within"])}</code>, which was skipped'
+                    "</div>")
+        if found:
+            evidence += (f'<details class="evidence"><summary>evidence</summary>'
+                         f'{"".join(_evidence_rows(found))}</details>')
+    elif found and status == "skipped" and found.get("skipped_because"):
         evidence = (f'<div class="skipnote">skipped: depends on <code>{_e(found["skipped_because"])}</code>, '
                     f"which did not pass</div>")
+    elif status == "skipped" and node.get("_after"):
+        evidence = (f'<div class="skipnote">skipped: comes after <code>{_e(node["_after"])}</code>, which scored '
+                    "below 1.0</div>")
+        if found:
+            evidence += (f'<details class="evidence"><summary>evidence</summary>'
+                         f'{"".join(_evidence_rows(found))}</details>')
     elif found:
         evidence = (f'<details class="evidence"><summary>evidence</summary>'
                     f'{"".join(_evidence_rows(found))}</details>')
@@ -560,8 +664,15 @@ def _node_html(node: dict) -> str:
 
 def _lost_html(entry: AnswerEntry, failed: list[dict], thumbnails: Optional[Thumbnails]) -> str:
     """The failed checks of an answer, each with its evidence and, for a failed page check, a thumbnail."""
-    def thumbnail_of(check: dict) -> Optional[tuple[str, int]]:
-        return thumbnails.get(entry.task_id, check["url"]) if thumbnails is not None and check.get("url") else None
+    def thumbnail_of(check: dict):
+        if thumbnails is None or not check.get("url"):
+            return None
+        found = thumbnails.get(entry.task_id, check["url"])
+        if found is None and thumbnails.dropped(entry.task_id, check["url"]):
+            if thumbnails.first_dropped is None:
+                thumbnails.first_dropped = _anchor(entry)
+            return "dropped"
+        return found
 
     items = []
     for leaf in failed:
@@ -649,23 +760,42 @@ def _answer_html(entry: AnswerEntry, stale: set[tuple[str, int]], thumbnails: Op
             f'<div class="card-body">{"".join(body)}</div></details>')
 
 
+def _safe_answer_html(entry: AnswerEntry, stale: set[tuple[str, int]], thumbnails: Optional[Thumbnails]) -> str:
+    """:func:`_answer_html`, or a card saying why the answer cannot be shown when its result has an unexpected
+    shape, so that one result cannot stop the whole report."""
+    try:
+        return _answer_html(entry, stale, thumbnails)
+    except Exception as exc:
+        logger.warning("Report: answer %s of task %s not shown: %r", entry.answer_name, entry.task_id, exc)
+        return (f'<details class="answer-card card" id="{_anchor(entry)}" data-task="{_e(entry.task_id)}" '
+                f'data-below="1"><summary><span class="title">{_e(entry.answer_name)}<span class="muted small"> run '
+                f'{entry.run}</span></span><span class="scorebox"><span class="badge none">not shown</span></span>'
+                f'</summary><div class="card-body"><p class="note">This result cannot be shown: '
+                f"{_e(type(exc).__name__)}: {_e(exc)}</p></div></details>")
+
+
 def _task_html(task_id: str, cells: dict[int, AnswerEntry], runs: list[int], stale: set[tuple[str, int]],
                thumbnails: Optional[Thumbnails]) -> str:
     mean, below, _ = _task_summary(cells, runs, stale)
     failures = Counter()
+    position: dict[str, int] = {}  # a check's earliest position in the trees, for ties
     scored = 0
     for entry in cells.values():
         tree = _tree(entry)
         if tree is None or _shown_score(entry, stale) is None:
             continue
         scored += 1
-        failures.update({str(leaf.get("id")) for leaf in _leaves(tree) if leaf.get("status") == "failed"})
+        leaves = _leaves(tree)
+        for i, leaf in enumerate(leaves):
+            position[str(leaf.get("id"))] = min(i, position.get(str(leaf.get("id")), i))
+        failures.update({str(leaf.get("id")) for leaf in leaves if leaf.get("status") == "failed"})
     common = ""
     if failures:
-        check, n = failures.most_common(1)[0]
+        check = min(failures, key=lambda c: (-failures[c], position[c]))
+        n = failures[check]
         common = (f'<span class="muted small">most frequent failure: <code>{_e(check)}</code> failed in {n} of '
                   f"{scored} scored run{'s' if scored != 1 else ''}</span>")
-    cards = "".join(_answer_html(cells[r], stale, thumbnails) for r in sorted(cells))
+    cards = "".join(_safe_answer_html(cells[r], stale, thumbnails) for r in sorted(cells))
     return (f'<section class="task" id="{_task_anchor(task_id)}" data-task="{_e(task_id)}" data-below="{int(below)}">'
             f'<div class="task-head"><h3><code>{_e(task_id)}</code></h3><span class="num">mean {mean:.3f}</span>'
             f"{_bar(mean)}{common}</div>{cards}</section>")
@@ -869,21 +999,53 @@ _JS = """
 """
 
 
+def _stale_pairs(entries: list[AnswerEntry], metrics: Optional[dict], metrics_time: Optional[float]) -> set:
+    """The (task, run) pairs the metrics list as changed since their result, minus those whose result file is
+    newer than the metrics (``metrics_time``), which scored the answer again after the metrics were computed.
+
+    This relies on file modification times: results copied without them (``cp`` without ``-p``) can look newer
+    than the metrics and hide a changed answer, until ``mind2web2 metrics`` runs again."""
+    listed = {(s.get("task_id"), s.get("run")) for s in (metrics or {}).get("stale_results") or []
+              if isinstance(s, dict)}
+    if metrics_time is None:
+        return listed
+    newer = set()
+    for entry in entries:
+        try:
+            if entry.result_file is not None and entry.result_file.stat().st_mtime > metrics_time:
+                newer.add((entry.task_id, entry.run))
+        except OSError:
+            pass
+    return listed - newer
+
+
 def render_report(agent: str, entries: list[AnswerEntry], metrics: Optional[dict] = None,
-                  generated: Optional[datetime] = None, thumbnails: Optional[Thumbnails] = None) -> str:
-    """The report page for ``entries`` (see the module docstring); ``thumbnails`` supplies the page thumbnails."""
+                  generated: Optional[datetime] = None, thumbnails: Optional[Thumbnails] = None,
+                  metrics_time: Optional[float] = None, num_runs: Optional[int] = None) -> str:
+    """The report page for ``entries`` (see the module docstring).
+
+    ``thumbnails`` supplies the page thumbnails.  ``metrics_time`` is the
+    modification time of ``metrics``' file; a result newer than it is not
+    shown as changed.  The task means count runs 1 to the highest of
+    ``num_runs``, the metrics' ``num_runs``, and the runs in ``entries``.
+    """
     generated = generated or datetime.now().astimezone()
-    stale = {(s.get("task_id"), s.get("run")) for s in (metrics or {}).get("stale_results") or []}
+    stale = _stale_pairs(entries, metrics, metrics_time)
     nonce = secrets.token_urlsafe(16)
     scored = sum(_score(e) is not None for e in entries)
-    runs = sorted({e.run for e in entries})
+    recorded_runs = (metrics or {}).get("num_runs")
+    if not isinstance(recorded_runs, int) or not 0 < recorded_runs <= _MAX_RECORDED_RUNS:
+        recorded_runs = 0  # absent, or not a run count the metrics would write
+    top = max([num_runs or 0, recorded_runs] + [e.run for e in entries])
+    runs = list(range(1, top + 1))
     tasks = "".join(_task_html(task_id, cells, runs, stale, thumbnails)
                     for task_id, cells in _by_task(entries).items())
     budget_note = ""
-    if thumbnails is not None and thumbnails.over_budget:
-        budget_note = (f'<p class="note">Page thumbnails stop after {THUMBNAIL_BUDGET_BYTES // 1_000_000} MB; '
-                       "the failed checks further down show none. Write the report of fewer tasks with "
-                       "<code>--task</code> to see theirs.</p>")
+    if thumbnails is not None and thumbnails.first_dropped is not None:
+        budget_note = (f'<p class="note">Page thumbnails stop after {THUMBNAIL_BUDGET_BYTES // 1_000_000} MB: from '
+                       f'<a href="#{thumbnails.first_dropped}">this answer</a> on, failed checks show a thumbnail only '
+                       "of a page already shown. Write the report of fewer tasks with <code>--task</code> to see "
+                       "theirs.</p>")
     csp = (f"default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-{nonce}'; img-src data:; "
            "base-uri 'none'; form-action 'none'")
     side = (
@@ -894,7 +1056,7 @@ def render_report(agent: str, entries: list[AnswerEntry], metrics: Optional[dict
         '<label><input id="hide-skipped" type="checkbox"> hide skipped checks</label>'
         '<div class="btns"><button id="expand" type="button">Open all</button>'
         '<button id="collapse" type="button">Close all</button></div></div>'
-        + _nav_html(entries, stale)
+        + _nav_html(entries, stale, runs)
         + '<p class="keys"><kbd>/</kbd> filter · <kbd>j</kbd> <kbd>k</kbd> next and previous answer</p></aside>'
     )
     return (
@@ -908,7 +1070,7 @@ def render_report(agent: str, entries: list[AnswerEntry], metrics: Optional[dict
         f"{_e(generated.strftime('%Y-%m-%d %H:%M %Z'))}</p></header>"
         + _metrics_html(metrics)
         + _charts_html(entries, stale)
-        + _matrix_html(entries, stale)
+        + _matrix_html(entries, stale, runs)
         + budget_note
         + tasks
         + "</main></div>" + (thumbnails.defs_html() if thumbnails is not None else "")
